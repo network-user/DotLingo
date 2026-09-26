@@ -11,6 +11,15 @@ from typing import Any, Callable
 
 from dotlingo.formats import export_document
 from dotlingo.hardware import HardwareSnapshot, assess_model, detect
+from dotlingo.languages import (
+    AUTO_LANGUAGE,
+    AUTO_LANGUAGE_LABEL,
+    LANGUAGES,
+    language_display,
+    language_label,
+    supported_languages,
+    supports_language,
+)
 from dotlingo.model_download import DownloadCancellation, DownloadCancelled, download_model
 from dotlingo.models import catalog, installed, model_path, verify_model
 from dotlingo.paths import user_data_root
@@ -20,16 +29,14 @@ from dotlingo.task_queue import TaskQueue, build_chunks
 from dotlingo.theme import TOKENS
 
 PAGES = (
-    ("projects", "Проекты"),
-    ("documents", "Документы"),
+    ("documents", "Перевод"),
+    ("review", "Проверка"),
     ("queue", "Очередь"),
-    ("review", "Проверка перевода"),
+    ("projects", "Проекты"),
     ("models", "Модели"),
-    ("glossary", "Глоссарии"),
+    ("glossary", "Глоссарий"),
     ("settings", "Настройки"),
 )
-LANGUAGES = {"en": "English", "ru": "Русский"}
-
 
 def _format_size(size: int | None) -> str:
     if size is None:
@@ -58,6 +65,8 @@ class DotLingoApp:
         self._selected_doc = ""
         self._review_order: list[int] = []
         self._review_block: int | None = None
+        self._review_target_lang = "ru"
+        self._glossary_target_lang = "ru"
         self._review_text_original = ""
         self._review_block_orders: set[int] = set()
         self._review_progress_label: ttk.Label | None = None
@@ -72,22 +81,26 @@ class DotLingoApp:
         self._overlay: tk.Frame | None = None
         self._overlay_previous_focus: tk.Widget | None = None
         self._overlay_escape: Callable[[tk.Event[Any]], str | None] | None = None
-        self._page_animation_job: str | None = None
+        self._nav_indicator_jobs: dict[str, str] = {}
         self.nav_indicators: dict[str, tk.Frame] = {}
-        self._settings_form: tuple[ProjectStore, tk.StringVar, tk.Text, tk.Text, tuple[str, str, str]] | None = None
+        self._documents_tree: ttk.Treeview | None = None
+        self._document_selection_label: ttk.Label | None = None
+        self._settings_form: tuple[Any, ...] | None = None
         self._closing = False
         self._pending_close = False
         self._close_wait_job: str | None = None
         self._close_cancel_accepted: bool | None = None
 
         self.root.title("DotLingo · локальный перевод документов")
-        self.root.geometry("1220x790")
-        self.root.minsize(840, 600)
+        self.root.geometry("1200x740")
+        self.root.minsize(900, 620)
         self._set_icon()
         self._style()
         self._build_shell()
         self._refresh_project_list()
         self._restore_active_project()
+        if self.active is not None:
+            self.show_page("documents")
         for index, (page, _) in enumerate(PAGES, start=1):
             self.root.bind(
                 f"<Control-Key-{index}>",
@@ -129,123 +142,331 @@ class DotLingoApp:
         self.root.configure(background=colors["bg"])
         style.configure("TFrame", background=colors["bg"])
         style.configure("Workspace.TFrame", background=colors["bg"])
-        style.configure("Sidebar.TFrame", background=colors["sidebar"])
         style.configure("Panel.TFrame", background=colors["surface"], borderwidth=0, relief="flat")
-        style.configure("Status.TFrame", background=colors["surface_raised"], borderwidth=0, relief="flat")
-        style.configure("ProjectChip.TFrame", background=colors["surface"], borderwidth=0, relief="flat")
-        style.configure("Raised.TFrame", background=colors["surface_raised"])
-        style.configure("TLabel", background=colors["bg"], foreground=colors["text"], font=(colors["font"], colors["font_body"]))
-        style.configure("Muted.TLabel", background=colors["bg"], foreground=colors["muted"], font=(colors["font"], colors["font_small"]))
-        style.configure("Panel.Muted.TLabel", background=colors["surface"], foreground=colors["muted"], font=(colors["font"], colors["font_small"]))
-        style.configure("Sidebar.Muted.TLabel", background=colors["sidebar"], foreground=colors["muted"], font=(colors["font"], colors["font_small"]))
-        style.configure("Status.Muted.TLabel", background=colors["surface_raised"], foreground=colors["muted"], font=(colors["font"], colors["font_small"]))
-        style.configure("Error.TLabel", background=colors["surface"], foreground=colors["error"], font=(colors["font"], colors["font_small"]))
-        style.configure("Panel.Error.TLabel", background=colors["surface"], foreground=colors["error"], font=(colors["font"], colors["font_small"]))
-        style.configure("Panel.TLabel", background=colors["surface"], foreground=colors["text"], font=(colors["font"], colors["font_body"]))
-        style.configure("Title.TLabel", background=colors["bg"], foreground=colors["text"], font=(colors["font"], colors["font_title"], "bold"))
-        style.configure("Section.TLabel", background=colors["bg"], foreground=colors["text"], font=(colors["font"], colors["font_heading"], "bold"))
-        style.configure("Panel.Section.TLabel", background=colors["surface"], foreground=colors["text"], font=(colors["font"], colors["font_heading"], "bold"))
-        style.configure("Sidebar.Section.TLabel", background=colors["sidebar"], foreground=colors["muted"], font=(colors["font"], 8, "bold"))
-        style.configure("Brand.TLabel", background=colors["sidebar"], foreground=colors["text"], font=(colors["font"], 13, "bold"))
-        style.configure("TButton", background=colors["surface_raised"], foreground=colors["text"], padding=(12, 8), borderwidth=1, bordercolor=colors["border"], focusthickness=2, focuscolor=colors["border_focus"], font=(colors["font"], colors["font_body"]))
-        style.map("TButton", background=[("disabled", colors["surface"]), ("pressed", colors["accent_dim"]), ("active", colors["surface_hover"])], foreground=[("disabled", colors["muted"])], bordercolor=[("focus", colors["border_focus"])])
-        style.configure("Accent.TButton", background=colors["accent"], foreground=colors["bg"], padding=(14, 8), borderwidth=1, bordercolor=colors["accent"], font=(colors["font"], colors["font_body"], "bold"))
-        style.map("Accent.TButton", background=[("disabled", colors["surface_raised"]), ("pressed", colors["accent_dim"]), ("active", "#a0ead5")], foreground=[("disabled", colors["muted"]), ("pressed", colors["text"])])
-        style.configure("Nav.TButton", background=colors["sidebar"], foreground=colors["muted"], anchor="w", padding=(11, 9), borderwidth=0, font=(colors["font"], colors["font_body"]))
-        style.map("Nav.TButton", background=[("pressed", colors["surface_raised"]), ("active", colors["surface"])], foreground=[("focus", colors["text"]), ("active", colors["text"])])
-        style.configure("ActiveNav.TButton", background=colors["surface_raised"], foreground=colors["accent"], anchor="w", padding=(11, 9), borderwidth=0, font=(colors["font"], colors["font_body"], "bold"))
-        style.map("ActiveNav.TButton", background=[("pressed", colors["surface_hover"]), ("active", colors["surface_hover"])], foreground=[("active", colors["accent"])])
-        style.configure("TEntry", fieldbackground=colors["surface_raised"], foreground=colors["text"], insertcolor=colors["accent"], padding=(10, 8), borderwidth=1, bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], font=(colors["font"], colors["font_body"]))
-        style.map("TEntry", fieldbackground=[("disabled", colors["surface"]), ("focus", colors["surface_raised"])], bordercolor=[("focus", colors["border_focus"])])
-        style.configure("TCombobox", fieldbackground=colors["surface_raised"], background=colors["surface_raised"], foreground=colors["text"], arrowcolor=colors["muted"], padding=(9, 7), borderwidth=1, bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], font=(colors["font"], colors["font_body"]))
-        style.map("TCombobox", fieldbackground=[("readonly", colors["surface_raised"]), ("disabled", colors["surface"])], foreground=[("disabled", colors["muted"])], bordercolor=[("focus", colors["border_focus"])])
-        style.configure("TCheckbutton", background=colors["surface"], foreground=colors["text"], padding=(3, 5), font=(colors["font"], colors["font_body"]))
-        style.map("TCheckbutton", background=[("active", colors["surface"])], foreground=[("disabled", colors["muted"])], indicatorcolor=[("selected", colors["accent"]), ("!selected", colors["surface_raised"])])
-        style.configure("TRadiobutton", background=colors["surface"], foreground=colors["text"], padding=(3, 5), font=(colors["font"], colors["font_body"]))
-        style.map("TRadiobutton", background=[("active", colors["surface"])], foreground=[("disabled", colors["muted"])], indicatorcolor=[("selected", colors["accent"]), ("!selected", colors["surface_raised"])])
-        style.configure("Treeview", background=colors["surface"], fieldbackground=colors["surface"], foreground=colors["text"], rowheight=34, borderwidth=0, font=(colors["font"], colors["font_body"]))
-        style.map("Treeview", background=[("selected", colors["highlight"])], foreground=[("selected", colors["text"])])
-        style.configure("Treeview.Heading", background=colors["surface_raised"], foreground=colors["muted"], padding=(10, 9), borderwidth=0, font=(colors["font"], colors["font_small"], "bold"))
-        style.map("Treeview.Heading", background=[("active", colors["surface_hover"])], foreground=[("active", colors["text"])])
+        style.configure("Status.TFrame", background=colors["bg"])
+        style.configure(
+            "TLabel",
+            background=colors["bg"],
+            foreground=colors["text"],
+            font=(colors["font"], colors["font_body"]),
+        )
+        style.configure(
+            "Muted.TLabel",
+            background=colors["bg"],
+            foreground=colors["muted"],
+            font=(colors["font"], colors["font_small"]),
+        )
+        style.configure(
+            "Panel.Muted.TLabel",
+            background=colors["surface"],
+            foreground=colors["muted"],
+            font=(colors["font"], colors["font_small"]),
+        )
+        style.configure(
+            "Status.Muted.TLabel",
+            background=colors["bg"],
+            foreground=colors["muted"],
+            font=(colors["font"], colors["font_small"]),
+        )
+        for label_style in ("Error.TLabel", "Panel.Error.TLabel"):
+            style.configure(
+                label_style,
+                background=colors["surface"],
+                foreground=colors["error"],
+                font=(colors["font"], colors["font_small"]),
+            )
+        style.configure(
+            "Panel.TLabel",
+            background=colors["surface"],
+            foreground=colors["text"],
+            font=(colors["font"], colors["font_body"]),
+        )
+        style.configure(
+            "Title.TLabel",
+            background=colors["bg"],
+            foreground=colors["text"],
+            font=(colors["font"], colors["font_title"], "bold"),
+        )
+        style.configure(
+            "Section.TLabel",
+            background=colors["bg"],
+            foreground=colors["text"],
+            font=(colors["font"], colors["font_heading"], "bold"),
+        )
+        style.configure(
+            "Panel.Section.TLabel",
+            background=colors["surface"],
+            foreground=colors["text"],
+            font=(colors["font"], colors["font_heading"], "bold"),
+        )
+        style.configure(
+            "Brand.TLabel",
+            background=colors["bg"],
+            foreground=colors["text"],
+            font=(colors["font"], 17, "bold"),
+        )
+        style.configure(
+            "Eyebrow.TLabel",
+            background=colors["bg"],
+            foreground=colors["accent"],
+            font=(colors["font"], colors["font_small"], "bold"),
+        )
+        style.configure(
+            "Panel.Eyebrow.TLabel",
+            background=colors["surface"],
+            foreground=colors["accent"],
+            font=(colors["font"], colors["font_small"], "bold"),
+        )
+        style.configure(
+            "TButton",
+            background=colors["surface_raised"],
+            foreground=colors["text"],
+            padding=(13, 9),
+            borderwidth=1,
+            bordercolor=colors["border"],
+            focusthickness=2,
+            focuscolor=colors["border_focus"],
+            font=(colors["font"], colors["font_body"]),
+        )
+        style.map(
+            "TButton",
+            background=[("disabled", colors["surface"]), ("pressed", colors["highlight"]), ("active", colors["surface_hover"])],
+            foreground=[("disabled", colors["muted"])],
+            bordercolor=[("focus", colors["border_focus"])],
+        )
+        style.configure(
+            "Accent.TButton",
+            background=colors["accent"],
+            foreground="#ffffff",
+            padding=(16, 10),
+            borderwidth=0,
+            font=(colors["font"], colors["font_body"], "bold"),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("disabled", colors["border"]), ("pressed", colors["accent_dim"]), ("active", colors["accent_dim"])],
+            foreground=[("disabled", colors["muted"])],
+        )
+        style.configure(
+            "Nav.TButton",
+            background=colors["bg"],
+            foreground=colors["muted"],
+            anchor="center",
+            padding=(10, 10),
+            borderwidth=0,
+            font=(colors["font"], colors["font_body"]),
+        )
+        style.map(
+            "Nav.TButton",
+            background=[("pressed", colors["surface"]), ("active", colors["surface"])],
+            foreground=[("focus", colors["text"]), ("active", colors["text"])],
+        )
+        style.configure(
+            "ActiveNav.TButton",
+            background=colors["surface"],
+            foreground=colors["accent"],
+            anchor="center",
+            padding=(10, 10),
+            borderwidth=0,
+            font=(colors["font"], colors["font_body"], "bold"),
+        )
+        style.map(
+            "ActiveNav.TButton",
+            background=[("pressed", colors["surface"]), ("active", colors["surface"])],
+            foreground=[("active", colors["accent"])],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=colors["surface_raised"],
+            foreground=colors["text"],
+            insertcolor=colors["accent"],
+            padding=(11, 9),
+            borderwidth=1,
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+            font=(colors["font"], colors["font_body"]),
+        )
+        style.map(
+            "TEntry",
+            fieldbackground=[("disabled", colors["surface"]), ("focus", colors["surface_raised"])],
+            bordercolor=[("focus", colors["border_focus"])],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=colors["surface_raised"],
+            background=colors["surface_raised"],
+            foreground=colors["text"],
+            arrowcolor=colors["muted"],
+            padding=(10, 8),
+            borderwidth=1,
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+            font=(colors["font"], colors["font_body"]),
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", colors["surface_raised"]), ("disabled", colors["surface"])],
+            foreground=[("disabled", colors["muted"])],
+            bordercolor=[("focus", colors["border_focus"])],
+        )
+        for widget_style in ("TCheckbutton", "TRadiobutton"):
+            style.configure(
+                widget_style,
+                background=colors["surface"],
+                foreground=colors["text"],
+                padding=(4, 6),
+                font=(colors["font"], colors["font_body"]),
+            )
+            style.map(
+                widget_style,
+                background=[("active", colors["surface"])],
+                foreground=[("disabled", colors["muted"])],
+                indicatorcolor=[("selected", colors["accent"]), ("!selected", colors["surface_raised"])],
+            )
+        style.configure(
+            "Treeview",
+            background=colors["surface"],
+            fieldbackground=colors["surface"],
+            foreground=colors["text"],
+            rowheight=42,
+            borderwidth=0,
+            font=(colors["font"], colors["font_body"]),
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", colors["highlight"])],
+            foreground=[("selected", colors["text"])],
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=colors["surface"],
+            foreground=colors["muted"],
+            padding=(10, 10),
+            borderwidth=0,
+            font=(colors["font"], colors["font_small"], "bold"),
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("active", colors["surface_hover"])],
+            foreground=[("active", colors["text"])],
+        )
         style.configure("TNotebook", background=colors["bg"], borderwidth=0)
-        style.configure("TNotebook.Tab", background=colors["surface"], foreground=colors["muted"], padding=(12, 8), font=(colors["font"], colors["font_body"]))
-        style.map("TNotebook.Tab", background=[("selected", colors["surface_raised"])], foreground=[("selected", colors["text"])])
-        style.configure("Horizontal.TProgressbar", troughcolor=colors["surface_raised"], background=colors["accent"], bordercolor=colors["surface_raised"], thickness=8)
-        style.configure("Vertical.TScrollbar", background=colors["surface_raised"], troughcolor=colors["surface"], bordercolor=colors["surface"], arrowcolor=colors["muted"], gripcount=0, width=10)
-        style.configure("Horizontal.TScrollbar", background=colors["surface_raised"], troughcolor=colors["surface"], bordercolor=colors["surface"], arrowcolor=colors["muted"], gripcount=0, width=10)
+        style.configure(
+            "TNotebook.Tab",
+            background=colors["surface"],
+            foreground=colors["muted"],
+            padding=(14, 9),
+            font=(colors["font"], colors["font_body"]),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", colors["surface_raised"])],
+            foreground=[("selected", colors["text"])],
+        )
+        style.configure(
+            "Horizontal.TProgressbar",
+            troughcolor=colors["border_soft"],
+            background=colors["accent"],
+            bordercolor=colors["border_soft"],
+            thickness=8,
+        )
+        for scrollbar_style in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+            style.configure(
+                scrollbar_style,
+                background=colors["border"],
+                troughcolor=colors["surface"],
+                bordercolor=colors["surface"],
+                arrowcolor=colors["muted"],
+                gripcount=0,
+                width=10,
+            )
         style.configure("TSeparator", background=colors["border_soft"])
 
     def _build_shell(self) -> None:
-        outer = ttk.Frame(self.root)
+        outer = ttk.Frame(self.root, style="Workspace.TFrame", padding=(28, 18, 28, 14))
         outer.pack(fill="both", expand=True)
-        outer.columnconfigure(1, weight=1)
-        outer.rowconfigure(0, weight=1)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(4, weight=1)
 
-        self.sidebar = ttk.Frame(outer, width=214, style="Sidebar.TFrame", padding=(12, 16))
-        self.sidebar.grid(row=0, column=0, sticky="ns")
-        self.sidebar.grid_propagate(False)
-        brand_row = ttk.Frame(self.sidebar, style="Sidebar.TFrame")
-        brand_row.pack(fill="x", padx=4, pady=(0, 25))
-        mark = tk.Canvas(brand_row, width=32, height=32, background=TOKENS["sidebar"], highlightthickness=0)
-        mark.pack(side="left", padx=(0, 9))
-        mark.create_line(7, 7, 16, 16, 25, 7, fill=TOKENS["border"], width=1)
-        mark.create_line(7, 25, 16, 16, 25, 25, fill=TOKENS["border"], width=1)
-        for x, y, radius, color in ((7, 7, 2, TOKENS["muted"]), (25, 7, 2, TOKENS["muted"]), (7, 25, 2, TOKENS["muted"]), (25, 25, 2, TOKENS["muted"]), (16, 16, 4, TOKENS["accent"])):
-            mark.create_oval(x - radius, y - radius, x + radius, y + radius, fill=color, outline="")
-        brand_copy = ttk.Frame(brand_row, style="Sidebar.TFrame")
-        brand_copy.pack(side="left", fill="y")
-        ttk.Label(brand_copy, text="DotLingo", style="Brand.TLabel").pack(anchor="w", pady=(1, 0))
-        ttk.Label(brand_copy, text="LOCAL TRANSLATION", style="Sidebar.Muted.TLabel").pack(anchor="w", pady=(1, 0))
+        brand_row = ttk.Frame(outer, style="Workspace.TFrame")
+        brand_row.grid(row=0, column=0, sticky="ew")
+        brand_row.columnconfigure(1, weight=1)
+        ttk.Label(brand_row, text="dotlingo", style="Brand.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(brand_row, text="локальная переводческая мастерская", style="Muted.TLabel").grid(
+            row=0, column=1, sticky="w", padx=(13, 0), pady=(3, 0)
+        )
+        ttk.Label(brand_row, text="ФАЙЛЫ ОСТАЮТСЯ НА УСТРОЙСТВЕ", style="Muted.TLabel").grid(
+            row=0, column=2, sticky="e", pady=(3, 0)
+        )
+
+        navigation = ttk.Frame(outer, style="Workspace.TFrame")
+        navigation.grid(row=1, column=0, sticky="ew", pady=(17, 12))
         self.nav_buttons: dict[str, ttk.Button] = {}
         for index, (key, label) in enumerate(PAGES):
-            if index == 0 or key == "models":
-                group = "РАБОЧЕЕ МЕСТО" if key == "projects" else "ИНСТРУМЕНТЫ"
-                ttk.Label(self.sidebar, text=group, style="Sidebar.Section.TLabel").pack(anchor="w", padx=11, pady=(0, 6) if index == 0 else (20, 6))
-            row = ttk.Frame(self.sidebar, style="Sidebar.TFrame", height=38)
-            row.pack(fill="x", pady=1)
-            row.pack_propagate(False)
-            indicator = tk.Frame(row, background=TOKENS["sidebar"], width=3)
-            indicator.pack(side="left", fill="y", padx=(0, 4))
-            button = ttk.Button(row, text=label, style="Nav.TButton", command=lambda page=key: self.show_page(page))
+            navigation.columnconfigure(index, weight=1, uniform="navigation")
+            row = ttk.Frame(navigation, style="Workspace.TFrame")
+            row.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 3, 0))
+            button = ttk.Button(
+                row,
+                text=label,
+                style="Nav.TButton",
+                command=lambda page=key: self.show_page(page),
+            )
             button.pack(fill="both", expand=True)
             button.configure(takefocus=True)
+            indicator = tk.Frame(row, background=TOKENS["bg"], height=2)
+            indicator.place(relx=0, rely=1, relwidth=1, anchor="sw")
             self.nav_buttons[key] = button
             self.nav_indicators[key] = indicator
-        status_card = ttk.Frame(self.sidebar, style="Status.TFrame", padding=(10, 9))
-        status_card.pack(side="bottom", fill="x", padx=2, pady=(10, 0))
-        status_head = ttk.Frame(status_card, style="Status.TFrame")
-        status_head.pack(fill="x")
-        status_dot = tk.Canvas(status_head, width=8, height=8, background=TOKENS["surface_raised"], highlightthickness=0)
-        status_dot.pack(side="left", padx=(0, 7), pady=2)
-        status_dot.create_oval(1, 1, 7, 7, fill=TOKENS["accent"], outline="")
-        ttk.Label(status_head, text="НА ЭТОМ УСТРОЙСТВЕ", style="Status.Muted.TLabel").pack(side="left", anchor="w")
-        self.sidebar_status = ttk.Label(status_card, text="Локальная работа · без облака", style="Status.Muted.TLabel", wraplength=158, justify="left")
-        self.sidebar_status.pack(anchor="w", pady=(5, 0))
 
-        workspace = ttk.Frame(outer, style="Workspace.TFrame", padding=(26, 20, 26, 24))
-        workspace.grid(row=0, column=1, sticky="nsew")
-        workspace.columnconfigure(0, weight=1)
-        workspace.rowconfigure(1, weight=1)
-        self.project_header = ttk.Frame(workspace, style="Workspace.TFrame")
-        self.project_header.grid(row=0, column=0, sticky="ew", pady=(0, 20))
+        ttk.Separator(outer).grid(row=2, column=0, sticky="ew")
+        self.project_header = ttk.Frame(outer, style="Workspace.TFrame")
+        self.project_header.grid(row=3, column=0, sticky="ew", pady=(20, 12))
         self.project_header.columnconfigure(0, weight=1)
         self.header_title = ttk.Label(self.project_header, text="Проекты", style="Title.TLabel")
         self.header_title.grid(row=0, column=0, sticky="w")
-        project_chip = ttk.Frame(self.project_header, style="ProjectChip.TFrame", padding=(11, 7))
-        project_chip.grid(row=0, column=1, sticky="e", padx=(12, 0))
-        project_dot = tk.Canvas(project_chip, width=7, height=7, background=TOKENS["surface"], highlightthickness=0)
-        project_dot.pack(side="left", padx=(0, 7))
-        project_dot.create_oval(1, 1, 6, 6, fill=TOKENS["accent"], outline="")
-        self.header_project = ttk.Label(project_chip, text="Проект не выбран", style="Panel.Muted.TLabel")
-        self.header_project.pack(side="left")
-        self.page_host = ttk.Frame(workspace)
-        self.page_host.grid(row=1, column=0, sticky="nsew")
+        self.header_project = ttk.Label(
+            self.project_header,
+            text="Локальный перевод · без облачной обработки",
+            style="Muted.TLabel",
+            wraplength=980,
+        )
+        self.header_project.grid(row=1, column=0, sticky="w", pady=(3, 0))
+
+        self.page_host = ttk.Frame(outer, style="Workspace.TFrame")
+        self.page_host.grid(row=4, column=0, sticky="nsew")
         self.page_host.rowconfigure(0, weight=1)
         self.page_host.columnconfigure(0, weight=1)
         self.content = ttk.Frame(self.page_host)
         self.content.grid(row=0, column=0, sticky="nsew")
         self.content.rowconfigure(0, weight=1)
         self.content.columnconfigure(0, weight=1)
+
+        ttk.Separator(outer).grid(row=5, column=0, sticky="ew", pady=(12, 8))
+        status_row = ttk.Frame(outer, style="Status.TFrame")
+        status_row.grid(row=6, column=0, sticky="ew")
+        status_row.columnconfigure(1, weight=1)
+        status_dot = tk.Canvas(
+            status_row,
+            width=9,
+            height=9,
+            background=TOKENS["bg"],
+            highlightthickness=0,
+        )
+        status_dot.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        status_dot.create_oval(1, 1, 8, 8, fill=TOKENS["accent"], outline="")
+        self.sidebar_status = ttk.Label(
+            status_row,
+            text="Локальная работа · без облака",
+            style="Status.Muted.TLabel",
+            anchor="w",
+            wraplength=840,
+        )
+        self.sidebar_status.grid(row=0, column=1, sticky="ew")
         self.show_page("projects")
 
     def _panel(self, parent: tk.Misc, **kwargs: Any) -> ttk.Frame:
@@ -297,6 +518,11 @@ class DotLingoApp:
         self._review_save_status = None
         self._review_save_button = None
         self._review_refilter = None
+        self._documents_tree = None
+        self._document_selection_label = None
+        self._project_tree = None
+        self._queue_tree = None
+        self._queue_controls = None
         for child in self.content.winfo_children():
             child.destroy()
 
@@ -307,14 +533,14 @@ class DotLingoApp:
             return
         if self.page == "settings" and not self._confirm_settings_change():
             return
-        self._stop_page_animation()
+        self._stop_nav_animation()
         self.page = page
         labels = dict(PAGES)
         self.header_title.configure(text=labels[page])
-        self.header_project.configure(text=self.active.project["title"] if self.active else "Проект не выбран")
+        self.header_project.configure(text=self._project_context_text(self.active))
         for key, button in self.nav_buttons.items():
             button.configure(style="ActiveNav.TButton" if key == page else "Nav.TButton")
-            self.nav_indicators[key].configure(background=TOKENS["accent"] if key == page else TOKENS["sidebar"])
+            self._animate_nav_indicator(key, key == page)
         self._clear_content()
         renderers = {
             "projects": self._show_projects,
@@ -325,8 +551,13 @@ class DotLingoApp:
             "glossary": self._show_glossary,
             "settings": self._show_settings,
         }
+        for index in range(8):
+            self.content.rowconfigure(index, weight=0)
+        for index in range(4):
+            self.content.columnconfigure(index, weight=0)
+        self.content.rowconfigure(0, weight=1)
+        self.content.columnconfigure(0, weight=1)
         renderers[page]()
-        self._animate_page_change()
 
     def _navigate_shortcut(self, page: str) -> str:
         if self._overlay is not None and self._overlay.winfo_exists():
@@ -344,41 +575,49 @@ class DotLingoApp:
             self._save_review_edit()
         return "break"
 
-    def _animate_page_change(self) -> None:
-        if self.reduce_motion or self._closing or not self.content.winfo_exists():
+    def _animate_nav_indicator(self, page: str, active: bool) -> None:
+        indicator = self.nav_indicators[page]
+        previous = self._nav_indicator_jobs.pop(page, None)
+        if previous is not None:
+            try:
+                self.root.after_cancel(previous)
+            except tk.TclError:
+                pass
+        start = str(indicator.cget("background"))
+        target = TOKENS["accent"] if active else TOKENS["bg"]
+        if self.reduce_motion or start == target:
+            indicator.configure(background=target)
             return
-        self.content.grid_remove()
-        self.content.place(relx=0, rely=0, relwidth=1, relheight=1, x=10)
-        steps = 9
+
+        steps = 7
+        start_rgb = tuple(int(start[index : index + 2], 16) for index in (1, 3, 5))
+        target_rgb = tuple(int(target[index : index + 2], 16) for index in (1, 3, 5))
 
         def advance(step: int) -> None:
-            if self._closing or not self.content.winfo_exists():
-                self._page_animation_job = None
+            if self._closing or not indicator.winfo_exists():
+                self._nav_indicator_jobs.pop(page, None)
                 return
             progress = step / steps
             eased = 1 - (1 - progress) ** 3
-            offset = round(10 * (1 - eased))
-            self.content.place_configure(x=offset)
+            color = "#" + "".join(
+                f"{round(start_rgb[index] + (target_rgb[index] - start_rgb[index]) * eased):02x}"
+                for index in range(3)
+            )
+            indicator.configure(background=color)
             if step >= steps:
-                self.content.place_forget()
-                self.content.grid(row=0, column=0, sticky="nsew")
-                self._page_animation_job = None
+                self._nav_indicator_jobs.pop(page, None)
                 return
-            self._page_animation_job = self.root.after(18, lambda: advance(step + 1))
+            self._nav_indicator_jobs[page] = self.root.after(16, lambda: advance(step + 1))
 
-        self._page_animation_job = self.root.after(18, lambda: advance(1))
+        self._nav_indicator_jobs[page] = self.root.after(16, lambda: advance(1))
 
-    def _stop_page_animation(self) -> None:
-        if self._page_animation_job is None:
-            return
-        try:
-            self.root.after_cancel(self._page_animation_job)
-        except tk.TclError:
-            pass
-        self._page_animation_job = None
-        if self.content.winfo_exists():
-            self.content.place_forget()
-            self.content.grid(row=0, column=0, sticky="nsew")
+    def _stop_nav_animation(self) -> None:
+        for job in self._nav_indicator_jobs.values():
+            try:
+                self.root.after_cancel(job)
+            except tk.TclError:
+                pass
+        self._nav_indicator_jobs.clear()
 
     def _focus_review_search(self) -> None:
         if self.page != "review":
@@ -439,12 +678,23 @@ class DotLingoApp:
     def _refresh_project_list(self) -> None:
         self.projects = list_projects(self.projects_dir)
 
+    def _project_context_text(self, project: ProjectStore | None) -> str:
+        if project is None:
+            return "Локальный перевод · без облачной обработки"
+        info = project.project
+        source = "Авто" if info["source_lang"] == AUTO_LANGUAGE else info["source_lang"].upper()
+        targets = project.target_languages()
+        target_summary = ", ".join(code.upper() for code in targets[:3])
+        if len(targets) > 3:
+            target_summary += f" +{len(targets) - 3}"
+        return f"{info['title']} · {source} → {target_summary}"
+
     def _restore_active_project(self) -> None:
         last = load_preferences(self.preferences_root).get("last_project", "")
         self.active = next((project for project in self.projects if project.project["id"] == last), None)
         if self.active is None and self.projects:
             self.active = self.projects[0]
-        self.header_project.configure(text=self.active.project["title"] if self.active else "Проект не выбран")
+        self.header_project.configure(text=self._project_context_text(self.active))
 
     def _select_project(self, project: ProjectStore) -> None:
         self.active = project
@@ -452,48 +702,86 @@ class DotLingoApp:
         preferences = load_preferences(self.preferences_root)
         preferences["last_project"] = project.project["id"]
         save_preferences(preferences, self.preferences_root)
-        self.header_project.configure(text=project.project["title"])
+        self.header_project.configure(text=self._project_context_text(project))
         self.show_page("documents")
 
     def _show_projects(self) -> None:
         self.content.rowconfigure(0, weight=1)
         self.content.columnconfigure(0, weight=1)
-        panel = self._panel(self.content)
+        panel = self._panel(self.content, padding=18)
         panel.grid(row=0, column=0, sticky="nsew")
         panel.columnconfigure(0, weight=1)
         panel.rowconfigure(1, weight=1)
-        top = ttk.Frame(panel, style="Panel.TFrame")
-        top.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        top.columnconfigure(0, weight=1)
-        ttk.Label(top, text="Рабочие проекты", style="Panel.TLabel", font=(TOKENS["font"], 12, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Button(top, text="Новый проект", style="Accent.TButton", command=self._new_project).grid(row=0, column=1, sticky="e")
+        heading_row = ttk.Frame(panel, style="Panel.TFrame")
+        heading_row.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
+        heading_row.columnconfigure(0, weight=1)
+        ttk.Label(heading_row, text="Недавние проекты", style="Panel.Section.TLabel").grid(row=0, column=0, sticky="w")
+        new_project_button = ttk.Button(heading_row, text="Новый перевод", style="Accent.TButton", command=self._new_project)
+        new_project_button.grid(row=0, column=1, sticky="e")
         tree: ttk.Treeview | None = None
         if self.projects:
+            panel.columnconfigure(1, weight=0)
             tree = ttk.Treeview(panel, columns=("direction", "documents", "updated"), show="tree headings", selectmode="browse")
             tree.heading("#0", text="Проект")
             tree.heading("direction", text="Языки")
-            tree.heading("documents", text="Документы")
+            tree.heading("documents", text="Файлы")
             tree.heading("updated", text="Изменён")
-            tree.column("#0", width=330, minwidth=180)
-            tree.column("direction", width=140, stretch=False)
-            tree.column("documents", width=110, stretch=False, anchor="center")
-            tree.column("updated", width=170, stretch=False)
+            tree.column("#0", width=220, minwidth=130, stretch=True)
+            tree.column("direction", width=125, minwidth=95, stretch=True)
+            tree.column("documents", width=55, minwidth=45, stretch=False, anchor="center")
+            tree.column("updated", width=85, minwidth=75, stretch=False)
             tree.grid(row=1, column=0, sticky="nsew")
+            tree_scroll = ttk.Scrollbar(panel, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=tree_scroll.set)
+            tree_scroll.grid(row=1, column=1, sticky="ns")
             tree.bind("<Double-1>", lambda _: self._open_tree_project(tree))
             tree.bind("<Return>", lambda _: self._open_tree_project(tree))
-            for project in self.projects:
+            for project in sorted(self.projects, key=lambda item: item.project["updated_at"], reverse=True):
                 info = project.project
-                tree.insert("", "end", iid=info["id"], values=(f"{info['source_lang']} → {info['target_lang']}", len(project.documents()), info["updated_at"][:16].replace("T", " ")), text=info["title"])
+                targets = project.target_languages()
+                source = "Авто" if info["source_lang"] == AUTO_LANGUAGE else info["source_lang"].upper()
+                target_summary = ", ".join(item.upper() for item in targets[:2])
+                if len(targets) > 2:
+                    target_summary += f" +{len(targets) - 2}"
+                tree.insert(
+                    "",
+                    "end",
+                    iid=info["id"],
+                    values=(
+                        f"{source} → {target_summary}",
+                        len(project.documents()),
+                        info["updated_at"][:10],
+                    ),
+                    text=info["title"],
+                )
+            if self.active is not None and tree.exists(self.active.project["id"]):
+                tree.selection_set(self.active.project["id"])
+                tree.focus(self.active.project["id"])
         else:
+            new_project_button.grid_remove()
             empty = ttk.Frame(panel, style="Panel.TFrame")
-            empty.grid(row=1, column=0, sticky="nsew")
+            empty.grid(row=1, column=0, columnspan=2, sticky="nsew")
             empty.columnconfigure(0, weight=1)
             empty.rowconfigure(0, weight=1)
-            ttk.Label(empty, text="Пока нет проектов\n\nСоздайте проект, чтобы добавить документ и начать перевод.", style="Panel.Muted.TLabel", wraplength=520, justify="center").grid(row=0, column=0)
-        open_button = ttk.Button(panel, text="Открыть выбранный проект", command=lambda: self._open_tree_project(tree) if tree else None)
-        open_button.grid(row=2, column=0, sticky="e", pady=(12, 0))
+            empty_copy = ttk.Frame(empty, style="Panel.TFrame")
+            empty_copy.grid(row=0, column=0)
+            ttk.Label(empty_copy, text="Начните с нового перевода", style="Panel.Section.TLabel").pack()
+            ttk.Label(
+                empty_copy,
+                text="Выберите модель и языки. Документы можно добавить на следующем шаге.",
+                style="Panel.Muted.TLabel",
+                justify="center",
+                wraplength=420,
+            ).pack(pady=(6, 14))
+            ttk.Button(empty_copy, text="Создать проект", style="Accent.TButton", command=self._new_project).pack()
+        open_button = ttk.Button(panel, text="Открыть проект", style="Accent.TButton", command=lambda: self._open_tree_project(tree) if tree else None)
+        open_button.grid(row=2, column=0, sticky="e", pady=(10, 0))
         if tree is None:
             open_button.configure(state="disabled")
+        else:
+            open_button.configure(state="normal" if tree.selection() else "disabled")
+            tree.bind("<<TreeviewSelect>>", lambda _event: open_button.configure(state="normal" if tree.selection() else "disabled"))
+        self._project_tree = tree
 
     def _open_tree_project(self, tree: ttk.Treeview) -> None:
         selection = tree.selection()
@@ -506,35 +794,241 @@ class DotLingoApp:
 
     def _new_project(self) -> None:
         dialog = tk.Toplevel(self.root)
-        dialog.title("Новый проект")
+        dialog.title("Новый перевод")
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.configure(background=TOKENS["bg"])
-        frame = self._panel(dialog, padding=18)
+        dialog.geometry("840x700")
+        dialog.minsize(740, 620)
+        frame = ttk.Frame(dialog, padding=22)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Название проекта", style="Panel.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
-        title = ttk.Entry(frame, width=34)
-        title.grid(row=1, column=0, sticky="ew", pady=(0, 12))
-        ttk.Label(frame, text="Языки перевода", style="Panel.TLabel").grid(row=2, column=0, sticky="w", pady=(0, 6))
-        languages = list(LANGUAGES)
-        direction = ttk.Frame(frame, style="Panel.TFrame")
-        direction.grid(row=3, column=0, sticky="ew", pady=(0, 16))
-        source = tk.StringVar(value="en")
-        target = tk.StringVar(value="ru")
-        ttk.Combobox(direction, values=languages, textvariable=source, state="readonly", width=8).pack(side="left")
-        ttk.Label(direction, text=" → ", style="Panel.TLabel").pack(side="left")
-        ttk.Combobox(direction, values=languages, textvariable=target, state="readonly", width=8).pack(side="left")
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(3, weight=1)
+        ttk.Label(frame, text="Новый перевод", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            frame,
+            text="Выберите модель и языки. Источник можно определить автоматически.",
+            style="Muted.TLabel",
+            wraplength=670,
+        ).grid(row=1, column=0, sticky="w", pady=(5, 14))
+
+        project_card = self._panel(frame, padding=(15, 12))
+        project_card.grid(row=2, column=0, sticky="ew", pady=(0, 9))
+        project_card.columnconfigure(0, weight=1)
+        ttk.Label(project_card, text="Название проекта · необязательно", style="Panel.Eyebrow.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        title = ttk.Entry(project_card)
+        title.grid(row=1, column=0, sticky="ew", pady=(5, 1))
+
+        options_card = self._panel(frame, padding=(15, 12))
+        options_card.grid(row=3, column=0, sticky="nsew", pady=(0, 10))
+        options_card.columnconfigure(0, weight=1)
+        options_card.rowconfigure(4, weight=1)
+        model_choices = [item for item in catalog() if item.get("status") == "available"]
+        model_by_name = {item["name"]: item for item in model_choices}
+        model_var = tk.StringVar(value=model_choices[0]["name"] if model_choices else "")
+        ttk.Label(options_card, text="Модель", style="Panel.Eyebrow.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        model_combo = ttk.Combobox(
+            options_card,
+            textvariable=model_var,
+            state="readonly",
+            values=tuple(model_by_name),
+        )
+        model_combo.grid(row=1, column=0, sticky="ew", pady=(5, 12))
+
+        language_header = ttk.Frame(options_card, style="Panel.TFrame")
+        language_header.grid(row=2, column=0, sticky="ew")
+        language_header.columnconfigure(0, weight=1)
+        ttk.Label(language_header, text="Исходный язык", style="Panel.Eyebrow.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        source_var = tk.StringVar(value=AUTO_LANGUAGE_LABEL)
+        source_combo = ttk.Combobox(language_header, textvariable=source_var, state="readonly", width=30)
+        source_combo.grid(row=1, column=0, sticky="w", pady=(5, 8))
+
+        target_header = ttk.Frame(options_card, style="Panel.TFrame")
+        target_header.grid(row=3, column=0, sticky="ew", pady=(2, 5))
+        target_header.columnconfigure(0, weight=1)
+        ttk.Label(target_header, text="Перевести на", style="Panel.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        target_count = ttk.Label(target_header, text="0 выбрано", style="Panel.Muted.TLabel")
+        target_count.grid(row=0, column=1, sticky="e")
+        language_panel = self._panel(options_card, padding=(9, 7))
+        language_panel.grid(row=4, column=0, sticky="nsew")
+        language_panel.columnconfigure(0, weight=1)
+        language_panel.rowconfigure(2, weight=1)
+        ttk.Label(language_panel, text="Найти язык", style="Panel.Muted.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 4)
+        )
+        target_search_var = tk.StringVar()
+        target_search = ttk.Entry(language_panel, textvariable=target_search_var)
+        target_search.grid(row=1, column=0, sticky="ew", pady=(0, 7))
+        language_canvas = tk.Canvas(
+            language_panel,
+            background=TOKENS["surface"],
+            highlightthickness=0,
+            height=210,
+        )
+        language_canvas.grid(row=2, column=0, sticky="nsew")
+        language_scroll = ttk.Scrollbar(language_panel, orient="vertical", command=language_canvas.yview)
+        language_scroll.grid(row=2, column=1, sticky="ns")
+        language_canvas.configure(yscrollcommand=language_scroll.set)
+        language_grid = ttk.Frame(language_canvas, style="Panel.TFrame")
+        language_window = language_canvas.create_window((0, 0), window=language_grid, anchor="nw")
+        language_grid.columnconfigure(0, weight=1)
+        language_grid.bind(
+            "<Configure>", lambda _event: language_canvas.configure(scrollregion=language_canvas.bbox("all"))
+        )
+        language_canvas.bind(
+            "<Configure>", lambda event: language_canvas.itemconfigure(language_window, width=event.width - 4)
+        )
+        target_vars: dict[str, tk.BooleanVar] = {}
+        target_widgets: dict[str, ttk.Checkbutton] = {}
+        selected_targets: set[str] = set()
+        rendered_model: str | None = None
+
+        def update_target_count() -> None:
+            target_count.configure(text=f"{len(selected_targets)} выбрано")
+
+        def selected_source_code() -> str:
+            if source_var.get() == AUTO_LANGUAGE_LABEL:
+                return AUTO_LANGUAGE
+            return next(
+                (
+                    code
+                    for code in LANGUAGES
+                    if language_display(code) == source_var.get()
+                ),
+                AUTO_LANGUAGE,
+            )
+
+        def update_excluded_language(_event: tk.Event[Any] | None = None) -> None:
+            source_code = selected_source_code()
+            selected_targets.discard(source_code)
+            for code, widget in target_widgets.items():
+                if code == source_code:
+                    target_vars[code].set(False)
+                    widget.configure(state="disabled")
+                else:
+                    widget.configure(state="normal")
+            update_target_count()
+
+        def render_languages(*_args: Any) -> None:
+            nonlocal rendered_model
+            for child in language_grid.winfo_children():
+                child.destroy()
+            target_vars.clear()
+            target_widgets.clear()
+            selected_model = model_by_name.get(model_var.get())
+            if selected_model is None:
+                return
+            codes = supported_languages(selected_model)
+            if rendered_model != model_var.get():
+                selected_targets.intersection_update(codes)
+                if not selected_targets and codes:
+                    selected_targets.add("ru" if "ru" in codes else codes[0])
+                rendered_model = model_var.get()
+            source_choices = [AUTO_LANGUAGE_LABEL, *(language_display(code) for code in codes)]
+            source_combo.configure(values=source_choices)
+            if source_var.get() not in source_choices:
+                source_var.set(AUTO_LANGUAGE_LABEL)
+            query = target_search_var.get().strip().casefold()
+            visible_codes = [
+                code for code in codes if query in language_display(code).casefold()
+            ]
+            if not visible_codes:
+                ttk.Label(
+                    language_grid,
+                    text="Совпадений нет",
+                    style="Panel.Muted.TLabel",
+                ).grid(row=0, column=0, sticky="w", pady=5)
+            for index, code in enumerate(visible_codes):
+                selected = code in selected_targets
+                value = tk.BooleanVar(value=selected)
+
+                def toggle_target(
+                    language: str = code,
+                    variable: tk.BooleanVar = value,
+                ) -> None:
+                    if variable.get():
+                        selected_targets.add(language)
+                    else:
+                        selected_targets.discard(language)
+                    update_target_count()
+
+                target_vars[code] = value
+                checkbox = ttk.Checkbutton(
+                    language_grid,
+                    text=language_display(code),
+                    variable=value,
+                    command=toggle_target,
+                )
+                checkbox.grid(row=index, column=0, sticky="ew", padx=(2, 6), pady=1)
+                target_widgets[code] = checkbox
+            update_target_count()
+            update_excluded_language()
+
+        def on_model_change(_event: tk.Event[Any] | None = None) -> None:
+            render_languages()
+
+        model_combo.bind("<<ComboboxSelected>>", on_model_change)
+        source_combo.bind("<<ComboboxSelected>>", update_excluded_language)
+        target_search.bind("<KeyRelease>", render_languages)
+        render_languages()
+        ttk.Label(
+            options_card,
+            text="Список языков зависит от модели. Качество конкретного направления может различаться.",
+            style="Panel.Muted.TLabel",
+            wraplength=660,
+        ).grid(row=5, column=0, sticky="w", pady=(7, 0))
 
         def create() -> None:
-            if source.get() == target.get():
-                messagebox.showerror("Языки совпадают", "Выберите разные исходный и целевой языки.", parent=dialog)
+            selected_model = model_by_name.get(model_var.get())
+            source_code = AUTO_LANGUAGE if source_var.get() == AUTO_LANGUAGE_LABEL else next(
+                (code for code in supported_languages(selected_model or {}) if language_display(code) == source_var.get()),
+                "",
+            )
+            targets = [
+                code for code in supported_languages(selected_model or {}) if code in selected_targets
+            ]
+            if selected_model is None:
+                messagebox.showerror("Выберите модель", "Для проекта нужна доступная модель.", parent=dialog)
                 return
-            project = ProjectStore.create(self.projects_dir, title.get().strip(), source.get(), target.get())
+            if not targets:
+                messagebox.showerror("Выберите язык", "Отметьте хотя бы один язык перевода.", parent=dialog)
+                return
+            if source_code and source_code in targets:
+                messagebox.showerror("Языки совпадают", "Исходный язык совпадает с целевым.", parent=dialog)
+                return
+            project = ProjectStore.create(
+                self.projects_dir,
+                title.get().strip(),
+                source_code or AUTO_LANGUAGE,
+                targets[0],
+                target_langs=targets,
+                model_id=selected_model["id"],
+            )
             self._refresh_project_list()
             self._select_project(project)
             dialog.destroy()
 
-        ttk.Button(frame, text="Создать проект", style="Accent.TButton", command=create).grid(row=4, column=0, sticky="e")
+        footer = ttk.Frame(frame)
+        footer.grid(row=4, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        ttk.Label(
+            footer,
+            text="Для перевода нужны установленная модель и runtime.",
+            style="Muted.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(footer, text="Создать проект", style="Accent.TButton", command=create).grid(
+            row=0, column=1, sticky="e"
+        )
         title.focus_set()
         dialog.bind("<Return>", lambda _: create())
 
@@ -544,55 +1038,115 @@ class DotLingoApp:
             self._need_project()
             return
         self.content.columnconfigure(0, weight=1)
-        self.content.rowconfigure(0, weight=1)
-        panel = self._panel(self.content)
-        panel.grid(row=0, column=0, sticky="nsew")
+        self.content.rowconfigure(0, weight=0)
+        self.content.rowconfigure(1, weight=1)
+        toolbar = ttk.Frame(self.content, style="Workspace.TFrame")
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        toolbar.columnconfigure(0, weight=1)
+        ttk.Label(toolbar, text="Файлы проекта", style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(toolbar, text="Оригиналы хранятся отдельно от переводов.", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(3, 0))
+        ttk.Button(toolbar, text="Добавить файлы", style="Accent.TButton", command=self._import_files).grid(row=0, column=1, rowspan=2, sticky="e", padx=(12, 0))
+
+        documents = store.documents()
+        if not documents:
+            empty = self._panel(self.content, padding=24)
+            empty.grid(row=1, column=0, sticky="nsew")
+            empty.columnconfigure(0, weight=1)
+            empty.rowconfigure(0, weight=1)
+            content = ttk.Frame(empty, style="Panel.TFrame")
+            content.grid(row=0, column=0)
+            ttk.Label(content, text="Добавьте документ", style="Panel.Section.TLabel", font=(TOKENS["font"], 18, "bold")).pack()
+            ttk.Label(
+                content,
+                text="TXT, Markdown, DOCX, EPUB и PDF с текстовым слоем.",
+                style="Panel.Muted.TLabel",
+                justify="center",
+            ).pack(pady=(7, 16))
+            ttk.Button(content, text="Выбрать файлы", style="Accent.TButton", command=self._import_files).pack()
+            return
+
+        panel = self._panel(self.content, padding=15)
+        panel.grid(row=1, column=0, sticky="nsew")
         panel.columnconfigure(0, weight=1)
         panel.rowconfigure(1, weight=1)
-        head = ttk.Frame(panel, style="Panel.TFrame")
-        head.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        head.columnconfigure(0, weight=1)
-        ttk.Label(head, text="Исходники хранятся отдельно и не изменяются при переводе.", style="Panel.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Button(head, text="Добавить файлы", command=self._import_files).grid(row=0, column=1, padx=(8, 0))
-        translate_button = ttk.Button(head, text="Перевести выбранные", style="Accent.TButton", command=self._enqueue_selected_documents, state="disabled")
-        translate_button.grid(row=0, column=2, padx=(8, 0))
-        tree = ttk.Treeview(panel, columns=("format", "hash", "status", "exports"), show="tree headings", selectmode="extended")
+        panel.columnconfigure(1, weight=0)
+        heading = ttk.Frame(panel, style="Panel.TFrame")
+        heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        heading.columnconfigure(0, weight=1)
+        ttk.Label(heading, text="Документы", style="Panel.Section.TLabel").grid(row=0, column=0, sticky="w")
+        selection_label = ttk.Label(heading, text=f"{len(documents)} документов", style="Panel.Muted.TLabel")
+        selection_label.grid(row=0, column=1, sticky="e")
+        tree = ttk.Treeview(panel, columns=("format", "status", "exports"), show="tree headings", selectmode="extended")
         tree.heading("#0", text="Документ")
         tree.heading("format", text="Формат")
-        tree.heading("hash", text="SHA-256 оригинала")
         tree.heading("status", text="Перевод")
-        tree.heading("exports", text="Результаты")
-        tree.column("#0", width=260)
-        tree.column("format", width=80, stretch=False)
-        tree.column("hash", width=230)
-        tree.column("status", width=120, stretch=False)
-        tree.column("exports", width=95, stretch=False)
+        tree.heading("exports", text="Экспорт")
+        tree.column("#0", width=220, minwidth=130, stretch=True)
+        tree.column("format", width=70, minwidth=55, stretch=False)
+        tree.column("status", width=130, minwidth=110, stretch=True)
+        tree.column("exports", width=65, minwidth=55, stretch=False, anchor="center")
         tree.grid(row=1, column=0, sticky="nsew")
-        tree.bind("<Double-1>", lambda _: self._open_selected_document(tree))
-        review_button = ttk.Button(panel, text="Проверить выбранный перевод", command=lambda: self._open_selected_document(tree), state="disabled")
-        review_button.grid(row=3, column=0, sticky="e", pady=(10, 0))
-        export_button = ttk.Button(panel, text="Открыть последний экспорт", command=self._open_latest_export, state="disabled")
-        export_button.grid(row=3, column=0, sticky="w", pady=(10, 0))
+        tree_scroll = ttk.Scrollbar(panel, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=tree_scroll.set)
+        tree_scroll.grid(row=1, column=1, sticky="ns")
+        tree.tag_configure("complete", foreground=TOKENS["success"])
+        tree.tag_configure("in_progress", foreground=TOKENS["accent"])
+        target_languages = store.target_languages()
+        for document in documents:
+            blocks = [
+                block
+                for block in store.blocks(document.id)
+                if block.translatable and block.text.strip()
+            ]
+            total = len(blocks)
+            block_orders = {block.order for block in blocks}
+            translated_count = sum(
+                len(block_orders.intersection(store.translations(document.id, target_lang=target)))
+                for target in target_languages
+            )
+            total *= len(target_languages)
+            status = f"{translated_count} / {total} фрагментов" if total else "Нет текста для перевода"
+            exports = len(store.exports(document.id))
+            tag = "complete" if total and translated_count >= total else "in_progress" if translated_count else ""
+            tree.insert("", "end", iid=document.id, text=document.name, values=(document.format.upper(), status, str(exports)), tags=(tag,))
+        footer = ttk.Frame(panel, style="Panel.TFrame")
+        footer.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        footer.columnconfigure(0, weight=1)
+        self._document_selection_label = ttk.Label(
+            footer,
+            text="Выберите файлы для перевода",
+            style="Panel.Muted.TLabel",
+            wraplength=320,
+        )
+        self._document_selection_label.grid(row=0, column=0, sticky="w")
+        export_button = ttk.Button(footer, text="Открыть результат", command=self._open_latest_export, state="disabled")
+        export_button.grid(row=0, column=1, padx=(8, 0))
+        review_button = ttk.Button(footer, text="Проверить", command=lambda: self._open_selected_document(tree), state="disabled")
+        review_button.grid(row=0, column=2, padx=(8, 0))
+        translate_button = ttk.Button(footer, text="Перевести", style="Accent.TButton", command=self._enqueue_selected_documents, state="disabled")
+        translate_button.grid(row=0, column=3, padx=(8, 0))
+        self._documents_tree = tree
 
         def sync_actions(_event: tk.Event[Any] | None = None) -> None:
             self._set_selected_doc(tree)
-            has_selection = bool(tree.selection())
-            state = "normal" if has_selection else "disabled"
-            translate_button.configure(state=state)
-            review_button.configure(state=state)
+            selected = tree.selection()
+            count = len(selected)
+            has_selection = count > 0
+            translate_button.configure(state="normal" if has_selection else "disabled")
+            review_button.configure(state="normal" if has_selection else "disabled")
             has_export = bool(store.exports(self._selected_doc)) if has_selection else False
             export_button.configure(state="normal" if has_export else "disabled")
+            if count == 1:
+                document = store.document(self._selected_doc)
+                self._document_selection_label.configure(text=f"Выбран: {document.name}")
+            elif count:
+                self._document_selection_label.configure(text=f"Выбрано документов: {count}")
+            else:
+                self._document_selection_label.configure(text=f"{len(documents)} документов · исходники хранятся отдельно")
 
         tree.bind("<<TreeviewSelect>>", sync_actions)
-        for document in store.documents():
-            translations = store.translations(document.id)
-            translated_count = len(translations)
-            total = sum(1 for block in store.blocks(document.id) if block.translatable and block.text.strip())
-            status = f"{translated_count}/{total} блоков" if translated_count else "не переведён"
-            export_count = len(store.exports(document.id))
-            tree.insert("", "end", iid=document.id, text=document.name, values=(document.format.upper(), document.sha256[:16] + "…", status, f"{export_count} файлов"))
-        if not store.documents():
-            ttk.Label(panel, text="Добавьте книгу или документ. Поддерживаются TXT, Markdown, DOCX, EPUB и PDF с текстовым слоем.", style="Panel.Muted.TLabel", wraplength=650).grid(row=2, column=0, sticky="w", pady=14)
+        tree.bind("<Double-1>", lambda _event: self._open_selected_document(tree))
+        self._documents_tree = tree
 
     def _set_selected_doc(self, tree: ttk.Treeview) -> None:
         selection = tree.selection()
@@ -679,10 +1233,31 @@ class DotLingoApp:
         if not documents:
             messagebox.showinfo("Выберите документы", "Выберите один или несколько документов.", parent=self.root)
             return
+        targets = store.target_languages()
+        source = store.project["source_lang"]
+        unsupported = [target for target in targets if not supports_language(model, target)]
+        if source != AUTO_LANGUAGE and not supports_language(model, source):
+            unsupported.insert(0, source)
+        if unsupported:
+            labels = ", ".join(language_label(code) for code in dict.fromkeys(unsupported))
+            messagebox.showerror(
+                "Языки недоступны для модели",
+                f"Выбранная модель не перечисляет поддержку: {labels}. Измените модель или языки проекта.",
+                parent=self.root,
+            )
+            return
         warning_lines = []
         for document in documents:
             warning_lines.extend(f"• {document.name}: {warning}" for warning in document.warnings)
-        summary = f"В очередь добавится {len(documents)} документ(ов). ETA не рассчитывается."
+        task_count = len(documents) * len(targets)
+        target_names = ", ".join(language_label(code) for code in targets)
+        source_name = "автоматическое определение" if source == AUTO_LANGUAGE else language_label(source)
+        summary = (
+            f"Будет создано задач: {task_count} · документов: {len(documents)} · "
+            f"языков перевода: {len(targets)}.\n"
+            f"Источник: {source_name}. Целевые языки: {target_names}.\n"
+            "ETA не рассчитывается."
+        )
         if warning_lines:
             summary += "\n\nОграничения формата:\n" + "\n".join(warning_lines[:8])
         summary += "\n\nЗапустить локальный перевод сейчас?"
@@ -691,19 +1266,24 @@ class DotLingoApp:
         task_queue = self._queue_for(store)
         try:
             for document in documents:
-                task_id = store.create_task(document.id, model_id, build_chunks(store.blocks(document.id)))
-                task_queue.enqueue(task_id)
+                chunks = build_chunks(store.blocks(document.id))
+                for target in targets:
+                    task_id = store.create_task(
+                        document.id,
+                        model_id,
+                        chunks,
+                        source_lang=source,
+                        target_lang=target,
+                    )
+                    task_queue.enqueue(task_id)
         except Exception as exc:
             messagebox.showerror("Не удалось поставить задачу", str(exc), parent=self.root)
         self.show_page("queue")
 
     def _selected_document_ids(self) -> set[str]:
-        # The selected ids are copied from the currently displayed document tree.
-        tree = next((item for item in self.content.winfo_children() if isinstance(item, ttk.Frame)), None)
-        if tree:
-            for widget in tree.winfo_children():
-                if isinstance(widget, ttk.Treeview) and "format" in widget["columns"]:
-                    return set(widget.selection())
+        tree = self._documents_tree
+        if tree is not None and tree.winfo_exists():
+            return set(tree.selection())
         return {self._selected_doc} if self._selected_doc else set()
 
     def _show_queue(self) -> None:
@@ -714,15 +1294,19 @@ class DotLingoApp:
         panel.columnconfigure(0, weight=1)
         panel.rowconfigure(1, weight=1)
         ttk.Label(panel, text="Прогресс показывает готовые фрагменты. Время до завершения не оценивается.", style="Panel.TLabel", wraplength=720).grid(row=0, column=0, sticky="w", pady=(0, 10))
-        columns = ("document", "status", "progress", "model", "error")
+        columns = ("document", "direction", "status", "progress", "model", "error")
         tree = ttk.Treeview(panel, columns=columns, show="headings", selectmode="browse")
-        for key, label in zip(columns, ("Документ", "Статус", "Фрагменты", "Модель", "Сообщение")):
+        for key, label in zip(
+            columns,
+            ("Документ", "Направление", "Статус", "Фрагменты", "Модель", "Сообщение"),
+        ):
             tree.heading(key, text=label)
-        tree.column("document", width=185)
-        tree.column("status", width=110, stretch=False)
-        tree.column("progress", width=95, stretch=False)
-        tree.column("model", width=145)
-        tree.column("error", width=310)
+        tree.column("document", width=200, minwidth=120, stretch=True)
+        tree.column("direction", width=140, minwidth=100, stretch=True)
+        tree.column("status", width=100, minwidth=80, stretch=False)
+        tree.column("progress", width=95, minwidth=75, stretch=False)
+        tree.column("model", width=170, minwidth=125, stretch=True)
+        tree.column("error", width=240, minwidth=100, stretch=True)
         tree.grid(row=1, column=0, sticky="nsew")
         for project in self.projects:
             for task in project.tasks():
@@ -741,7 +1325,12 @@ class DotLingoApp:
         detail.columnconfigure(1, weight=1)
         status_label = ttk.Label(detail, text="Задача не выбрана", style="Panel.TLabel", font=(TOKENS["font"], 10, "bold"))
         status_label.grid(row=0, column=0, sticky="w", padx=(0, 16))
-        progress_label = ttk.Label(detail, text="Выберите перевод, чтобы посмотреть подробности.", style="Panel.Muted.TLabel")
+        progress_label = ttk.Label(
+            detail,
+            text="Выберите перевод, чтобы посмотреть подробности.",
+            style="Panel.Muted.TLabel",
+            wraplength=760,
+        )
         progress_label.grid(row=0, column=1, sticky="w")
         progress_bar = ttk.Progressbar(detail, mode="determinate", maximum=100, value=0)
         progress_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(9, 0))
@@ -767,14 +1356,21 @@ class DotLingoApp:
         }
         self._update_queue_detail()
 
-    def _queue_values(self, project: ProjectStore, task: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    def _queue_values(
+        self, project: ProjectStore, task: dict[str, Any]
+    ) -> tuple[str, str, str, str, str, str]:
         document = next((item for item in project.documents() if item.id == task["document_id"]), None)
+        detected = project.detected_language(task["document_id"])
+        source_label = task["source_lang"]
+        if source_label == AUTO_LANGUAGE:
+            source_label = f"{detected.upper()} · авто" if detected else "Авто"
         model_title = next(
             (item["name"] for item in catalog() if item["id"] == task["model_id"]),
             task["model_id"],
         )
         return (
             document.name if document else "Документ",
+            f"{source_label} → {task['target_lang'].upper()}",
             self._status_label(task["status"]),
             f"{task['completed']}/{task['total']}",
             model_title,
@@ -839,7 +1435,17 @@ class DotLingoApp:
         completed = int(task["completed"])
         total = int(task["total"])
         amount = min(100, completed * 100 / total) if total else 0
-        detail = f"{document.name if document else 'Документ'} · {completed} из {total} фрагментов · {model}"
+        detected = project.detected_language(task["document_id"])
+        source_label = task["source_lang"]
+        if source_label == AUTO_LANGUAGE:
+            source_label = f"{detected.upper()} · авто" if detected else "Авто"
+        else:
+            source_label = source_label.upper()
+        direction = f"{source_label} → {task['target_lang'].upper()}"
+        detail = (
+            f"{document.name if document else 'Документ'} · {direction} · "
+            f"{completed} из {total} фрагментов · {model}"
+        )
         if task["error"]:
             detail += f" · {task['error']}"
         controls["status"].configure(text=self._status_label(status), foreground=colors.get(status, TOKENS["text"]))
@@ -894,26 +1500,73 @@ class DotLingoApp:
             docs = store.documents()
             document = docs[0] if docs else None
         if not document:
-            ttk.Label(self.content, text="Добавьте документ, чтобы начать проверку.").grid(row=0, column=0, sticky="nw")
+            empty = self._panel(self.content, padding=24)
+            empty.grid(row=0, column=0, sticky="nsew")
+            empty.columnconfigure(0, weight=1)
+            empty.rowconfigure(0, weight=1)
+            message = ttk.Frame(empty, style="Panel.TFrame")
+            message.grid(row=0, column=0)
+            ttk.Label(message, text="В проекте пока нет документов", style="Panel.Section.TLabel").pack()
+            ttk.Label(
+                message,
+                text="Добавьте файл, чтобы перейти к переводу и проверке.",
+                style="Panel.Muted.TLabel",
+            ).pack(pady=(6, 14))
+            ttk.Button(
+                message,
+                text="Добавить файлы",
+                style="Accent.TButton",
+                command=self._import_files,
+            ).pack()
             return
         self._selected_doc = document.id
         parsed = store.parsed(document.id)
         blocks = [block for block in parsed.blocks if block.translatable]
-        translated = store.translations(document.id)
+        target_languages = store.target_languages()
+        if self._review_target_lang not in target_languages:
+            self._review_target_lang = target_languages[0]
+        translated = store.translations(document.id, target_lang=self._review_target_lang)
         complete = sum(1 for block in blocks if block.order in translated)
         self.content.columnconfigure(0, weight=1)
+        self.content.rowconfigure(0, weight=0)
         self.content.rowconfigure(1, weight=1)
         toolbar = ttk.Frame(self.content)
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        toolbar.columnconfigure(1, weight=1)
-        ttk.Label(toolbar, text=document.name, style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        toolbar.columnconfigure(0, weight=1)
+        ttk.Label(
+            toolbar,
+            text=document.name,
+            style="Section.TLabel",
+            wraplength=560,
+        ).grid(row=0, column=0, sticky="w")
+        target_language_var = tk.StringVar(value=language_display(self._review_target_lang))
+        target_language_combo = ttk.Combobox(
+            toolbar,
+            textvariable=target_language_var,
+            state="readonly",
+            values=tuple(language_display(code) for code in target_languages),
+            width=22,
+        )
+        target_language_combo.grid(row=0, column=1, sticky="e", padx=(12, 0))
         self._review_progress_label = ttk.Label(toolbar, text=f"Переведено блоков: {complete}/{len(blocks)}", style="Muted.TLabel")
-        self._review_progress_label.grid(row=0, column=1, sticky="e", padx=10)
-        self._review_save_status = ttk.Label(toolbar, text="Сохранено", style="Muted.TLabel")
-        self._review_save_status.grid(row=0, column=2, padx=(8, 5))
-        self._review_save_button = ttk.Button(toolbar, text="Сохранить", command=self._save_review_edit, state="disabled")
-        self._review_save_button.grid(row=0, column=3, padx=4)
-        ttk.Button(toolbar, text="Экспорт…", style="Accent.TButton", command=self._export_current).grid(row=0, column=4)
+        self._review_progress_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        toolbar_actions = ttk.Frame(toolbar)
+        toolbar_actions.grid(row=1, column=1, sticky="e", pady=(4, 0))
+        self._review_save_status = ttk.Label(toolbar_actions, text="Сохранено", style="Muted.TLabel")
+        self._review_save_status.pack(side="left", padx=(0, 8))
+        self._review_save_button = ttk.Button(
+            toolbar_actions,
+            text="Сохранить",
+            command=self._save_review_edit,
+            state="disabled",
+        )
+        self._review_save_button.pack(side="left", padx=(0, 7))
+        ttk.Button(
+            toolbar_actions,
+            text="Экспорт…",
+            style="Accent.TButton",
+            command=self._export_current,
+        ).pack(side="left")
 
         body = ttk.Panedwindow(self.content, orient="horizontal")
         body.grid(row=1, column=0, sticky="nsew")
@@ -960,7 +1613,7 @@ class DotLingoApp:
         def fill_tree(query: str = "") -> None:
             nonlocal translated
             lowered = query.casefold().strip()
-            translated = store.translations(document.id)
+            translated = store.translations(document.id, target_lang=self._review_target_lang)
 
             def matching_blocks() -> list[Any]:
                 if not lowered:
@@ -984,7 +1637,9 @@ class DotLingoApp:
                         return
                     if decision:
                         self._save_review_edit()
-                        translated = store.translations(document.id)
+                        translated = store.translations(
+                            document.id, target_lang=self._review_target_lang
+                        )
                         matches = matching_blocks()
                         visible_orders = {block.order for block in matches}
                     else:
@@ -1049,7 +1704,9 @@ class DotLingoApp:
             source_text.insert("1.0", block.text)
             source_text.configure(state="disabled")
             target_text.delete("1.0", "end")
-            current = store.translations(document.id).get(order, "")
+            current = store.translations(
+                document.id, target_lang=self._review_target_lang
+            ).get(order, "")
             target_text.insert("1.0", current)
             self._review_text_original = current
             target_text.edit_modified(False)
@@ -1057,6 +1714,38 @@ class DotLingoApp:
             self._update_review_edit_feedback()
 
         tree.bind("<<TreeviewSelect>>", lambda _: select_block(tree.selection()[0]) if tree.selection() else None)
+
+        def change_target_language(_event: tk.Event[Any] | None = None) -> None:
+            selected = next(
+                (
+                    code
+                    for code in target_languages
+                    if language_display(code) == target_language_var.get()
+                ),
+                self._review_target_lang,
+            )
+            if selected == self._review_target_lang:
+                return
+            if not self._confirm_review_change():
+                target_language_var.set(language_display(self._review_target_lang))
+                return
+            current_order = self._review_block
+            self._review_target_lang = selected
+            translated = store.translations(document.id, target_lang=selected)
+            complete = sum(1 for block in blocks if block.order in translated)
+            self._review_progress_label.configure(
+                text=f"Переведено блоков: {complete}/{len(blocks)}"
+            )
+            self._review_block = None
+            fill_tree(search.get())
+            current_iid = f"b{current_order}" if current_order is not None else ""
+            if current_iid and tree.exists(current_iid):
+                tree.selection_set(current_iid)
+                tree.focus(current_iid)
+                select_block(current_iid)
+
+        target_language_combo.bind("<<ComboboxSelected>>", change_target_language)
+
         def schedule_search(_event: tk.Event[Any] | None = None) -> None:
             job = search_state["job"]
             if job is not None:
@@ -1082,7 +1771,10 @@ class DotLingoApp:
         fill_tree()
 
     def _on_root_configure(self, event: tk.Event[Any]) -> None:
-        if event.widget is not self.root or self.page != "review":
+        if event.widget is not self.root:
+            return
+        self.header_project.configure(wraplength=max(360, event.width - 56))
+        if self.page != "review":
             return
         job = getattr(self, "_review_resize_job", None)
         if job is not None:
@@ -1101,11 +1793,16 @@ class DotLingoApp:
         orient = "vertical" if self.root.winfo_width() < 980 else "horizontal"
         if body.cget("orient") != orient:
             body.configure(orient=orient)
+
             def position_sash() -> None:
                 if not body.winfo_exists():
                     return
                 try:
-                    body.sashpos(0, 165 if orient == "vertical" else max(190, int(body.winfo_width() * 0.22)))
+                    if orient == "vertical":
+                        position = max(120, min(180, int(body.winfo_height() * 0.3)))
+                    else:
+                        position = max(190, int(body.winfo_width() * 0.22))
+                    body.sashpos(0, position)
                 except tk.TclError:
                     pass
 
@@ -1136,10 +1833,17 @@ class DotLingoApp:
             self._review_target.edit_modified(False)
             self._update_review_edit_feedback()
             return
-        store.save_edit(self._selected_doc, self._review_block, text)
+        store.save_edit(
+            self._selected_doc,
+            self._review_block,
+            text,
+            target_lang=self._review_target_lang,
+        )
         self._review_text_original = text
         self._review_target.edit_modified(False)
-        translations = store.translations(self._selected_doc)
+        translations = store.translations(
+            self._selected_doc, target_lang=self._review_target_lang
+        )
         if self.page == "review" and self._review_refilter is not None:
             try:
                 self.root.after_idle(self._review_refilter)
@@ -1177,6 +1881,12 @@ class DotLingoApp:
             messagebox.showerror("Оригинал изменён", str(exc), parent=self.root)
             return
         parsed = store.parsed(document.id)
+        target_languages = store.target_languages()
+        target_lang = (
+            self._review_target_lang
+            if self._review_target_lang in target_languages
+            else target_languages[0]
+        )
         allowed = {
             "txt": (".txt", ".md"), "markdown": (".md", ".txt"), "docx": (".docx", ".txt", ".md"),
             "epub": (".epub", ".txt", ".md"), "pdf": (".txt", ".md"),
@@ -1186,13 +1896,13 @@ class DotLingoApp:
             parent=self.root,
             title="Экспорт перевода",
             initialdir=str(store.root / "output"),
-            initialfile=f"{document.source_path.stem}.translated{extension}",
+            initialfile=f"{document.source_path.stem}.translated-{target_lang}{extension}",
             defaultextension=extension,
             filetypes=[("Поддерживаемый экспорт", " ".join(f"*{suffix}" for suffix in allowed))],
         )
         if not destination:
             return
-        translations = store.translations(document.id)
+        translations = store.translations(document.id, target_lang=target_lang)
         missing = sum(1 for block in parsed.blocks if block.translatable and block.text.strip() and block.order not in translations)
         if missing and not messagebox.askyesno("Перевод не завершён", f"Для {missing} блоков пока нет перевода. Экспортёр оставит их на исходном языке. Продолжить?", parent=self.root):
             return
@@ -1201,18 +1911,24 @@ class DotLingoApp:
             return
         try:
             export_document(document.source_path, Path(destination), parsed, translations)
-            store.record_export(document.id, Path(destination))
+            store.record_export(document.id, Path(destination), target_lang=target_lang)
             messagebox.showinfo("Экспорт готов", f"Файл сохранён отдельно:\n{destination}", parent=self.root)
         except Exception as exc:
             messagebox.showerror("Ошибка экспорта", str(exc), parent=self.root)
 
     def _show_models(self) -> None:
         self.content.columnconfigure(0, weight=1)
+        self.content.rowconfigure(0, weight=0)
         self.content.rowconfigure(1, weight=1)
         top = ttk.Frame(self.content)
         top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         top.columnconfigure(0, weight=1)
-        ttk.Label(top, text="Вес модели и runtime устанавливаются отдельно. Выберите модель явно; автозагрузка отключена.", style="Muted.TLabel", wraplength=700).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            top,
+            text="Вес модели и runtime устанавливаются отдельно. Выберите модель явно; автозагрузка отключена.",
+            style="Muted.TLabel",
+            wraplength=520,
+        ).grid(row=0, column=0, sticky="w")
         ttk.Button(top, text="Обновить данные устройства", command=self._detect_hardware).grid(row=0, column=1, sticky="e")
         container = ttk.Frame(self.content)
         container.grid(row=1, column=0, sticky="nsew")
@@ -1251,7 +1967,18 @@ class DotLingoApp:
             run_state = "Вес установлен; SHA-256 проверяется перед запуском задачи" if installed_now else "Вес не установлен"
             if not model.get("tested_on_windows"):
                 run_state += " · точный Windows запуск ещё не проверен"
-            ttk.Label(card, text=f"{requirement}\n{compatibility}\nСостояние: {run_state}\nПары языков: {model['languages']}", style="Panel.Muted.TLabel", wraplength=790, justify="left").grid(row=2, column=0, sticky="w", pady=6)
+            language_count = len(supported_languages(model))
+            language_line = (
+                f"Заявленная поддержка: {model['languages']}\n"
+                f"В выборе проекта: {language_count} языковых кода; отдельные пары не оценивались."
+            )
+            ttk.Label(
+                card,
+                text=f"{requirement}\n{compatibility}\nСостояние: {run_state}\n{language_line}",
+                style="Panel.Muted.TLabel",
+                wraplength=790,
+                justify="left",
+            ).grid(row=2, column=0, sticky="w", pady=6)
             ttk.Label(card, text=model.get("notes", ""), style="Panel.Muted.TLabel", wraplength=790, justify="left").grid(row=3, column=0, sticky="w", pady=(0, 5))
             action = ttk.Frame(card, style="Panel.TFrame")
             action.grid(row=4, column=0, sticky="ew")
@@ -1371,23 +2098,62 @@ class DotLingoApp:
             self._need_project()
             return
         self.content.columnconfigure(0, weight=1)
+        self.content.rowconfigure(0, weight=0)
         self.content.rowconfigure(1, weight=1)
-        info = ttk.Label(self.content, text=f"Глоссарий проекта · {store.project['source_lang']} → {store.project['target_lang']}", style="Muted.TLabel")
-        info.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        targets = store.target_languages()
+        if self._glossary_target_lang not in targets:
+            self._glossary_target_lang = targets[0]
+        toolbar = ttk.Frame(self.content)
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        toolbar.columnconfigure(0, weight=1)
+        info = ttk.Label(
+            toolbar,
+            text=f"Глоссарий проекта · {language_label(store.project['source_lang'])} →",
+            style="Muted.TLabel",
+        )
+        info.grid(row=0, column=0, sticky="w")
+        target_var = tk.StringVar(value=language_display(self._glossary_target_lang))
+        target_combo = ttk.Combobox(
+            toolbar,
+            textvariable=target_var,
+            state="readonly",
+            values=tuple(language_display(code) for code in targets),
+            width=22,
+        )
+        target_combo.grid(row=0, column=1, sticky="e")
         tree = ttk.Treeview(self.content, columns=("target",), show="headings", selectmode="browse")
         tree.heading("#0", text="Исходный термин")
         tree.heading("target", text="Целевой термин")
         tree.column("#0", width=320)
         tree.column("target", width=320)
         tree.grid(row=1, column=0, sticky="nsew")
-        for term in store.glossary():
+        for term in store.glossary(self._glossary_target_lang):
             tree.insert("", "end", text=term["source"], values=(term["target"],))
+
+        def change_glossary_language(_event: tk.Event[Any] | None = None) -> None:
+            chosen = next(
+                (code for code in targets if language_display(code) == target_var.get()),
+                self._glossary_target_lang,
+            )
+            if chosen == self._glossary_target_lang:
+                return
+            self._glossary_target_lang = chosen
+            tree.delete(*tree.get_children())
+            for term in store.glossary(chosen):
+                tree.insert("", "end", text=term["source"], values=(term["target"],))
+
+        target_combo.bind("<<ComboboxSelected>>", change_glossary_language)
         bottom = ttk.Frame(self.content)
         bottom.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(bottom, text="Добавить термин", style="Accent.TButton", command=self._add_glossary_term).pack(side="left")
+        ttk.Button(
+            bottom,
+            text="Добавить термин",
+            style="Accent.TButton",
+            command=lambda: self._add_glossary_term(self._glossary_target_lang),
+        ).pack(side="left")
         ttk.Label(bottom, text="Совпадения без учёта регистра временно защищаются внутри каждого фрагмента.", style="Muted.TLabel", wraplength=600).pack(side="left", padx=12)
 
-    def _add_glossary_term(self) -> None:
+    def _add_glossary_term(self, target_lang: str | None = None) -> None:
         store = self._active_store()
         if not store:
             return
@@ -1398,7 +2164,7 @@ class DotLingoApp:
         if target is None:
             return
         try:
-            store.add_glossary_term(source, target)
+            store.add_glossary_term(source, target, target_lang=target_lang)
             self.show_page("glossary")
         except ValueError as exc:
             messagebox.showerror("Пустой термин", str(exc), parent=self.root)
@@ -1409,42 +2175,220 @@ class DotLingoApp:
         panel = self._panel(self.content)
         panel.grid(row=0, column=0, sticky="nsew")
         panel.columnconfigure(0, weight=1)
+        panel.columnconfigure(1, weight=1)
+        panel.rowconfigure(6, weight=1)
         preferences = load_preferences(self.preferences_root)
         reduce_var = tk.BooleanVar(value=bool(preferences["reduce_motion"]))
-        ttk.Label(panel, text="Параметры проекта и устройства", style="Panel.TLabel", font=(TOKENS["font"], 12, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 12))
+        ttk.Label(
+            panel,
+            text="Параметры проекта и устройства",
+            style="Panel.TLabel",
+            font=(TOKENS["font"], 12, "bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
         if store:
-            model_var = tk.StringVar(value=store.project.get("model_id") or "qwen3-1.7b-q8")
-            ttk.Label(panel, text="Модель проекта", style="Panel.TLabel").grid(row=1, column=0, sticky="w")
-            model_combo = ttk.Combobox(panel, textvariable=model_var, state="readonly", values=[item["id"] for item in catalog()])
-            model_combo.grid(row=2, column=0, sticky="ew", pady=(5, 10))
-            ttk.Label(panel, text="Контекст проекта", style="Panel.TLabel").grid(row=3, column=0, sticky="w")
-            context = self._text_widget(panel, height=3)
-            context.grid(row=4, column=0, sticky="ew", pady=(5, 10))
+            models = [item for item in catalog() if item.get("status") == "available"]
+            model_by_name = {item["name"]: item for item in models}
+            current_model = store.project.get("model_id") or "qwen3-1.7b-q8"
+            initial_model = next(
+                (item["name"] for item in models if item["id"] == current_model),
+                models[0]["name"],
+            )
+            model_var = tk.StringVar(value=initial_model)
+            ttk.Label(panel, text="Локальная модель", style="Panel.Eyebrow.TLabel").grid(
+                row=1, column=0, sticky="w"
+            )
+            model_combo = ttk.Combobox(
+                panel,
+                textvariable=model_var,
+                state="readonly",
+                values=tuple(model_by_name),
+            )
+            model_combo.grid(row=2, column=0, sticky="ew", padx=(0, 18), pady=(5, 10))
+
+            source_var = tk.StringVar()
+            ttk.Label(panel, text="Исходный язык", style="Panel.Eyebrow.TLabel").grid(
+                row=3, column=0, sticky="w"
+            )
+            source_combo = ttk.Combobox(panel, textvariable=source_var, state="readonly")
+            source_combo.grid(row=4, column=0, sticky="ew", padx=(0, 18), pady=(5, 10))
+
+            ttk.Label(
+                panel,
+                text="Целевые языки (Ctrl + Shift: выбор нескольких)",
+                style="Panel.Eyebrow.TLabel",
+            ).grid(
+                row=5, column=0, sticky="w"
+            )
+            targets_frame = ttk.Frame(panel, style="Panel.TFrame")
+            targets_frame.grid(row=6, column=0, rowspan=3, sticky="nsew", padx=(0, 18), pady=(5, 10))
+            targets_frame.columnconfigure(0, weight=1)
+            targets_frame.rowconfigure(0, weight=1)
+            target_list = tk.Listbox(
+                targets_frame,
+                selectmode="extended",
+                exportselection=False,
+                height=6,
+                bg=TOKENS["surface_raised"],
+                fg=TOKENS["text"],
+                selectbackground=TOKENS["accent_dim"],
+                selectforeground=TOKENS["text"],
+                highlightthickness=1,
+                highlightbackground=TOKENS["border"],
+                highlightcolor=TOKENS["border_focus"],
+                relief="flat",
+                activestyle="none",
+                font=(TOKENS["font"], TOKENS["font_body"]),
+            )
+            target_list.grid(row=0, column=0, sticky="nsew")
+            target_scroll = ttk.Scrollbar(targets_frame, orient="vertical", command=target_list.yview)
+            target_scroll.grid(row=0, column=1, sticky="ns")
+            target_list.configure(yscrollcommand=target_scroll.set)
+            language_codes: list[str] = []
+
+            def refresh_language_choices(_event: tk.Event[Any] | None = None) -> None:
+                previous_targets = {
+                    language_codes[index] for index in target_list.curselection()
+                    if index < len(language_codes)
+                }
+                current_source = source_var.get()
+                selected_model = model_by_name.get(model_var.get())
+                codes = list(supported_languages(selected_model or {}))
+                language_codes[:] = codes
+                source_choices = [AUTO_LANGUAGE_LABEL, *(language_display(code) for code in codes)]
+                source_combo.configure(values=source_choices)
+                source_by_code = store.project["source_lang"]
+                desired_source = (
+                    AUTO_LANGUAGE_LABEL
+                    if source_by_code == AUTO_LANGUAGE
+                    else language_display(source_by_code)
+                )
+                if current_source in source_choices:
+                    desired_source = current_source
+                if desired_source not in source_choices:
+                    desired_source = AUTO_LANGUAGE_LABEL
+                source_var.set(desired_source)
+                source_code = (
+                    AUTO_LANGUAGE
+                    if desired_source == AUTO_LANGUAGE_LABEL
+                    else next(
+                        (code for code in codes if language_display(code) == desired_source),
+                        AUTO_LANGUAGE,
+                    )
+                )
+                target_list.delete(0, "end")
+                for index, code in enumerate(codes):
+                    target_list.insert("end", language_display(code))
+                    if code != source_code and (code in previous_targets or (
+                        not previous_targets and code in store.target_languages()
+                    )):
+                        target_list.selection_set(index)
+                if not target_list.curselection() and codes:
+                    target_list.selection_set(next(
+                        (index for index, code in enumerate(codes) if code != source_code),
+                        0,
+                    ))
+
+            model_combo.bind("<<ComboboxSelected>>", refresh_language_choices)
+            source_combo.bind("<<ComboboxSelected>>", refresh_language_choices)
+            refresh_language_choices()
+
+            ttk.Label(panel, text="Контекст проекта", style="Panel.Eyebrow.TLabel").grid(
+                row=1, column=1, sticky="w"
+            )
+            context = self._text_widget(panel, height=5)
+            context.grid(row=2, column=1, sticky="nsew", pady=(5, 10))
             context.insert("1.0", store.project.get("context", ""))
-            ttk.Label(panel, text="Правила перевода", style="Panel.TLabel").grid(row=5, column=0, sticky="w")
-            rules = self._text_widget(panel, height=4)
-            rules.grid(row=6, column=0, sticky="ew", pady=(5, 10))
+            ttk.Label(panel, text="Правила перевода", style="Panel.Eyebrow.TLabel").grid(
+                row=3, column=1, sticky="w"
+            )
+            rules = self._text_widget(panel, height=6)
+            rules.grid(row=4, column=1, rowspan=5, sticky="nsew", pady=(5, 10))
             rules.insert("1.0", store.project.get("rules", ""))
-            initial = (model_var.get(), context.get("1.0", "end-1c"), rules.get("1.0", "end-1c"))
-            self._settings_form = (store, model_var, context, rules, initial)
+            initial = self._settings_form_values_from_widgets(
+                model_var, source_var, target_list, language_codes, context, rules, model_by_name
+            )
+            self._settings_form = (
+                store,
+                model_var,
+                source_var,
+                target_list,
+                language_codes,
+                context,
+                rules,
+                model_by_name,
+                initial,
+            )
 
             def save_project_settings() -> None:
                 self._persist_settings_form()
 
-            ttk.Button(panel, text="Сохранить настройки проекта", style="Accent.TButton", command=save_project_settings).grid(row=7, column=0, sticky="e")
+            ttk.Button(
+                panel,
+                text="Сохранить настройки проекта",
+                style="Accent.TButton",
+                command=save_project_settings,
+            ).grid(row=9, column=0, columnspan=2, sticky="e", pady=(0, 8))
         hardware_label = self._hardware_text()
-        self._settings_hardware = ttk.Label(panel, text=hardware_label, style="Panel.Muted.TLabel", justify="left", wraplength=720)
-        self._settings_hardware.grid(row=8, column=0, sticky="w", pady=(18, 7))
-        ttk.Button(panel, text="Проверить устройство", command=self._detect_hardware).grid(row=9, column=0, sticky="w")
-        ttk.Checkbutton(panel, text="Уменьшить движение и переходы интерфейса", variable=reduce_var, command=lambda: self._save_motion(reduce_var.get())).grid(row=10, column=0, sticky="w", pady=(16, 0))
-        ttk.Label(panel, text=f"Данные проекта: {self.projects_dir}\nВеса моделей: {self.models_dir}", style="Panel.Muted.TLabel", wraplength=700).grid(row=11, column=0, sticky="w", pady=(18, 0))
+        self._settings_hardware = ttk.Label(
+            panel, text=hardware_label, style="Panel.Muted.TLabel", justify="left", wraplength=720
+        )
+        self._settings_hardware.grid(row=10, column=0, columnspan=2, sticky="w", pady=(10, 7))
+        ttk.Button(panel, text="Проверить устройство", command=self._detect_hardware).grid(
+            row=11, column=0, sticky="w"
+        )
+        ttk.Checkbutton(
+            panel,
+            text="Уменьшить движение и переходы интерфейса",
+            variable=reduce_var,
+            command=lambda: self._save_motion(reduce_var.get()),
+        ).grid(row=11, column=1, sticky="e", pady=(0, 0))
+        ttk.Label(
+            panel,
+            text=f"Данные проекта: {self.projects_dir}\nВеса моделей: {self.models_dir}",
+            style="Panel.Muted.TLabel",
+            wraplength=700,
+        ).grid(row=12, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
-    def _settings_form_values(self) -> tuple[str, str, str] | None:
+    @staticmethod
+    def _settings_form_values_from_widgets(
+        model_var: tk.StringVar,
+        source_var: tk.StringVar,
+        target_list: tk.Listbox,
+        language_codes: list[str],
+        context: tk.Text,
+        rules: tk.Text,
+        model_by_name: dict[str, dict[str, Any]],
+    ) -> tuple[str, str, tuple[str, ...], str, str]:
+        model = model_by_name.get(model_var.get())
+        source = (
+            AUTO_LANGUAGE
+            if source_var.get() == AUTO_LANGUAGE_LABEL
+            else next(
+                (code for code in language_codes if language_display(code) == source_var.get()),
+                AUTO_LANGUAGE,
+            )
+        )
+        targets = tuple(
+            language_codes[index]
+            for index in target_list.curselection()
+            if index < len(language_codes)
+        )
+        return (
+            model["id"] if model else "",
+            source,
+            targets,
+            context.get("1.0", "end-1c"),
+            rules.get("1.0", "end-1c"),
+        )
+
+    def _settings_form_values(self) -> tuple[str, str, tuple[str, ...], str, str] | None:
         form = self._settings_form
         if form is None:
             return None
-        _, model_var, context, rules, _ = form
-        return model_var.get(), context.get("1.0", "end-1c"), rules.get("1.0", "end-1c")
+        _, model_var, source_var, target_list, language_codes, context, rules, model_by_name, _ = form
+        return self._settings_form_values_from_widgets(
+            model_var, source_var, target_list, language_codes, context, rules, model_by_name
+        )
 
     def _persist_settings_form(self) -> bool:
         form = self._settings_form
@@ -1452,19 +2396,31 @@ class DotLingoApp:
         if form is None or values is None:
             return True
         store = form[0]
+        if not values[2]:
+            self.sidebar_status.configure(text="Выберите хотя бы один целевой язык")
+            return False
+        if values[1] != AUTO_LANGUAGE and values[1] in values[2]:
+            self.sidebar_status.configure(text="Исходный язык не может совпадать с целевым")
+            return False
         try:
-            store.update_settings(model_id=values[0], context=values[1], rules=values[2])
+            store.update_settings(
+                model_id=values[0],
+                source_lang=values[1],
+                target_langs=list(values[2]),
+                context=values[3],
+                rules=values[4],
+            )
         except Exception as exc:
             self.sidebar_status.configure(text=f"Не удалось сохранить настройки: {exc}")
             return False
-        self._settings_form = (store, form[1], form[2], form[3], values)
+        self._settings_form = (*form[:-1], values)
         self.sidebar_status.configure(text="Настройки проекта сохранены")
         return True
 
     def _confirm_settings_change(self) -> bool:
         form = self._settings_form
         values = self._settings_form_values()
-        if form is None or values is None or values == form[4]:
+        if form is None or values is None or values == form[-1]:
             return True
         decision = messagebox.askyesnocancel(
             "Несохранённые настройки",
@@ -1722,8 +2678,31 @@ class DotLingoApp:
         render(0)
 
     def _need_project(self) -> None:
-        ttk.Label(self.content, text="Сначала создайте или выберите проект.", style="Section.TLabel").grid(row=0, column=0, sticky="nw", pady=14)
-        ttk.Button(self.content, text="Перейти к проектам", command=lambda: self.show_page("projects")).grid(row=1, column=0, sticky="nw")
+        empty = self._panel(self.content, padding=24)
+        empty.grid(row=0, column=0, sticky="nsew")
+        empty.columnconfigure(0, weight=1)
+        empty.rowconfigure(0, weight=1)
+        message = ttk.Frame(empty, style="Panel.TFrame")
+        message.grid(row=0, column=0)
+        ttk.Label(message, text="Сначала выберите проект", style="Panel.Section.TLabel").pack()
+        ttk.Label(
+            message,
+            text="Создайте новый или откройте сохранённый проект.",
+            style="Panel.Muted.TLabel",
+        ).pack(pady=(6, 14))
+        actions = ttk.Frame(message, style="Panel.TFrame")
+        actions.pack()
+        ttk.Button(
+            actions,
+            text="Выбрать проект",
+            command=lambda: self.show_page("projects"),
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            actions,
+            text="Новый перевод",
+            style="Accent.TButton",
+            command=self._new_project,
+        ).pack(side="left")
 
     def _queue_for(self, project: ProjectStore) -> TaskQueue:
         key = str(project.root)
@@ -1896,7 +2875,7 @@ class DotLingoApp:
 
     def _finalize_close(self) -> None:
         self._closing = True
-        self._stop_page_animation()
+        self._stop_nav_animation()
         if self._close_wait_job is not None:
             try:
                 self.root.after_cancel(self._close_wait_job)

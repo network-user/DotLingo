@@ -38,7 +38,7 @@
       <path d="M19 29 H29 M26 26 L29 29 L26 32"/>
     </g>
   </svg>
-  <text x="138" y="408" font-family="Inter, Arial, sans-serif" font-size="132" font-weight="800" fill="#f3f3f1" letter-spacing="-3">.lingo</text>
+  <text x="138" y="408" font-family="Inter, Arial, sans-serif" font-size="132" font-weight="800" fill="#f3f3f1" letter-spacing="-3">.лингво</text>
   <text x="146" y="470" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700" fill="#f3f3f1">DotLingo</text>
   <text x="146" y="516" font-family="Inter, Arial, sans-serif" font-size="26" fill="#a6a7ab">Локальный перевод документов и книг</text>
 </svg>
