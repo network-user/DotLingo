@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,7 @@ from dotlingo.paths import user_data_root
 
 DEFAULTS: dict[str, Any] = {
     "setup_seen": False,
-    "reduce_motion": True,
+    "reduce_motion": False,
     "last_project": "",
 }
 
@@ -32,8 +33,19 @@ def load_preferences(root: Path | None = None) -> dict[str, Any]:
 def save_preferences(values: dict[str, Any], root: Path | None = None) -> None:
     path = _settings_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f"{path.name}.tmp")
-    temp_path.write_text(json.dumps({**DEFAULTS, **values}, ensure_ascii=False, indent=2), encoding="utf-8")
-    with temp_path.open("rb") as handle:
+    # Keep the temporary file beside the destination so os.replace stays atomic on Windows.
+    # fsync needs a writable descriptor on Windows, so flush and sync the open writer before
+    # closing it and atomically activating the new settings.
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        temp_path = Path(handle.name)
+        json.dump({**DEFAULTS, **values}, handle, ensure_ascii=False, indent=2)
+        handle.flush()
         os.fsync(handle.fileno())
     os.replace(temp_path, path)

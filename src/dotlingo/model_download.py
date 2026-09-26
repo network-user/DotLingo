@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +19,33 @@ from dotlingo.models import ModelIntegrityError, model_path, sha256_file, verify
 
 class DownloadCancelled(RuntimeError):
     pass
+
+
+class DownloadCancellation:
+    """Cancellation token that closes the race with atomic model activation."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cancelled = False
+        self._finalizing = False
+
+    def set(self) -> bool:
+        with self._lock:
+            if self._finalizing:
+                return False
+            self._cancelled = True
+            return True
+
+    def is_set(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def begin_activation(self) -> bool:
+        with self._lock:
+            if self._cancelled:
+                return False
+            self._finalizing = True
+            return True
 
 
 class ModelDownloadError(RuntimeError):
@@ -52,6 +80,8 @@ def download_model(
     """Download one consented, pinned file, verify it, then atomically activate it."""
     if model.get("status") != "available":
         raise ModelDownloadError("Эта модель пока не прошла проверку runtime.")
+    if cancel.is_set():
+        raise DownloadCancelled("Загрузка отменена.")
     if not re.fullmatch(r"[0-9a-f]{40}", model["revision"]):
         raise ModelDownloadError("Для модели не закреплена полная ревизия.")
     size = int(model["size_bytes"])
@@ -96,6 +126,10 @@ def download_model(
                     if model_file.read(4) != b"GGUF":
                         continue
                 try:
+                    if not _begin_activation(cancel):
+                        raise DownloadCancelled("Загрузка отменена до активации проверенного файла.")
+                    if on_progress:
+                        on_progress({"bytes": size, "total": size, "phase": "activating"})
                     os.rename(candidate, target)
                 except FileExistsError as exc:
                     raise ModelDownloadError("Модель уже активирована другим процессом.") from exc
@@ -166,14 +200,24 @@ def download_model(
     except (OSError, TimeoutError) as exc:
         raise ModelDownloadError("Не удалось загрузить модель. Проверьте сеть и свободное место.") from exc
 
+    if cancel.is_set():
+        raise DownloadCancelled("Загрузка отменена до проверки и активации файла.")
     if done != size:
         raise ModelDownloadError(f"Загрузка прервалась: получено {done} байт из {size}. Временный файл сохранён.")
+    if on_progress:
+        on_progress({"bytes": done, "total": size, "phase": "verifying"})
     digest = sha256_file(partial)
+    if cancel.is_set():
+        raise DownloadCancelled("Загрузка отменена во время проверки файла.")
     if digest.lower() != model["sha256"].lower():
         raise ModelIntegrityError("SHA-256 загрузки не совпал. Вес оставлен во временном файле и не активирован.")
     with partial.open("rb") as model_file:
         if model_file.read(4) != b"GGUF":
             raise ModelIntegrityError("Загруженный файл не прошёл проверку заголовка GGUF.")
+    if not _begin_activation(cancel):
+        raise DownloadCancelled("Загрузка отменена до активации проверенного файла.")
+    if on_progress:
+        on_progress({"bytes": size, "total": size, "phase": "activating"})
     try:
         os.rename(partial, target)
     except FileExistsError as exc:
@@ -182,6 +226,13 @@ def download_model(
     if on_progress:
         on_progress({"bytes": size, "total": size, "ratio": 1.0, "complete": True})
     return target
+
+
+def _begin_activation(cancel: Any) -> bool:
+    begin_activation = getattr(cancel, "begin_activation", None)
+    if begin_activation is not None:
+        return bool(begin_activation())
+    return not cancel.is_set()
 
 
 def _write_installed_marker(target: Path, model: dict[str, Any], digest: str) -> None:

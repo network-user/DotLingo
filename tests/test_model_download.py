@@ -8,17 +8,30 @@ from typing import Any
 import pytest
 
 import dotlingo.model_download as downloader
-from dotlingo.model_download import DownloadCancelled, ModelDownloadError, download_model
+from dotlingo.model_download import (
+    DownloadCancellation,
+    DownloadCancelled,
+    ModelDownloadError,
+    download_model,
+)
 from dotlingo.models import catalog, installed, verify_model
 
 
 class FakeResponse:
-    def __init__(self, body: bytes, status: int, headers: dict[str, str], cancel_after_read: threading.Event | None = None) -> None:
+    def __init__(
+        self,
+        body: bytes,
+        status: int,
+        headers: dict[str, str],
+        cancel_after_read: threading.Event | None = None,
+        cancel_after_eof: threading.Event | None = None,
+    ) -> None:
         self.body = body
         self.status = status
         self.headers = headers
         self.position = 0
         self.cancel_after_read = cancel_after_read
+        self.cancel_after_eof = cancel_after_eof
 
     def __enter__(self) -> FakeResponse:
         return self
@@ -38,6 +51,9 @@ class FakeResponse:
         if value and self.cancel_after_read:
             self.cancel_after_read.set()
             self.cancel_after_read = None
+        elif not value and self.cancel_after_eof:
+            self.cancel_after_eof.set()
+            self.cancel_after_eof = None
         return value
 
 
@@ -130,3 +146,33 @@ def test_download_stops_before_network_when_disk_space_is_insufficient(
     monkeypatch.setattr(downloader.urllib.request, "urlopen", unexpected_network)
     with pytest.raises(ModelDownloadError, match="свободного места"):
         download_model(model, tmp_path, cancel=threading.Event())
+
+
+def test_late_cancel_after_eof_prevents_model_activation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = b"GGUF-small-fixture"
+    model = _model(payload)
+    cancel = threading.Event()
+    monkeypatch.setattr(
+        downloader.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(
+            payload,
+            200,
+            {"Content-Length": str(len(payload))},
+            cancel_after_eof=cancel,
+        ),
+    )
+
+    with pytest.raises(DownloadCancelled, match="отменена"):
+        download_model(model, tmp_path, cancel=cancel)
+
+    assert (tmp_path / model["id"] / "tiny.gguf.part").read_bytes() == payload
+    assert not (tmp_path / model["id"] / "tiny.gguf").exists()
+
+
+def test_cancel_token_rejects_cancellation_after_activation_begins() -> None:
+    cancel = DownloadCancellation()
+
+    assert cancel.begin_activation()
+    assert not cancel.set()
+    assert not cancel.is_set()

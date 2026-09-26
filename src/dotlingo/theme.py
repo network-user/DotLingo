@@ -26,5 +26,5 @@ TOKENS = {
     "spacing_md": 14,
     "spacing_lg": 22,
     "radius": 10,
-    "reduced_motion": True,
+    "reduced_motion": False,
 }
