@@ -1,28 +1,91 @@
 # DotLingo
 
-Локальное настольное приложение для перевода документов и книг. Это ранний MVP исходного кода, не готовый установочный выпуск: Setup.exe ещё не собран, а связка inference-runtime + выбранная модель не прошла реальный тест на Windows.
+<p>
+  <img src="https://img.shields.io/badge/Runtime-Python_3.12%2B-3776AB?style=flat" alt="Python 3.12+" />
+  <img src="https://img.shields.io/badge/Platform-Windows_10%2F11_x64-555?style=flat" alt="Windows 10/11 x64" />
+  <img src="https://img.shields.io/badge/Category-Desktop_App-orange?style=flat" alt="Desktop application" />
+  <!-- loc:start --><img src="https://img.shields.io/badge/lines_of_code-3786-lightgrey?style=flat" alt="3786 lines of code" /><!-- loc:end -->
+</p>
 
-## Что уже есть
+<img src="docs/cover.svg" width="720" alt="DotLingo" />
 
-- Проекты с отдельной неизменяемой копией оригинала, SQLite-историей задач, переводами, глоссарием и записями экспорта.
-- Фоновая очередь с паузой, отменой, возобновлением, сохранением завершённых фрагментов и восстановлением `running → interrupted` после перезапуска.
-- Экран параллельной проверки оригинала и перевода, навигация по разделам, поиск, ручная правка и экспорт.
-- Адаптеры импорта TXT, Markdown, DOCX, EPUB и PDF с текстовым слоем. Экспорт проверен для TXT/Markdown/DOCX/EPUB; PDF экспортируется только в TXT/Markdown.
-- Закреплённый реестр GGUF-весов Qwen3 с размером, SHA-256 и ревизией; скачивание требует отдельного согласия, поддерживает повтор после обрыва, проверяет перенаправления, размер, формат и хеш.
-- OCR сканов не запускается. Модельные веса не входят в приложение и не скачиваются автоматически.
+DotLingo - настольное приложение для локального перевода документов и книг. Проекты, исходники и переводы хранятся отдельно; модельные веса пользователь загружает сам после явного согласия.
 
-Подробные ограничения и матрицы: [форматы](docs/FORMAT_MATRIX.md), [модели](docs/MODEL_MATRIX.md), [аудит DotAudio](docs/DOTAUDIO_AUDIT.md), [архитектура](docs/ARCHITECTURE.md), [ADR](docs/ADRS.md), [сборка Windows](docs/BUILD_WINDOWS.md).
+## Что внутри
 
-## Проверка исходников
+- **Проекты и очередь:** сохранённые настройки, история задач, пауза, отмена и восстановление прерванных задач.
+- **Редактор:** оригинал и перевод рядом, переход по разделам, поиск и ручная правка перевода.
+- **Импорт:** TXT, Markdown, DOCX, EPUB и PDF с текстовым слоем. Для PDF нужен дополнительный пакет `pypdf`; сканы и OCR пока не поддерживаются.
+- **Экспорт:** TXT, Markdown, DOCX и EPUB. PDF можно извлечь в TXT или Markdown; запись обратно в PDF не реализована.
+- **Модели:** в реестре пять записей. Qwen3 1.7B и 4B доступны для явной загрузки; остальные записи требуют проверки. Связка runtime и модели ещё не прошла реальное испытание на Windows.
+- **Сборка:** сценарий PyInstaller и Inno Setup находится в `deploy/windows/build.ps1`. `Setup.exe` пока не собран и чистая Windows-установка не проверена.
 
-Нужны Python 3.12, `pip install -e ".[dev,pdf]"` и работающая поставка Tcl/Tk. PDF читает optional dependency `pypdf` под лицензией BSD-3-Clause. Тесты: `python -m pytest -q`. Оконный запуск: `python -m dotlingo`.
+Подробности: [форматы](docs/FORMAT_MATRIX.md), [модели](docs/MODEL_MATRIX.md), [архитектура и ADR](docs/ARCHITECTURE.md), [аудит DotAudio](docs/DOTAUDIO_AUDIT.md), [сборка Windows](docs/BUILD_WINDOWS.md).
 
-Для локального inference установите сборку `llama-cpp-python` из optional extra и CPU wheel index, как описано в `docs/BUILD_WINDOWS.md`. После этого приложение само по себе всё ещё не содержит модели. На странице «Модели» пользователь выбирает вес и подтверждает загрузку и лицензию.
+## Запуск
 
-## Данные
+Нужен CPython 3.12 или 3.13 и рабочий Tcl/Tk. В PowerShell из корня репозитория:
 
-В Windows данные по умолчанию находятся в `%LOCALAPPDATA%\DotLingo`: проекты в `projects`, веса в `models`, настройки в `preferences.json`. Удаление приложения не включает эти каталоги в установочную папку. Для проверок доступен `--data-dir`.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev,pdf]"
+python -m dotlingo
+```
 
-## Статус проверки
+Расширенная инструкция по Windows, inference и данным: [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md). Для первого окна модель не нужна; для перевода отдельно установите CPU runtime и загрузите модель в приложении. Модельные веса не скачиваются автоматически.
 
-Статус проверок приведён в [передаче](docs/HANDOFF.md). Эта папка checkout не содержит `.git`; Setup.exe, настоящий запуск модели и чистая Windows установка не подтверждены.
+## Команды
+
+| Действие | Команда |
+|----------|---------|
+| Запустить приложение | `python -m dotlingo` |
+| Запустить тесты | `python -m pytest -q` |
+| Проверить стиль | `python -m ruff check src tests` |
+| Собрать Windows Setup.exe | `.\deploy\windows\build.ps1` |
+
+## Стек
+
+<p>
+  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/Tkinter-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Tkinter" />
+  <img src="https://img.shields.io/badge/psutil-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="psutil" />
+  <img src="https://img.shields.io/badge/python--docx-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python-docx" />
+  <img src="https://img.shields.io/badge/pypdf-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="pypdf" />
+  <img src="https://img.shields.io/badge/llama.cpp-222222?style=for-the-badge" alt="llama.cpp" />
+  <img src="https://img.shields.io/badge/PyInstaller-222222?style=for-the-badge&logo=python&logoColor=white" alt="PyInstaller" />
+  <img src="https://img.shields.io/badge/pytest-0A9EDC?style=for-the-badge&logo=pytest&logoColor=white" alt="pytest" />
+  <img src="https://img.shields.io/badge/Ruff-D7FF64?style=for-the-badge" alt="Ruff" />
+</p>
+
+## Тесты
+
+Тесты покрывают форматы, сегментацию и глоссарий, очередь и сохранение состояния, загрузку модели и UI smoke-сценарий. Для запуска установите extra `dev`; для чтения PDF нужен extra `pdf`. PDF fixture-тест требует PyMuPDF (`fitz`), а UI smoke-тест - рабочий Tcl/Tk.
+
+## Архитектура
+
+UI на Tkinter вызывает отдельные модули ядра. SQLite хранит проект и очередь; перевод выполняется через inference worker. Импорт форматов и их экспорт разделены.
+
+```text
+src/dotlingo/
+├── app.py                 # Tkinter UI
+├── storage.py             # проекты, исходники, переводы и история
+├── task_queue.py          # очередь, пауза, отмена и восстановление
+├── formats.py             # чтение и отдельные format-writer адаптеры
+├── segmentation.py        # сегменты и контекст
+├── glossary.py            # глоссарий
+├── engine.py              # inference worker
+├── models.py              # реестр и совместимость моделей
+├── model_download.py      # проверяемая загрузка весов
+└── hardware.py            # сведения об устройстве
+```
+
+- Оригинал хранится отдельно; его хеш проверяется перед переводом и экспортом.
+- Загрузка модели использует закреплённую ревизию и SHA-256; незавершённый файл не активируется.
+- PDF поддерживает чтение текстового слоя без переноса вёрстки. OCR и PDF-экспорт отсутствуют.
+
+## Лицензия
+
+© 2026 DotCore. Все права защищены.
+
+Проприетарный код. Использование, копирование, изменение и распространение запрещены без письменного разрешения автора. Исходный код открыт только для ознакомления. См. [LICENSE](LICENSE).

@@ -1,0 +1,76 @@
+# Локальный запуск на Windows
+
+## Требования
+
+- Windows 10/11 x64.
+- CPython 3.12 или 3.13. Ограничение указано в `pyproject.toml`.
+- Tcl/Tk для графического интерфейса.
+- Интернет нужен только для установки Python-пакетов и явной загрузки выбранной модели. После установки runtime и модели перевод выполняется локально.
+
+Проверьте Python и Tkinter:
+
+```powershell
+python --version
+python -c "import tkinter; print(tkinter.TkVersion)"
+```
+
+Если `python` не найден, установите CPython 3.12 или 3.13 x64 с компонентом Tcl/Tk. Команда `py -3.12` может использоваться вместо `python`, если Python Launcher видит установленную версию.
+
+## Создать окружение и установить пакеты
+
+В PowerShell откройте корень репозитория:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev,pdf]"
+```
+
+Это устанавливает приложение в editable-режиме, пакеты разработки, `pypdf` для PDF с текстовым слоем и зависимости чтения DOCX. Если политика PowerShell запрещает активацию, вызывайте интерпретатор напрямую:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,pdf]"
+.\.venv\Scripts\python.exe -m dotlingo
+```
+
+## Запустить
+
+```powershell
+python -m dotlingo
+```
+
+Приложение создаёт проекты, настройки и скачанные модели в `%LOCALAPPDATA%\DotLingo`. Для отдельного каталога данных:
+
+```powershell
+python -m dotlingo --data-dir "D:\DotLingoData"
+```
+
+## Включить CPU inference
+
+Графический интерфейс запускается без модели. Для перевода нужен optional backend `llama-cpp-python`; установщик проекта использует CPU wheel index:
+
+```powershell
+python -m pip install --extra-index-url "https://abetlen.github.io/llama-cpp-python/whl/cpu" -e ".[dev,inference,pdf]"
+```
+
+Это устанавливает runtime, но не скачивает модельные веса. В приложении откройте страницу моделей, проверьте размер и лицензию и подтвердите выбранную загрузку. Загрузка весов требует сети и свободного места; после её завершения перевод возможен офлайн.
+
+Текущая совместимость `llama-cpp-python` с конкретными весами ещё не проверена на Windows. Сведения о закреплённых ревизиях и статусах моделей находятся в [MODEL_MATRIX.md](MODEL_MATRIX.md). Сборочный сценарий, использующий тот же CPU wheel index, описан в [BUILD_WINDOWS.md](BUILD_WINDOWS.md).
+
+## Проверки разработчика
+
+```powershell
+python -m pytest -q
+python -m ruff check src tests
+```
+
+Для импорта PDF нужен extra `pdf`. PDF fixture-тест использует PyMuPDF (`fitz`) только для создания тестового файла и пропускается, если пакет отсутствует; приложение читает PDF через `pypdf`. UI smoke-тест требует рабочую поставку Tcl/Tk и оконную сессию. Установка проекта не запускает тесты и не загружает модели.
+
+## Данные и ограничения
+
+- Не удаляйте `.venv`, пока в нём идёт установка пакетов.
+- Веса моделей не входят в репозиторий и приложение; пользовательские данные хранятся вне `.venv`.
+- PDF импортирует только текстовый слой. Для сканов OCR не запускается; изображения, таблицы и исходная вёрстка при экспорте не сохраняются.
+- Для сборки Setup.exe нужны отдельные инструменты PyInstaller и Inno Setup 6; чистая Windows-установка пока не проверена.
+
+Если импорт `tkinter` проходит, но запуск UI сообщает `Can't find a usable init.tcl`, файлы Tcl/Tk могут отсутствовать, быть повреждены или несовместимы с Python. Установите или измените CPython, включив Tcl/Tk, затем пересоздайте `.venv`.

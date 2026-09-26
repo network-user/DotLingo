@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-label="DotLingo">
+  <title>DotLingo</title>
+  <defs>
+    <linearGradient id="dli-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0b0d"/>
+      <stop offset="0.5" stop-color="#14161a"/>
+      <stop offset="1" stop-color="#0b0c0e"/>
+    </linearGradient>
+    <radialGradient id="dli-glow" cx="70%" cy="20%" r="62%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dli-halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#dli-bg)"/>
+  <rect width="1600" height="900" fill="url(#dli-glow)"/>
+  <g opacity="0.045" stroke="#ffffff" stroke-width="1">
+    <path d="M0 225 H1600 M0 450 H1600 M0 675 H1600 M400 0 V900 M800 0 V900 M1200 0 V900"/>
+  </g>
+  <circle cx="1180" cy="460" r="330" fill="url(#dli-halo)"/>
+  <svg x="965" y="245" width="430" height="430" viewBox="0 0 48 48">
+    <g opacity="0.1" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 13 Q14 9 24 14 Q34 9 43 13 V37 Q34 33 24 38 Q14 33 5 37 Z"/>
+      <path d="M24 14 V38"/>
+      <path d="M11 19 H18 M11 24 H18 M30 19 H37 M30 24 H37"/>
+      <path d="M19 29 H29 M26 26 L29 29 L26 32"/>
+    </g>
+  </svg>
+  <svg x="140" y="118" width="86" height="86" viewBox="0 0 48 48">
+    <g fill="none" stroke="#f3f3f1" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 13 Q14 9 24 14 Q34 9 43 13 V37 Q34 33 24 38 Q14 33 5 37 Z"/>
+      <path d="M24 14 V38"/>
+      <path d="M11 19 H18 M11 24 H18 M30 19 H37 M30 24 H37"/>
+      <path d="M19 29 H29 M26 26 L29 29 L26 32"/>
+    </g>
+  </svg>
+  <text x="138" y="408" font-family="Inter, Arial, sans-serif" font-size="132" font-weight="800" fill="#f3f3f1" letter-spacing="-3">.lingo</text>
+  <text x="146" y="470" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700" fill="#f3f3f1">DotLingo</text>
+  <text x="146" y="516" font-family="Inter, Arial, sans-serif" font-size="26" fill="#a6a7ab">Локальный перевод документов и книг</text>
+</svg>

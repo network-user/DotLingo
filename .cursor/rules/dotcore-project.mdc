@@ -1,0 +1,20 @@
+---
+description: DotCore контекст DotLingo. Читай AGENTS.md для команд и ограничений проекта.
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# DotLingo
+
+Канонические инструкции: [AGENTS.md](../../AGENTS.md).
+
+- **Тип:** настольное приложение на Python и Tkinter.
+- **Установка разработки:** `python -m pip install -e ".[dev,pdf]"`.
+- **Запуск:** `python -m dotlingo`.
+- **Тесты:** `python -m pytest -q`.
+- **Lint:** `python -m ruff check src tests`.
+- **README-sync:** глобальные изменения команд, модулей, зависимостей, архитектуры или runtime требуют обновить README через `generate-readme` и правила через `sync-project-rules`.
+- Оригиналы неизменяемы; PDF поддерживает только импорт текстового слоя; модельные веса загружаются только с явного согласия.
+
+Человеческий обзор: [README.md](../../README.md).
