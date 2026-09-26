@@ -1,0 +1,50 @@
+# Архитектура
+
+```mermaid
+flowchart LR
+  UI[Tk desktop UI] --> App[Application services]
+  App --> Store[(Project SQLite + immutable source copy)]
+  App --> Formats[Format importers / writers]
+  App --> Queue[Persistent cancellable task queue]
+  Queue --> Seg[Segmenter + context + glossary]
+  Queue --> Proc[Spawned inference process]
+  Proc --> Adapter[GGUF adapter: llama-cpp-python]
+  App --> Download[Consent + pinned model download]
+  Download --> Stage[.part → size/SHA/GGUF check → atomic activation]
+  Queue --> Store
+  Formats --> Store
+  Download --> Models[(LOCALAPPDATA\\DotLingo\\models)]
+```
+
+## Слои
+
+- `formats.py`: importer/writer boundary и нормализованные `ParsedDocument`/`Block`; никаких Tk типов.
+- `segmentation.py`, `glossary.py`: чистые функции. Segmentation ограничивает порции; имена из глоссария защищаются уникальными маркерами на каждое совпадение.
+- `storage.py`: отдельная SQLite база на проект (`WAL`, `synchronous=FULL`), immutable source copy, SHA-256, parsed tree, переводы, очередь, события и экспортные записи. Экспортные файлы — отдельные артефакты.
+- `task_queue.py`: один последовательный worker на проект, блоки сохраняются фрагментами; остановка завершает дочерний inference процесс. UI видит event dict, не engine.
+- `engine.py`: отдельный Windows spawn process для DLL/RAM ошибок; GGUF magic до старта, timeout, cancel/pause. В текущем worker для выбранной конфигурации GPU offload отключён; CPU-путь не подтверждён реальной моделью.
+- `model_download.py`, `models.py`: каталог с закреплёнными artifact revision/size/hash, allowlisted HTTPS, проверка пути/перенаправления/range/size/SHA/magic; staging переименовывается в активный вес после проверки. Файл GGUF загружается как данные, произвольный Python из модели не исполняется.
+- `hardware.py`: RAM/free disk из psutil; NVIDIA данные через `nvidia-smi` если доступен; llama backend проверяется независимо. В MVP текущий inference worker CPU only, поэтому GPU-компиляция не означает, что приложение пользуется GPU.
+- `app.py`: тонкий Tk UI. Потоки отправляют immutable события в `queue.Queue`, widget меняется только из polling callback главного Tk thread.
+- `paths.py`, `preferences.py`: бинарники приложения, проекты и веса физически разнесены. Сборка предполагает per-user установку под `%LOCALAPPDATA%\Programs\DotLingo`.
+
+## Поток документа
+
+1. Импорт и проверка формата → нормализованные блоки с locator.
+2. Отдельная копия исходника с SHA-256; исходные байты не используются как место для перевода.
+3. Сегментация абзацев около sentence/whitespace границ (1100 символов по умолчанию), при длинном слове точное деление по лимиту.
+4. Prompt получает направление, короткий контекст проекта, правила, до 80 терминов и до двух последних завершённых фрагментов. Marker изменён/потерян → fragment error, не записываем его как завершённый.
+5. Сегмент сохраняется в SQLite немедленно. Завершённая задача атомарно обновляет текущую карту перевода документа.
+6. Редактор показывает исходный блок отдельно от сохраняемого перевода. Format writer записывает staged отдельный файл и делает `os.replace` после успешной записи.
+
+## Очередь и восстановление
+
+Статусы: `queued`, `running`, `paused`, `cancelled`, `interrupted`, `failed`, `complete`. Для завершённых фрагментов хранится отдельная строка. При открытии проекта `running` переводится в `interrupted`; queued-задачи, ранее явно созданные пользователем, возобновляются. Остальные требуют кнопки «Продолжить / повторить». Повтор с другой моделью обнуляет части задачи; существующая карта перевода остаётся видимой до успешного завершения нового полного задания.
+
+## Runtime adapters
+
+Первый адаптер: Qwen3 GGUF → llama.cpp Python binding. Каталог указывает adapter id и весовой формат; нельзя передавать safetensors или Marian-модель одному и тому же loader. Будущие адаптеры: CTranslate2 для Marian/OPUS-MT, отдельный Transformers adapter для safetensors-моделей, если будет безопасная схема без исполнения произвольного remote code. Hy-MT2 и TranslateGemma не включены в доступную загрузку.
+
+## Расширение на другие ОС
+
+Доменные функции и SQLite слой Qt-free. Для macOS/Linux достаточно заменить `paths.py`, отдельный native bootstrap/package и backend-профиль; код и настройку Windows Setup отдельно собирать для каждой ОС. Текущий UI и установщик проектируются первым делом для Windows 10/11 x64. Кроссплатформенная поставка не проверена.
