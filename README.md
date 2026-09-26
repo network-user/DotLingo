@@ -1,7 +1,7 @@
 # DotLingo
 
 <p>
-  <img src="https://img.shields.io/badge/Runtime-Python_3.12%2B-3776AB?style=flat" alt="Python 3.12+" />
+  <img src="https://img.shields.io/badge/Runtime-Python_3.12--3.13-3776AB?style=flat" alt="Python 3.12-3.13" />
   <img src="https://img.shields.io/badge/Platform-Windows_10%2F11_x64-555?style=flat" alt="Windows 10/11 x64" />
   <img src="https://img.shields.io/badge/Category-Desktop_App-orange?style=flat" alt="Desktop application" />
   <!-- loc:start --><img src="https://img.shields.io/badge/lines_of_code-3786-lightgrey?style=flat" alt="3786 lines of code" /><!-- loc:end -->
@@ -52,7 +52,7 @@ python -m dotlingo
   <img src="https://img.shields.io/badge/psutil-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="psutil" />
   <img src="https://img.shields.io/badge/python--docx-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python-docx" />
   <img src="https://img.shields.io/badge/pypdf-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="pypdf" />
-  <img src="https://img.shields.io/badge/llama.cpp-222222?style=for-the-badge" alt="llama.cpp" />
+  <img src="https://img.shields.io/badge/llama--cpp--python-222222?style=for-the-badge&logo=python&logoColor=white" alt="llama-cpp-python" />
   <img src="https://img.shields.io/badge/PyInstaller-222222?style=for-the-badge&logo=python&logoColor=white" alt="PyInstaller" />
   <img src="https://img.shields.io/badge/pytest-0A9EDC?style=for-the-badge&logo=pytest&logoColor=white" alt="pytest" />
   <img src="https://img.shields.io/badge/Ruff-D7FF64?style=for-the-badge" alt="Ruff" />
