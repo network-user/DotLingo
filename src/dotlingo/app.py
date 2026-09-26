@@ -62,8 +62,10 @@ class DotLingoApp:
         self._review_block_orders: set[int] = set()
         self._review_progress_label: ttk.Label | None = None
         self._review_loading = False
+        self._review_refilter: Callable[[], None] | None = None
         self._model_checks: dict[str, tk.BooleanVar] = {}
         self._download_cancel: DownloadCancellation | None = None
+        self._download_worker: threading.Thread | None = None
         self._download_window: tk.Frame | None = None
         self._overlay: tk.Frame | None = None
         self._overlay_previous_focus: tk.Widget | None = None
@@ -71,6 +73,9 @@ class DotLingoApp:
         self._page_animation_job: str | None = None
         self._settings_form: tuple[ProjectStore, tk.StringVar, tk.Text, tk.Text, tuple[str, str, str]] | None = None
         self._closing = False
+        self._pending_close = False
+        self._close_wait_job: str | None = None
+        self._close_cancel_accepted: bool | None = None
 
         self.root.title("DotLingo · локальный перевод документов")
         self.root.geometry("1160x760")
@@ -232,6 +237,7 @@ class DotLingoApp:
             self._review_resize_job = None
         self._review_body = None
         self._review_progress_label = None
+        self._review_refilter = None
         for child in self.content.winfo_children():
             child.destroy()
 
@@ -891,6 +897,7 @@ class DotLingoApp:
             self._review_search_job = search_state["job"]
 
         search.bind("<KeyRelease>", schedule_search)
+        self._review_refilter = lambda: fill_tree(search.get()) if search.winfo_exists() else None
         body.add(navigation, weight=1)
         body.add(translation_area, weight=4)
         self._review_body = body
@@ -952,6 +959,11 @@ class DotLingoApp:
         self._review_text_original = text
         self._review_target.edit_modified(False)
         translations = store.translations(self._selected_doc)
+        if self.page == "review" and self._review_refilter is not None:
+            try:
+                self.root.after_idle(self._review_refilter)
+            except tk.TclError:
+                pass
         if self._review_progress_label is not None and self._review_progress_label.winfo_exists():
             complete = sum(1 for order in self._review_block_orders if order in translations)
             self._review_progress_label.configure(text=f"Переведено блоков: {complete}/{len(self._review_block_orders)}")
@@ -1120,13 +1132,15 @@ class DotLingoApp:
         def work() -> Path:
             return download_model(model, self.models_dir, cancel=cancel, on_progress=progress_event)
 
-        self._submit("download", work, lambda result: self._download_done(model, result))
+        self._download_worker = self._submit("download", work, lambda result: self._download_done(model, result))
         self._download_progress_widgets = (label, progress)
         self._download_action = action
         self._download_close_button = close_button
 
     def _download_done(self, model: dict[str, Any], result: Any) -> None:
         self._download_cancel = None
+        if self._pending_close:
+            return
         if not self._download_window or not self._download_window.winfo_exists():
             return
         label, progress = self._download_progress_widgets
@@ -1435,6 +1449,7 @@ class DotLingoApp:
                         notice.configure(text="Отметьте согласие с лицензией перед загрузкой.")
                         return
                     state["cancel"] = DownloadCancellation()
+                    self._download_cancel = state["cancel"]
                     render(3)
                     cancel = state["cancel"]
 
@@ -1446,7 +1461,7 @@ class DotLingoApp:
                             on_progress=lambda value: self.events.put(("wizard_progress", value)),
                         )
 
-                    self._submit("wizard_download", work, wizard_download_done)
+                    self._download_worker = self._submit("wizard_download", work, wizard_download_done)
 
                 ttk.Button(buttons, text="Назад", command=lambda: render(1)).pack(side="left")
                 ttk.Button(buttons, text="Отложить установку", command=lambda: render(4)).pack(side="right")
@@ -1485,6 +1500,9 @@ class DotLingoApp:
 
         def wizard_download_done(result: Any) -> None:
             state["cancel"] = None
+            self._download_cancel = None
+            if self._pending_close:
+                return
             if isinstance(result, Exception):
                 render(2)
                 if isinstance(result, DownloadCancelled):
@@ -1524,7 +1542,7 @@ class DotLingoApp:
             return False
         return True
 
-    def _submit(self, name: str, work: Callable[[], Any], done: Callable[[Any], None]) -> None:
+    def _submit(self, name: str, work: Callable[[], Any], done: Callable[[Any], None]) -> threading.Thread:
         self._set_busy(True, f"{name}…")
 
         def run() -> None:
@@ -1534,7 +1552,9 @@ class DotLingoApp:
                 result = exc
             self.events.put(("job_done", name, result, done))
 
-        threading.Thread(target=run, name=f"DotLingo {name}", daemon=True).start()
+        worker = threading.Thread(target=run, name=f"DotLingo {name}", daemon=True)
+        worker.start()
+        return worker
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
         self.sidebar_status.configure(text=message if busy else "Локальная работа · без облака")
@@ -1566,6 +1586,9 @@ class DotLingoApp:
         self.root.after(150, self._poll_events)
 
     def _update_download_progress(self, value: dict[str, Any]) -> None:
+        if self._pending_close:
+            self._show_close_wait_status()
+            return
         if not self._download_window or not self._download_window.winfo_exists() or not hasattr(self, "_download_progress_widgets"):
             return
         label, progress = self._download_progress_widgets
@@ -1590,6 +1613,9 @@ class DotLingoApp:
             label.configure(text=f"Получено {_format_size(amount)} · общий размер неизвестен · ETA не показывается")
 
     def _update_wizard_progress(self, value: dict[str, Any]) -> None:
+        if self._pending_close:
+            self._show_close_wait_status()
+            return
         if not hasattr(self, "_wizard_progress"):
             return
         progress, label = self._wizard_progress
@@ -1626,16 +1652,60 @@ class DotLingoApp:
         self.root.destroy()
 
     def close(self) -> None:
-        if self._closing:
+        if self._closing or self._pending_close:
             return
         if not self._confirm_review_change():
             return
         if self.page == "settings" and not self._confirm_settings_change():
             return
+        worker = self._download_worker
+        if worker is not None and worker.is_alive():
+            self._pending_close = True
+            self._close_cancel_accepted = self._download_cancel.set() if self._download_cancel else None
+            self._show_close_wait_status()
+            self._close_wait_job = self.root.after(100, self._wait_for_download_close)
+            return
+        self._finalize_close()
+
+    def _show_close_wait_status(self) -> None:
+        if self._close_cancel_accepted is True:
+            message = "Отмена загрузки запрошена. Ожидается безопасное завершение…"
+        elif self._close_cancel_accepted is False:
+            message = "Модель уже активируется. Ожидается завершение проверки…"
+        else:
+            message = "Загрузка завершается. Приложение закроется после сохранения состояния…"
+        try:
+            self.sidebar_status.configure(text=message)
+            if self._download_window is not None and self._download_window.winfo_exists():
+                label = self._download_progress_widgets[0]
+                label.configure(text=message)
+            elif hasattr(self, "_wizard_progress"):
+                self._wizard_progress[1].configure(text=message)
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _wait_for_download_close(self) -> None:
+        self._close_wait_job = None
+        if not self._pending_close or self._closing:
+            return
+        worker = self._download_worker
+        if worker is not None and worker.is_alive():
+            self._show_close_wait_status()
+            self._close_wait_job = self.root.after(100, self._wait_for_download_close)
+            return
+        self._download_worker = None
+        self._pending_close = False
+        self._finalize_close()
+
+    def _finalize_close(self) -> None:
         self._closing = True
         self._stop_page_animation()
-        if self._download_cancel:
-            self._download_cancel.set()
+        if self._close_wait_job is not None:
+            try:
+                self.root.after_cancel(self._close_wait_job)
+            except tk.TclError:
+                pass
+            self._close_wait_job = None
         if self._overlay is not None and self._overlay.winfo_exists():
             self._close_overlay(self._overlay)
         for task_queue in self.project_queues.values():

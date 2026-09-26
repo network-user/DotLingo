@@ -23,8 +23,8 @@ class FakeResponse:
         body: bytes,
         status: int,
         headers: dict[str, str],
-        cancel_after_read: threading.Event | None = None,
-        cancel_after_eof: threading.Event | None = None,
+        cancel_after_read: DownloadCancellation | None = None,
+        cancel_after_eof: DownloadCancellation | None = None,
     ) -> None:
         self.body = body
         self.status = status
@@ -87,7 +87,7 @@ def test_download_resumes_partial_and_activates_only_after_integrity_check(tmp_p
     payload = b"GGUF-small-fixture"
     model = _model(payload)
     partial = payload[:7]
-    cancel = threading.Event()
+    cancel = DownloadCancellation()
     requests: list[Any] = []
 
     def fake_urlopen(request: Any, timeout: float) -> FakeResponse:
@@ -111,7 +111,7 @@ def test_download_resumes_partial_and_activates_only_after_integrity_check(tmp_p
     assert staged.read_bytes() == partial
     assert not (tmp_path / model["id"] / "tiny.gguf").exists()
 
-    cancel.clear()
+    cancel = DownloadCancellation()
     destination = download_model(model, tmp_path, cancel=cancel)
     assert destination.read_bytes() == payload
     verify_model(destination, model)
@@ -129,7 +129,7 @@ def test_bad_download_hash_never_activates_weight(tmp_path: Path, monkeypatch: p
         lambda *_args, **_kwargs: FakeResponse(b"GGUF-expecteX", 200, {"Content-Length": "13"}),
     )
     with pytest.raises(ValueError, match="SHA-256"):
-        download_model(model, tmp_path, cancel=threading.Event())
+        download_model(model, tmp_path, cancel=DownloadCancellation())
     assert not (tmp_path / model["id"] / model["filename"]).exists()
 
 
@@ -145,13 +145,13 @@ def test_download_stops_before_network_when_disk_space_is_insufficient(
 
     monkeypatch.setattr(downloader.urllib.request, "urlopen", unexpected_network)
     with pytest.raises(ModelDownloadError, match="свободного места"):
-        download_model(model, tmp_path, cancel=threading.Event())
+        download_model(model, tmp_path, cancel=DownloadCancellation())
 
 
 def test_late_cancel_after_eof_prevents_model_activation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     payload = b"GGUF-small-fixture"
     model = _model(payload)
-    cancel = threading.Event()
+    cancel = DownloadCancellation()
     monkeypatch.setattr(
         downloader.urllib.request,
         "urlopen",
@@ -176,3 +176,42 @@ def test_cancel_token_rejects_cancellation_after_activation_begins() -> None:
     assert cancel.begin_activation()
     assert not cancel.set()
     assert not cancel.is_set()
+
+
+def test_existing_verified_model_repairs_installed_marker(tmp_path: Path) -> None:
+    payload = b"GGUF-small-fixture"
+    model = _model(payload)
+    target = tmp_path / model["id"] / model["filename"]
+    target.parent.mkdir(parents=True)
+    target.write_bytes(payload)
+
+    result = download_model(model, tmp_path, cancel=DownloadCancellation())
+
+    assert result == target
+    assert installed(model, tmp_path)
+
+
+def test_cancel_during_existing_model_verification_does_not_report_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"GGUF-small-fixture"
+    model = _model(payload)
+    target = tmp_path / model["id"] / model["filename"]
+    target.parent.mkdir(parents=True)
+    target.write_bytes(payload)
+    cancel = DownloadCancellation()
+
+    def verify_then_cancel(_path: Path, _model: dict[str, Any]) -> None:
+        cancel.set()
+
+    monkeypatch.setattr(downloader, "verify_model", verify_then_cancel)
+    with pytest.raises(DownloadCancelled):
+        download_model(model, tmp_path, cancel=cancel)
+
+    assert not (target.parent / "installed.json").exists()
+    assert target.read_bytes() == payload
+
+
+def test_download_requires_atomic_cancellation_token(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="atomic activation"):
+        download_model(_model(b"GGUF-small-fixture"), tmp_path, cancel=threading.Event())

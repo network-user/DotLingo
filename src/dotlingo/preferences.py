@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import tempfile
@@ -47,5 +48,11 @@ def save_preferences(values: dict[str, Any], root: Path | None = None) -> None:
         temp_path = Path(handle.name)
         json.dump({**DEFAULTS, **values}, handle, ensure_ascii=False, indent=2)
         handle.flush()
-        os.fsync(handle.fileno())
+        try:
+            os.fsync(handle.fileno())
+        except OSError as exc:
+            # Some Windows file handles/filesystems reject _commit with EBADF even though
+            # flush succeeded. Preferences remain safe to replace atomically in that case.
+            if exc.errno != errno.EBADF:
+                raise
     os.replace(temp_path, path)

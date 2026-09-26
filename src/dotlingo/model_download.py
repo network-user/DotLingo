@@ -78,6 +78,8 @@ def download_model(
     timeout: float = 30,
 ) -> Path:
     """Download one consented, pinned file, verify it, then atomically activate it."""
+    if not callable(getattr(cancel, "begin_activation", None)):
+        raise TypeError("cancel must be a DownloadCancellation token with atomic activation")
     if model.get("status") != "available":
         raise ModelDownloadError("Эта модель пока не прошла проверку runtime.")
     if cancel.is_set():
@@ -93,8 +95,19 @@ def download_model(
     _safe_file(model_dir, model["filename"])
     if target.exists():
         try:
+            if on_progress:
+                on_progress({"bytes": 0, "total": size, "phase": "verifying"})
             verify_model(target, model)
+            if not _begin_activation(cancel):
+                raise DownloadCancelled("cancelled before activating verified model")
+            if on_progress:
+                on_progress({"bytes": size, "total": size, "phase": "activating"})
+            _write_installed_marker(target, model, str(model["sha256"]).lower())
+            if on_progress:
+                on_progress({"bytes": size, "total": size, "ratio": 1.0, "complete": True})
             return target
+        except DownloadCancelled:
+            raise
         except ModelIntegrityError as exc:
             raise ModelDownloadError("Файл с таким именем уже есть, но не совпадает с реестром. Переименуйте его вручную и повторите загрузку.") from exc
     url = (
@@ -230,9 +243,9 @@ def download_model(
 
 def _begin_activation(cancel: Any) -> bool:
     begin_activation = getattr(cancel, "begin_activation", None)
-    if begin_activation is not None:
-        return bool(begin_activation())
-    return not cancel.is_set()
+    if not callable(begin_activation):
+        raise TypeError("cancel must be a DownloadCancellation token with atomic activation")
+    return bool(begin_activation())
 
 
 def _write_installed_marker(target: Path, model: dict[str, Any], digest: str) -> None:
