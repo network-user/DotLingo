@@ -61,6 +61,8 @@ class DotLingoApp:
         self._review_text_original = ""
         self._review_block_orders: set[int] = set()
         self._review_progress_label: ttk.Label | None = None
+        self._review_save_status: ttk.Label | None = None
+        self._review_save_button: ttk.Button | None = None
         self._review_loading = False
         self._review_refilter: Callable[[], None] | None = None
         self._model_checks: dict[str, tk.BooleanVar] = {}
@@ -71,6 +73,7 @@ class DotLingoApp:
         self._overlay_previous_focus: tk.Widget | None = None
         self._overlay_escape: Callable[[tk.Event[Any]], str | None] | None = None
         self._page_animation_job: str | None = None
+        self.nav_indicators: dict[str, tk.Frame] = {}
         self._settings_form: tuple[ProjectStore, tk.StringVar, tk.Text, tk.Text, tuple[str, str, str]] | None = None
         self._closing = False
         self._pending_close = False
@@ -78,8 +81,8 @@ class DotLingoApp:
         self._close_cancel_accepted: bool | None = None
 
         self.root.title("DotLingo · локальный перевод документов")
-        self.root.geometry("1160x760")
-        self.root.minsize(760, 540)
+        self.root.geometry("1220x790")
+        self.root.minsize(840, 600)
         self._set_icon()
         self._style()
         self._build_shell()
@@ -91,6 +94,7 @@ class DotLingoApp:
                 lambda _event, selected_page=page: self._navigate_shortcut(selected_page),
             )
         self.root.bind("<Control-f>", lambda _event: self._find_shortcut())
+        self.root.bind("<Control-s>", lambda _event: self._save_review_shortcut())
         self.root.bind("<Escape>", self._handle_overlay_escape)
         self.root.bind("<Configure>", self._on_root_configure, add="+")
         self._poll_events()
@@ -124,29 +128,52 @@ class DotLingoApp:
         colors = TOKENS
         self.root.configure(background=colors["bg"])
         style.configure("TFrame", background=colors["bg"])
-        style.configure("Panel.TFrame", background=colors["surface"])
+        style.configure("Workspace.TFrame", background=colors["bg"])
+        style.configure("Sidebar.TFrame", background=colors["sidebar"])
+        style.configure("Panel.TFrame", background=colors["surface"], borderwidth=0, relief="flat")
+        style.configure("Status.TFrame", background=colors["surface_raised"], borderwidth=0, relief="flat")
+        style.configure("ProjectChip.TFrame", background=colors["surface"], borderwidth=0, relief="flat")
         style.configure("Raised.TFrame", background=colors["surface_raised"])
         style.configure("TLabel", background=colors["bg"], foreground=colors["text"], font=(colors["font"], colors["font_body"]))
         style.configure("Muted.TLabel", background=colors["bg"], foreground=colors["muted"], font=(colors["font"], colors["font_small"]))
+        style.configure("Panel.Muted.TLabel", background=colors["surface"], foreground=colors["muted"], font=(colors["font"], colors["font_small"]))
+        style.configure("Sidebar.Muted.TLabel", background=colors["sidebar"], foreground=colors["muted"], font=(colors["font"], colors["font_small"]))
+        style.configure("Status.Muted.TLabel", background=colors["surface_raised"], foreground=colors["muted"], font=(colors["font"], colors["font_small"]))
         style.configure("Error.TLabel", background=colors["surface"], foreground=colors["error"], font=(colors["font"], colors["font_small"]))
+        style.configure("Panel.Error.TLabel", background=colors["surface"], foreground=colors["error"], font=(colors["font"], colors["font_small"]))
         style.configure("Panel.TLabel", background=colors["surface"], foreground=colors["text"], font=(colors["font"], colors["font_body"]))
         style.configure("Title.TLabel", background=colors["bg"], foreground=colors["text"], font=(colors["font"], colors["font_title"], "bold"))
         style.configure("Section.TLabel", background=colors["bg"], foreground=colors["text"], font=(colors["font"], colors["font_heading"], "bold"))
-        style.configure("TButton", background=colors["surface_raised"], foreground=colors["text"], padding=(10, 7), bordercolor=colors["border"])
-        style.map("TButton", background=[("active", colors["surface_hover"]), ("pressed", colors["accent_dim"])], foreground=[("disabled", colors["muted"])])
-        style.configure("Accent.TButton", background=colors["accent_dim"], foreground=colors["text"], padding=(11, 8), bordercolor=colors["accent"])
-        style.map("Accent.TButton", background=[("active", colors["accent"]), ("pressed", colors["accent_dim"])])
-        style.configure("Nav.TButton", background=colors["bg"], foreground=colors["muted"], anchor="w", padding=(12, 9), borderwidth=0)
-        style.map("Nav.TButton", background=[("active", colors["surface_hover"]), ("pressed", colors["accent_dim"])], foreground=[("active", colors["text"])])
-        style.configure("ActiveNav.TButton", background=colors["surface_raised"], foreground=colors["accent"], anchor="w", padding=(12, 9), borderwidth=0)
-        style.map("ActiveNav.TButton", background=[("active", colors["surface_hover"]), ("pressed", colors["accent_dim"])], foreground=[("active", colors["text"])])
-        style.configure("Treeview", background=colors["surface"], fieldbackground=colors["surface"], foreground=colors["text"], rowheight=27, bordercolor=colors["border"])
+        style.configure("Panel.Section.TLabel", background=colors["surface"], foreground=colors["text"], font=(colors["font"], colors["font_heading"], "bold"))
+        style.configure("Sidebar.Section.TLabel", background=colors["sidebar"], foreground=colors["muted"], font=(colors["font"], 8, "bold"))
+        style.configure("Brand.TLabel", background=colors["sidebar"], foreground=colors["text"], font=(colors["font"], 13, "bold"))
+        style.configure("TButton", background=colors["surface_raised"], foreground=colors["text"], padding=(12, 8), borderwidth=1, bordercolor=colors["border"], focusthickness=2, focuscolor=colors["border_focus"], font=(colors["font"], colors["font_body"]))
+        style.map("TButton", background=[("disabled", colors["surface"]), ("pressed", colors["accent_dim"]), ("active", colors["surface_hover"])], foreground=[("disabled", colors["muted"])], bordercolor=[("focus", colors["border_focus"])])
+        style.configure("Accent.TButton", background=colors["accent"], foreground=colors["bg"], padding=(14, 8), borderwidth=1, bordercolor=colors["accent"], font=(colors["font"], colors["font_body"], "bold"))
+        style.map("Accent.TButton", background=[("disabled", colors["surface_raised"]), ("pressed", colors["accent_dim"]), ("active", "#a0ead5")], foreground=[("disabled", colors["muted"]), ("pressed", colors["text"])])
+        style.configure("Nav.TButton", background=colors["sidebar"], foreground=colors["muted"], anchor="w", padding=(11, 9), borderwidth=0, font=(colors["font"], colors["font_body"]))
+        style.map("Nav.TButton", background=[("pressed", colors["surface_raised"]), ("active", colors["surface"])], foreground=[("focus", colors["text"]), ("active", colors["text"])])
+        style.configure("ActiveNav.TButton", background=colors["surface_raised"], foreground=colors["accent"], anchor="w", padding=(11, 9), borderwidth=0, font=(colors["font"], colors["font_body"], "bold"))
+        style.map("ActiveNav.TButton", background=[("pressed", colors["surface_hover"]), ("active", colors["surface_hover"])], foreground=[("active", colors["accent"])])
+        style.configure("TEntry", fieldbackground=colors["surface_raised"], foreground=colors["text"], insertcolor=colors["accent"], padding=(10, 8), borderwidth=1, bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], font=(colors["font"], colors["font_body"]))
+        style.map("TEntry", fieldbackground=[("disabled", colors["surface"]), ("focus", colors["surface_raised"])], bordercolor=[("focus", colors["border_focus"])])
+        style.configure("TCombobox", fieldbackground=colors["surface_raised"], background=colors["surface_raised"], foreground=colors["text"], arrowcolor=colors["muted"], padding=(9, 7), borderwidth=1, bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], font=(colors["font"], colors["font_body"]))
+        style.map("TCombobox", fieldbackground=[("readonly", colors["surface_raised"]), ("disabled", colors["surface"])], foreground=[("disabled", colors["muted"])], bordercolor=[("focus", colors["border_focus"])])
+        style.configure("TCheckbutton", background=colors["surface"], foreground=colors["text"], padding=(3, 5), font=(colors["font"], colors["font_body"]))
+        style.map("TCheckbutton", background=[("active", colors["surface"])], foreground=[("disabled", colors["muted"])], indicatorcolor=[("selected", colors["accent"]), ("!selected", colors["surface_raised"])])
+        style.configure("TRadiobutton", background=colors["surface"], foreground=colors["text"], padding=(3, 5), font=(colors["font"], colors["font_body"]))
+        style.map("TRadiobutton", background=[("active", colors["surface"])], foreground=[("disabled", colors["muted"])], indicatorcolor=[("selected", colors["accent"]), ("!selected", colors["surface_raised"])])
+        style.configure("Treeview", background=colors["surface"], fieldbackground=colors["surface"], foreground=colors["text"], rowheight=34, borderwidth=0, font=(colors["font"], colors["font_body"]))
         style.map("Treeview", background=[("selected", colors["highlight"])], foreground=[("selected", colors["text"])])
-        style.configure("Treeview.Heading", background=colors["surface_raised"], foreground=colors["text"], padding=6)
+        style.configure("Treeview.Heading", background=colors["surface_raised"], foreground=colors["muted"], padding=(10, 9), borderwidth=0, font=(colors["font"], colors["font_small"], "bold"))
+        style.map("Treeview.Heading", background=[("active", colors["surface_hover"])], foreground=[("active", colors["text"])])
         style.configure("TNotebook", background=colors["bg"], borderwidth=0)
-        style.configure("TNotebook.Tab", background=colors["surface"], foreground=colors["muted"], padding=(10, 7))
+        style.configure("TNotebook.Tab", background=colors["surface"], foreground=colors["muted"], padding=(12, 8), font=(colors["font"], colors["font_body"]))
         style.map("TNotebook.Tab", background=[("selected", colors["surface_raised"])], foreground=[("selected", colors["text"])])
-        style.configure("Horizontal.TProgressbar", troughcolor=colors["surface_raised"], background=colors["accent"], bordercolor=colors["border"])
+        style.configure("Horizontal.TProgressbar", troughcolor=colors["surface_raised"], background=colors["accent"], bordercolor=colors["surface_raised"], thickness=8)
+        style.configure("Vertical.TScrollbar", background=colors["surface_raised"], troughcolor=colors["surface"], bordercolor=colors["surface"], arrowcolor=colors["muted"], gripcount=0, width=10)
+        style.configure("Horizontal.TScrollbar", background=colors["surface_raised"], troughcolor=colors["surface"], bordercolor=colors["surface"], arrowcolor=colors["muted"], gripcount=0, width=10)
+        style.configure("TSeparator", background=colors["border_soft"])
 
     def _build_shell(self) -> None:
         outer = ttk.Frame(self.root)
@@ -154,33 +181,63 @@ class DotLingoApp:
         outer.columnconfigure(1, weight=1)
         outer.rowconfigure(0, weight=1)
 
-        self.sidebar = ttk.Frame(outer, width=196, style="Panel.TFrame", padding=(10, 15))
+        self.sidebar = ttk.Frame(outer, width=214, style="Sidebar.TFrame", padding=(12, 16))
         self.sidebar.grid(row=0, column=0, sticky="ns")
         self.sidebar.grid_propagate(False)
-        brand = ttk.Label(self.sidebar, text=".ядро  DotLingo", style="Panel.TLabel", font=(TOKENS["font"], 13, "bold"))
-        brand.pack(anchor="w", padx=8, pady=(3, 18))
+        brand_row = ttk.Frame(self.sidebar, style="Sidebar.TFrame")
+        brand_row.pack(fill="x", padx=4, pady=(0, 25))
+        mark = tk.Canvas(brand_row, width=32, height=32, background=TOKENS["sidebar"], highlightthickness=0)
+        mark.pack(side="left", padx=(0, 9))
+        mark.create_line(7, 7, 16, 16, 25, 7, fill=TOKENS["border"], width=1)
+        mark.create_line(7, 25, 16, 16, 25, 25, fill=TOKENS["border"], width=1)
+        for x, y, radius, color in ((7, 7, 2, TOKENS["muted"]), (25, 7, 2, TOKENS["muted"]), (7, 25, 2, TOKENS["muted"]), (25, 25, 2, TOKENS["muted"]), (16, 16, 4, TOKENS["accent"])):
+            mark.create_oval(x - radius, y - radius, x + radius, y + radius, fill=color, outline="")
+        brand_copy = ttk.Frame(brand_row, style="Sidebar.TFrame")
+        brand_copy.pack(side="left", fill="y")
+        ttk.Label(brand_copy, text="DotLingo", style="Brand.TLabel").pack(anchor="w", pady=(1, 0))
+        ttk.Label(brand_copy, text="LOCAL TRANSLATION", style="Sidebar.Muted.TLabel").pack(anchor="w", pady=(1, 0))
         self.nav_buttons: dict[str, ttk.Button] = {}
-        for key, label in PAGES:
-            if key in {"models", "glossary", "settings"}:
-                ttk.Separator(self.sidebar).pack(fill="x", padx=8, pady=8)
-            button = ttk.Button(self.sidebar, text=label, style="Nav.TButton", command=lambda page=key: self.show_page(page))
-            button.pack(fill="x", pady=1)
+        for index, (key, label) in enumerate(PAGES):
+            if index == 0 or key == "models":
+                group = "РАБОЧЕЕ МЕСТО" if key == "projects" else "ИНСТРУМЕНТЫ"
+                ttk.Label(self.sidebar, text=group, style="Sidebar.Section.TLabel").pack(anchor="w", padx=11, pady=(0, 6) if index == 0 else (20, 6))
+            row = ttk.Frame(self.sidebar, style="Sidebar.TFrame", height=38)
+            row.pack(fill="x", pady=1)
+            row.pack_propagate(False)
+            indicator = tk.Frame(row, background=TOKENS["sidebar"], width=3)
+            indicator.pack(side="left", fill="y", padx=(0, 4))
+            button = ttk.Button(row, text=label, style="Nav.TButton", command=lambda page=key: self.show_page(page))
+            button.pack(fill="both", expand=True)
             button.configure(takefocus=True)
             self.nav_buttons[key] = button
-        self.sidebar_status = ttk.Label(self.sidebar, text="Локальная работа · без облака", style="Muted.TLabel", wraplength=160)
-        self.sidebar_status.pack(side="bottom", anchor="w", padx=8, pady=8)
+            self.nav_indicators[key] = indicator
+        status_card = ttk.Frame(self.sidebar, style="Status.TFrame", padding=(10, 9))
+        status_card.pack(side="bottom", fill="x", padx=2, pady=(10, 0))
+        status_head = ttk.Frame(status_card, style="Status.TFrame")
+        status_head.pack(fill="x")
+        status_dot = tk.Canvas(status_head, width=8, height=8, background=TOKENS["surface_raised"], highlightthickness=0)
+        status_dot.pack(side="left", padx=(0, 7), pady=2)
+        status_dot.create_oval(1, 1, 7, 7, fill=TOKENS["accent"], outline="")
+        ttk.Label(status_head, text="НА ЭТОМ УСТРОЙСТВЕ", style="Status.Muted.TLabel").pack(side="left", anchor="w")
+        self.sidebar_status = ttk.Label(status_card, text="Локальная работа · без облака", style="Status.Muted.TLabel", wraplength=158, justify="left")
+        self.sidebar_status.pack(anchor="w", pady=(5, 0))
 
-        workspace = ttk.Frame(outer, padding=(18, 12, 18, 18))
+        workspace = ttk.Frame(outer, style="Workspace.TFrame", padding=(26, 20, 26, 24))
         workspace.grid(row=0, column=1, sticky="nsew")
         workspace.columnconfigure(0, weight=1)
         workspace.rowconfigure(1, weight=1)
-        self.project_header = ttk.Frame(workspace)
-        self.project_header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        self.project_header = ttk.Frame(workspace, style="Workspace.TFrame")
+        self.project_header.grid(row=0, column=0, sticky="ew", pady=(0, 20))
         self.project_header.columnconfigure(0, weight=1)
         self.header_title = ttk.Label(self.project_header, text="Проекты", style="Title.TLabel")
         self.header_title.grid(row=0, column=0, sticky="w")
-        self.header_project = ttk.Label(self.project_header, text="Проект не выбран", style="Muted.TLabel")
-        self.header_project.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        project_chip = ttk.Frame(self.project_header, style="ProjectChip.TFrame", padding=(11, 7))
+        project_chip.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        project_dot = tk.Canvas(project_chip, width=7, height=7, background=TOKENS["surface"], highlightthickness=0)
+        project_dot.pack(side="left", padx=(0, 7))
+        project_dot.create_oval(1, 1, 6, 6, fill=TOKENS["accent"], outline="")
+        self.header_project = ttk.Label(project_chip, text="Проект не выбран", style="Panel.Muted.TLabel")
+        self.header_project.pack(side="left")
         self.page_host = ttk.Frame(workspace)
         self.page_host.grid(row=1, column=0, sticky="nsew")
         self.page_host.rowconfigure(0, weight=1)
@@ -192,7 +249,7 @@ class DotLingoApp:
         self.show_page("projects")
 
     def _panel(self, parent: tk.Misc, **kwargs: Any) -> ttk.Frame:
-        return ttk.Frame(parent, style="Panel.TFrame", padding=kwargs.pop("padding", 14), **kwargs)
+        return ttk.Frame(parent, style="Panel.TFrame", padding=kwargs.pop("padding", TOKENS["spacing_md"]), **kwargs)
 
     def _heading(self, parent: tk.Misc, text: str) -> ttk.Label:
         return ttk.Label(parent, text=text, style="Section.TLabel")
@@ -237,6 +294,8 @@ class DotLingoApp:
             self._review_resize_job = None
         self._review_body = None
         self._review_progress_label = None
+        self._review_save_status = None
+        self._review_save_button = None
         self._review_refilter = None
         for child in self.content.winfo_children():
             child.destroy()
@@ -255,6 +314,7 @@ class DotLingoApp:
         self.header_project.configure(text=self.active.project["title"] if self.active else "Проект не выбран")
         for key, button in self.nav_buttons.items():
             button.configure(style="ActiveNav.TButton" if key == page else "Nav.TButton")
+            self.nav_indicators[key].configure(background=TOKENS["accent"] if key == page else TOKENS["sidebar"])
         self._clear_content()
         renderers = {
             "projects": self._show_projects,
@@ -279,27 +339,34 @@ class DotLingoApp:
             self._focus_review_search()
         return "break"
 
+    def _save_review_shortcut(self) -> str:
+        if self.page == "review" and (self._overlay is None or not self._overlay.winfo_exists()):
+            self._save_review_edit()
+        return "break"
+
     def _animate_page_change(self) -> None:
         if self.reduce_motion or self._closing or not self.content.winfo_exists():
             return
         self.content.grid_remove()
-        self.content.place(relx=0, rely=0, relwidth=1, relheight=1, x=12)
-        steps = 5
+        self.content.place(relx=0, rely=0, relwidth=1, relheight=1, x=10)
+        steps = 9
 
         def advance(step: int) -> None:
             if self._closing or not self.content.winfo_exists():
                 self._page_animation_job = None
                 return
-            offset = round(12 * (1 - step / steps))
+            progress = step / steps
+            eased = 1 - (1 - progress) ** 3
+            offset = round(10 * (1 - eased))
             self.content.place_configure(x=offset)
             if step >= steps:
                 self.content.place_forget()
                 self.content.grid(row=0, column=0, sticky="nsew")
                 self._page_animation_job = None
                 return
-            self._page_animation_job = self.root.after(16, lambda: advance(step + 1))
+            self._page_animation_job = self.root.after(18, lambda: advance(step + 1))
 
-        self._page_animation_job = self.root.after(16, lambda: advance(1))
+        self._page_animation_job = self.root.after(18, lambda: advance(1))
 
     def _stop_page_animation(self) -> None:
         if self._page_animation_job is None:
@@ -400,21 +467,33 @@ class DotLingoApp:
         top.columnconfigure(0, weight=1)
         ttk.Label(top, text="Рабочие проекты", style="Panel.TLabel", font=(TOKENS["font"], 12, "bold")).grid(row=0, column=0, sticky="w")
         ttk.Button(top, text="Новый проект", style="Accent.TButton", command=self._new_project).grid(row=0, column=1, sticky="e")
-        tree = ttk.Treeview(panel, columns=("direction", "documents", "updated"), show="headings", selectmode="browse")
-        tree.heading("direction", text="Языки")
-        tree.heading("documents", text="Документы")
-        tree.heading("updated", text="Изменён")
-        tree.column("direction", width=130, stretch=False)
-        tree.column("documents", width=110, stretch=False)
-        tree.column("updated", width=170, stretch=False)
-        tree.grid(row=1, column=0, sticky="nsew")
-        tree.bind("<Double-1>", lambda _: self._open_tree_project(tree))
-        for project in self.projects:
-            info = project.project
-            tree.insert("", "end", iid=info["id"], values=(f"{info['source_lang']} → {info['target_lang']}", len(project.documents()), info["updated_at"][:16].replace("T", " ")), text=info["title"])
-        if not self.projects:
-            ttk.Label(panel, text="Создайте проект, затем добавьте TXT, Markdown, DOCX или EPUB. PDF поддерживается только с текстовым слоем.", style="Muted.TLabel", wraplength=620).grid(row=2, column=0, sticky="w", pady=14)
-        ttk.Button(panel, text="Открыть выбранный проект", command=lambda: self._open_tree_project(tree)).grid(row=3, column=0, sticky="e", pady=(12, 0))
+        tree: ttk.Treeview | None = None
+        if self.projects:
+            tree = ttk.Treeview(panel, columns=("direction", "documents", "updated"), show="tree headings", selectmode="browse")
+            tree.heading("#0", text="Проект")
+            tree.heading("direction", text="Языки")
+            tree.heading("documents", text="Документы")
+            tree.heading("updated", text="Изменён")
+            tree.column("#0", width=330, minwidth=180)
+            tree.column("direction", width=140, stretch=False)
+            tree.column("documents", width=110, stretch=False, anchor="center")
+            tree.column("updated", width=170, stretch=False)
+            tree.grid(row=1, column=0, sticky="nsew")
+            tree.bind("<Double-1>", lambda _: self._open_tree_project(tree))
+            tree.bind("<Return>", lambda _: self._open_tree_project(tree))
+            for project in self.projects:
+                info = project.project
+                tree.insert("", "end", iid=info["id"], values=(f"{info['source_lang']} → {info['target_lang']}", len(project.documents()), info["updated_at"][:16].replace("T", " ")), text=info["title"])
+        else:
+            empty = ttk.Frame(panel, style="Panel.TFrame")
+            empty.grid(row=1, column=0, sticky="nsew")
+            empty.columnconfigure(0, weight=1)
+            empty.rowconfigure(0, weight=1)
+            ttk.Label(empty, text="Пока нет проектов\n\nСоздайте проект, чтобы добавить документ и начать перевод.", style="Panel.Muted.TLabel", wraplength=520, justify="center").grid(row=0, column=0)
+        open_button = ttk.Button(panel, text="Открыть выбранный проект", command=lambda: self._open_tree_project(tree) if tree else None)
+        open_button.grid(row=2, column=0, sticky="e", pady=(12, 0))
+        if tree is None:
+            open_button.configure(state="disabled")
 
     def _open_tree_project(self, tree: ttk.Treeview) -> None:
         selection = tree.selection()
@@ -475,7 +554,8 @@ class DotLingoApp:
         head.columnconfigure(0, weight=1)
         ttk.Label(head, text="Исходники хранятся отдельно и не изменяются при переводе.", style="Panel.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Button(head, text="Добавить файлы", command=self._import_files).grid(row=0, column=1, padx=(8, 0))
-        ttk.Button(head, text="Перевести выбранные", style="Accent.TButton", command=self._enqueue_selected_documents).grid(row=0, column=2, padx=(8, 0))
+        translate_button = ttk.Button(head, text="Перевести выбранные", style="Accent.TButton", command=self._enqueue_selected_documents, state="disabled")
+        translate_button.grid(row=0, column=2, padx=(8, 0))
         tree = ttk.Treeview(panel, columns=("format", "hash", "status", "exports"), show="tree headings", selectmode="extended")
         tree.heading("#0", text="Документ")
         tree.heading("format", text="Формат")
@@ -489,7 +569,21 @@ class DotLingoApp:
         tree.column("exports", width=95, stretch=False)
         tree.grid(row=1, column=0, sticky="nsew")
         tree.bind("<Double-1>", lambda _: self._open_selected_document(tree))
-        tree.bind("<<TreeviewSelect>>", lambda _: self._set_selected_doc(tree))
+        review_button = ttk.Button(panel, text="Проверить выбранный перевод", command=lambda: self._open_selected_document(tree), state="disabled")
+        review_button.grid(row=3, column=0, sticky="e", pady=(10, 0))
+        export_button = ttk.Button(panel, text="Открыть последний экспорт", command=self._open_latest_export, state="disabled")
+        export_button.grid(row=3, column=0, sticky="w", pady=(10, 0))
+
+        def sync_actions(_event: tk.Event[Any] | None = None) -> None:
+            self._set_selected_doc(tree)
+            has_selection = bool(tree.selection())
+            state = "normal" if has_selection else "disabled"
+            translate_button.configure(state=state)
+            review_button.configure(state=state)
+            has_export = bool(store.exports(self._selected_doc)) if has_selection else False
+            export_button.configure(state="normal" if has_export else "disabled")
+
+        tree.bind("<<TreeviewSelect>>", sync_actions)
         for document in store.documents():
             translations = store.translations(document.id)
             translated_count = len(translations)
@@ -498,9 +592,7 @@ class DotLingoApp:
             export_count = len(store.exports(document.id))
             tree.insert("", "end", iid=document.id, text=document.name, values=(document.format.upper(), document.sha256[:16] + "…", status, f"{export_count} файлов"))
         if not store.documents():
-            ttk.Label(panel, text="Добавьте книгу или документ. Ограничения экспорта для каждого формата будут показаны до запуска.", style="Muted.TLabel", wraplength=650).grid(row=2, column=0, sticky="w", pady=14)
-        ttk.Button(panel, text="Проверить выбранный перевод", command=lambda: self._open_selected_document(tree)).grid(row=3, column=0, sticky="e", pady=(10, 0))
-        ttk.Button(panel, text="Открыть последний экспорт", command=self._open_latest_export).grid(row=3, column=0, sticky="w", pady=(10, 0))
+            ttk.Label(panel, text="Добавьте книгу или документ. Поддерживаются TXT, Markdown, DOCX, EPUB и PDF с текстовым слоем.", style="Panel.Muted.TLabel", wraplength=650).grid(row=2, column=0, sticky="w", pady=14)
 
     def _set_selected_doc(self, tree: ttk.Treeview) -> None:
         selection = tree.selection()
@@ -636,15 +728,44 @@ class DotLingoApp:
             for task in project.tasks():
                 task_id = task["id"]
                 tree.insert("", "end", iid=task_id, values=self._queue_values(project, task), tags=(task["status"],))
-        tree.tag_configure("complete", foreground=TOKENS["accent"])
+        tree.tag_configure("queued", foreground=TOKENS["muted"])
+        tree.tag_configure("running", foreground=TOKENS["accent"])
+        tree.tag_configure("paused", foreground=TOKENS["warning"])
+        tree.tag_configure("complete", foreground=TOKENS["success"])
         tree.tag_configure("failed", foreground=TOKENS["error"])
+        tree.tag_configure("cancelled", foreground=TOKENS["muted"])
+        tree.tag_configure("interrupted", foreground=TOKENS["warning"])
+
+        detail = ttk.Frame(panel, style="Panel.TFrame")
+        detail.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        detail.columnconfigure(1, weight=1)
+        status_label = ttk.Label(detail, text="Задача не выбрана", style="Panel.TLabel", font=(TOKENS["font"], 10, "bold"))
+        status_label.grid(row=0, column=0, sticky="w", padx=(0, 16))
+        progress_label = ttk.Label(detail, text="Выберите перевод, чтобы посмотреть подробности.", style="Panel.Muted.TLabel")
+        progress_label.grid(row=0, column=1, sticky="w")
+        progress_bar = ttk.Progressbar(detail, mode="determinate", maximum=100, value=0)
+        progress_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(9, 0))
+        tree.bind("<<TreeviewSelect>>", lambda _event: self._update_queue_detail())
+
         button_row = ttk.Frame(panel, style="Panel.TFrame")
-        button_row.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        ttk.Button(button_row, text="Продолжить / повторить", command=lambda: self._queue_action(tree, "resume")).pack(side="left")
-        ttk.Button(button_row, text="Пауза", command=lambda: self._queue_action(tree, "pause")).pack(side="left", padx=7)
-        ttk.Button(button_row, text="Отменить", command=lambda: self._queue_action(tree, "cancel")).pack(side="left")
+        button_row.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        resume_button = ttk.Button(button_row, text="Продолжить / повторить", command=lambda: self._queue_action(tree, "resume"), state="disabled")
+        resume_button.pack(side="left")
+        pause_button = ttk.Button(button_row, text="Пауза", command=lambda: self._queue_action(tree, "pause"), state="disabled")
+        pause_button.pack(side="left", padx=7)
+        cancel_button = ttk.Button(button_row, text="Отменить", command=lambda: self._queue_action(tree, "cancel"), state="disabled")
+        cancel_button.pack(side="left")
         ttk.Button(button_row, text="Обновить", command=lambda: self.show_page("queue")).pack(side="right")
         self._queue_tree = tree
+        self._queue_controls = {
+            "status": status_label,
+            "progress": progress_bar,
+            "description": progress_label,
+            "resume": resume_button,
+            "pause": pause_button,
+            "cancel": cancel_button,
+        }
+        self._update_queue_detail()
 
     def _queue_values(self, project: ProjectStore, task: dict[str, Any]) -> tuple[str, str, str, str, str]:
         document = next((item for item in project.documents() if item.id == task["document_id"]), None)
@@ -676,6 +797,57 @@ class DotLingoApp:
             tree.item(task_id, values=self._queue_values(project, task), tags=(task["status"],))
         else:
             tree.insert("", "end", iid=task_id, values=self._queue_values(project, task), tags=(task["status"],))
+        self._update_queue_detail()
+
+    def _update_queue_detail(self) -> None:
+        controls = getattr(self, "_queue_controls", None)
+        tree = getattr(self, "_queue_tree", None)
+        if not controls or tree is None or not tree.winfo_exists():
+            return
+        selection = tree.selection()
+        task = None
+        project = None
+        if selection:
+            task_id = selection[0]
+            for candidate in self.projects:
+                try:
+                    task = candidate.task(task_id)
+                except KeyError:
+                    continue
+                project = candidate
+                break
+        if task is None or project is None:
+            controls["status"].configure(text="Задача не выбрана", foreground=TOKENS["muted"])
+            controls["description"].configure(text="Выберите перевод, чтобы посмотреть подробности.")
+            controls["progress"].configure(value=0)
+            for key in ("resume", "pause", "cancel"):
+                controls[key].configure(state="disabled")
+            return
+
+        status = task["status"]
+        colors = {
+            "queued": TOKENS["muted"],
+            "running": TOKENS["accent"],
+            "paused": TOKENS["warning"],
+            "complete": TOKENS["success"],
+            "failed": TOKENS["error"],
+            "cancelled": TOKENS["muted"],
+            "interrupted": TOKENS["warning"],
+        }
+        document = next((item for item in project.documents() if item.id == task["document_id"]), None)
+        model = next((item["name"] for item in catalog() if item["id"] == task["model_id"]), task["model_id"])
+        completed = int(task["completed"])
+        total = int(task["total"])
+        amount = min(100, completed * 100 / total) if total else 0
+        detail = f"{document.name if document else 'Документ'} · {completed} из {total} фрагментов · {model}"
+        if task["error"]:
+            detail += f" · {task['error']}"
+        controls["status"].configure(text=self._status_label(status), foreground=colors.get(status, TOKENS["text"]))
+        controls["description"].configure(text=detail)
+        controls["progress"].configure(value=amount)
+        controls["resume"].configure(state="normal" if status in {"paused", "interrupted", "failed", "cancelled"} else "disabled")
+        controls["pause"].configure(state="normal" if status in {"queued", "running"} else "disabled")
+        controls["cancel"].configure(state="normal" if status in {"queued", "running", "paused"} else "disabled")
 
     @staticmethod
     def _status_label(status: str) -> str:
@@ -737,8 +909,11 @@ class DotLingoApp:
         ttk.Label(toolbar, text=document.name, style="Section.TLabel").grid(row=0, column=0, sticky="w")
         self._review_progress_label = ttk.Label(toolbar, text=f"Переведено блоков: {complete}/{len(blocks)}", style="Muted.TLabel")
         self._review_progress_label.grid(row=0, column=1, sticky="e", padx=10)
-        ttk.Button(toolbar, text="Сохранить правку", command=self._save_review_edit).grid(row=0, column=2, padx=4)
-        ttk.Button(toolbar, text="Экспорт…", style="Accent.TButton", command=self._export_current).grid(row=0, column=3)
+        self._review_save_status = ttk.Label(toolbar, text="Сохранено", style="Muted.TLabel")
+        self._review_save_status.grid(row=0, column=2, padx=(8, 5))
+        self._review_save_button = ttk.Button(toolbar, text="Сохранить", command=self._save_review_edit, state="disabled")
+        self._review_save_button.grid(row=0, column=3, padx=4)
+        ttk.Button(toolbar, text="Экспорт…", style="Accent.TButton", command=self._export_current).grid(row=0, column=4)
 
         body = ttk.Panedwindow(self.content, orient="horizontal")
         body.grid(row=1, column=0, sticky="nsew")
@@ -773,6 +948,7 @@ class DotLingoApp:
         self._review_source = source_text
         self._review_tree = tree
         self._review_search = search
+        target_text.bind("<<Modified>>", self._update_review_edit_feedback)
         self._review_block = None
         self._review_block_orders = {block.order for block in blocks}
         search_state: dict[str, Any] = {"job": None, "query": ""}
@@ -878,6 +1054,7 @@ class DotLingoApp:
             self._review_text_original = current
             target_text.edit_modified(False)
             self._review_loading = False
+            self._update_review_edit_feedback()
 
         tree.bind("<<TreeviewSelect>>", lambda _: select_block(tree.selection()[0]) if tree.selection() else None)
         def schedule_search(_event: tk.Event[Any] | None = None) -> None:
@@ -955,6 +1132,10 @@ class DotLingoApp:
         if not store or self._review_block is None or not hasattr(self, "_review_target"):
             return
         text = self._review_target.get("1.0", "end-1c")
+        if text == self._review_text_original:
+            self._review_target.edit_modified(False)
+            self._update_review_edit_feedback()
+            return
         store.save_edit(self._selected_doc, self._review_block, text)
         self._review_text_original = text
         self._review_target.edit_modified(False)
@@ -967,7 +1148,23 @@ class DotLingoApp:
         if self._review_progress_label is not None and self._review_progress_label.winfo_exists():
             complete = sum(1 for order in self._review_block_orders if order in translations)
             self._review_progress_label.configure(text=f"Переведено блоков: {complete}/{len(self._review_block_orders)}")
+        self._update_review_edit_feedback()
         self.sidebar_status.configure(text="Правка перевода сохранена")
+
+    def _update_review_edit_feedback(self, _event: tk.Event[Any] | None = None) -> None:
+        if self._review_loading:
+            return
+        target = getattr(self, "_review_target", None)
+        if target is None or not target.winfo_exists():
+            return
+        changed = target.get("1.0", "end-1c") != self._review_text_original
+        if self._review_save_button is not None and self._review_save_button.winfo_exists():
+            self._review_save_button.configure(state="normal" if changed else "disabled")
+        if self._review_save_status is not None and self._review_save_status.winfo_exists():
+            self._review_save_status.configure(
+                text="Есть несохранённые изменения" if changed else "Сохранено",
+                foreground=TOKENS["warning"] if changed else TOKENS["muted"],
+            )
 
     def _export_current(self) -> None:
         store = self._active_store()
@@ -1054,8 +1251,8 @@ class DotLingoApp:
             run_state = "Вес установлен; SHA-256 проверяется перед запуском задачи" if installed_now else "Вес не установлен"
             if not model.get("tested_on_windows"):
                 run_state += " · точный Windows запуск ещё не проверен"
-            ttk.Label(card, text=f"{requirement}\n{compatibility}\nСостояние: {run_state}\nПары языков: {model['languages']}", style="Muted.TLabel", wraplength=790, justify="left").grid(row=2, column=0, sticky="w", pady=6)
-            ttk.Label(card, text=model.get("notes", ""), style="Muted.TLabel", wraplength=790, justify="left").grid(row=3, column=0, sticky="w", pady=(0, 5))
+            ttk.Label(card, text=f"{requirement}\n{compatibility}\nСостояние: {run_state}\nПары языков: {model['languages']}", style="Panel.Muted.TLabel", wraplength=790, justify="left").grid(row=2, column=0, sticky="w", pady=6)
+            ttk.Label(card, text=model.get("notes", ""), style="Panel.Muted.TLabel", wraplength=790, justify="left").grid(row=3, column=0, sticky="w", pady=(0, 5))
             action = ttk.Frame(card, style="Panel.TFrame")
             action.grid(row=4, column=0, sticky="ew")
             ttk.Button(action, text="Лицензия и карточка", command=lambda url=model["license_url"]: webbrowser.open(url)).pack(side="left")
@@ -1065,7 +1262,7 @@ class DotLingoApp:
                 text = "Проверить модель" if installed_now else "Скачать модель"
                 ttk.Button(action, text=text, style="Accent.TButton", command=lambda item=model: self._consent_and_download(item)).pack(side="right")
             else:
-                ttk.Label(action, text="Загрузка отключена до проверки runtime", style="Muted.TLabel").pack(side="right")
+                ttk.Label(action, text="Загрузка отключена до проверки runtime", style="Panel.Muted.TLabel").pack(side="right")
         self.root.after_idle(lambda: canvas.configure(scrollregion=canvas.bbox("all")))
 
     def _consent_and_download(self, model: dict[str, Any]) -> None:
@@ -1108,10 +1305,10 @@ class DotLingoApp:
         self._overlay_escape = cancel_download
         header = ttk.Frame(panel, style="Panel.TFrame")
         header.pack(fill="x")
-        ttk.Label(header, text=f"Загрузка · {model['name']}", style="Section.TLabel").pack(side="left", anchor="w")
+        ttk.Label(header, text=f"Загрузка · {model['name']}", style="Panel.Section.TLabel").pack(side="left", anchor="w")
         close_button = ttk.Button(header, text="×", width=3, command=cancel_download)
         close_button.pack(side="right")
-        ttk.Label(panel, text="Файл проверяется по размеру и SHA-256 перед активацией.", style="Muted.TLabel").pack(anchor="w", pady=(12, 4))
+        ttk.Label(panel, text="Файл проверяется по размеру и SHA-256 перед активацией.", style="Panel.Muted.TLabel").pack(anchor="w", pady=(12, 4))
         label = ttk.Label(
             panel,
             text=f"Получено 0 из {_format_size(model['size_bytes'])} · ETA не показывается",
@@ -1236,11 +1433,11 @@ class DotLingoApp:
 
             ttk.Button(panel, text="Сохранить настройки проекта", style="Accent.TButton", command=save_project_settings).grid(row=7, column=0, sticky="e")
         hardware_label = self._hardware_text()
-        self._settings_hardware = ttk.Label(panel, text=hardware_label, style="Muted.TLabel", justify="left", wraplength=720)
+        self._settings_hardware = ttk.Label(panel, text=hardware_label, style="Panel.Muted.TLabel", justify="left", wraplength=720)
         self._settings_hardware.grid(row=8, column=0, sticky="w", pady=(18, 7))
         ttk.Button(panel, text="Проверить устройство", command=self._detect_hardware).grid(row=9, column=0, sticky="w")
         ttk.Checkbutton(panel, text="Уменьшить движение и переходы интерфейса", variable=reduce_var, command=lambda: self._save_motion(reduce_var.get())).grid(row=10, column=0, sticky="w", pady=(16, 0))
-        ttk.Label(panel, text=f"Данные проекта: {self.projects_dir}\nВеса моделей: {self.models_dir}", style="Muted.TLabel", wraplength=700).grid(row=11, column=0, sticky="w", pady=(18, 0))
+        ttk.Label(panel, text=f"Данные проекта: {self.projects_dir}\nВеса моделей: {self.models_dir}", style="Panel.Muted.TLabel", wraplength=700).grid(row=11, column=0, sticky="w", pady=(18, 0))
 
     def _settings_form_values(self) -> tuple[str, str, str] | None:
         form = self._settings_form
@@ -1335,9 +1532,9 @@ class DotLingoApp:
         panel.columnconfigure(0, weight=1)
         header = ttk.Frame(panel, style="Panel.TFrame")
         header.grid(row=0, column=0, sticky="ew")
-        ttk.Label(header, text="Подготовка локального перевода", style="Section.TLabel").pack(side="left", anchor="w")
+        ttk.Label(header, text="Подготовка локального перевода", style="Panel.Section.TLabel").pack(side="left", anchor="w")
         ttk.Button(header, text="Отложить", command=lambda: finish()).pack(side="right")
-        step_label = ttk.Label(panel, text="", style="Muted.TLabel")
+        step_label = ttk.Label(panel, text="", style="Panel.Muted.TLabel")
         step_label.grid(row=1, column=0, sticky="w", pady=(14, 6))
         step_progress = ttk.Progressbar(panel, mode="determinate", maximum=5)
         step_progress.grid(row=2, column=0, sticky="ew", pady=(0, 12))
@@ -1398,7 +1595,7 @@ class DotLingoApp:
             focus_target: ttk.Widget | None = None
             if step == 0:
                 ttk.Label(body, text="Проверяем доступную RAM, свободное место, GPU и поддержку offload именно в llama.cpp.", style="Panel.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
-                details = ttk.Label(body, text="Проверка выполняется локально. Если значение получить нельзя, оно останется неизвестным.", style="Muted.TLabel", wraplength=680, justify="left")
+                details = ttk.Label(body, text="Проверка выполняется локально. Если значение получить нельзя, оно останется неизвестным.", style="Panel.Muted.TLabel", wraplength=680, justify="left")
                 details.pack(anchor="w", pady=8)
                 continue_button = ttk.Button(buttons, text="Продолжить", style="Accent.TButton", command=lambda: render(1), state="disabled")
                 continue_button.pack(side="right")
@@ -1417,8 +1614,8 @@ class DotLingoApp:
                 selected = next((item for item in catalog() if item["id"] == state["selected"]), catalog()[0])
                 estimate = f"Вариант для оценки: {selected['name']} · {_format_size(selected['size_bytes'])}. Размер загрузки указан по карточке модели."
                 ttk.Label(body, text=estimate, style="Panel.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
-                ttk.Label(body, text=self._hardware_text(), style="Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
-                ttk.Label(body, text="Установка модели необязательна. Можно отложить её и выбрать модель позже в разделе «Модели».", style="Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
+                ttk.Label(body, text=self._hardware_text(), style="Panel.Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
+                ttk.Label(body, text="Установка модели необязательна. Можно отложить её и выбрать модель позже в разделе «Модели».", style="Panel.Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
                 ttk.Button(buttons, text="Назад", command=lambda: render(0)).pack(side="left")
                 focus_target = ttk.Button(buttons, text="Выбрать модель", style="Accent.TButton", command=lambda: render(2))
                 focus_target.pack(side="right")
@@ -1440,7 +1637,7 @@ class DotLingoApp:
                 consent_var = tk.BooleanVar(value=False)
                 consent = ttk.Checkbutton(body, text="Я ознакомился с лицензией выбранной модели и соглашаюсь скачать её вес.", variable=consent_var, wraplength=680)
                 consent.pack(anchor="w", pady=(12, 4))
-                ttk.Label(body, text="Лицензии различаются. Размер, версия и SHA-256 закреплены в карточке модели. Неизвестная совместимость не считается подтверждённой.", style="Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=5)
+                ttk.Label(body, text="Лицензии различаются. Размер, версия и SHA-256 закреплены в карточке модели. Неизвестная совместимость не считается подтверждённой.", style="Panel.Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=5)
 
                 def start_download() -> None:
                     item = next(entry for entry in catalog() if entry["id"] == model_var.get())
@@ -1472,7 +1669,7 @@ class DotLingoApp:
                 progress = ttk.Progressbar(body, mode="indeterminate")
                 progress.pack(fill="x", pady=10)
                 progress.start(12)
-                status = ttk.Label(body, text="Ожидание ответа сервера · общий прогресс и ETA могут быть неизвестны", style="Muted.TLabel", wraplength=680)
+                status = ttk.Label(body, text="Ожидание ответа сервера · общий прогресс и ETA могут быть неизвестны", style="Panel.Muted.TLabel", wraplength=680)
                 status.pack(anchor="w")
                 self._wizard_progress = (progress, status)
 
@@ -1491,8 +1688,8 @@ class DotLingoApp:
             else:
                 ttk.Label(body, text="DotLingo готов. Исходники, проекты и веса хранятся отдельно.", style="Panel.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
                 runtime_note = "Runtime llama.cpp найден." if self._runtime_available() else "Runtime llama.cpp не найден в текущем окружении. Для перевода нужен установленный runtime и проверенная модель."
-                ttk.Label(body, text=runtime_note, style="Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
-                ttk.Label(body, text="OCR для сканированных PDF не устанавливается автоматически.", style="Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
+                ttk.Label(body, text=runtime_note, style="Panel.Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
+                ttk.Label(body, text="OCR для сканированных PDF не устанавливается автоматически.", style="Panel.Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
                 focus_target = ttk.Button(buttons, text="Готово", style="Accent.TButton", command=finish)
                 focus_target.pack(side="right")
             if focus_target is not None:
