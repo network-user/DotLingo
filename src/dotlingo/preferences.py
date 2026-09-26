@@ -12,6 +12,7 @@ from dotlingo.paths import user_data_root
 DEFAULTS: dict[str, Any] = {
     "setup_seen": False,
     "reduce_motion": False,
+    "theme": "dark",
     "last_project": "",
 }
 

@@ -7,7 +7,14 @@ from dotlingo.preferences import load_preferences, save_preferences
 
 
 def test_save_preferences_flushes_and_atomically_round_trips(tmp_path: Path) -> None:
-    expected = {"setup_seen": True, "reduce_motion": False, "last_project": "project-1"}
+    expected = {
+        "setup_seen": True,
+        "reduce_motion": False,
+        "theme": "dark",
+        "last_project": "project-1",
+    }
+
+    assert load_preferences(tmp_path)["theme"] == "dark"
 
     save_preferences(expected, tmp_path)
 
@@ -19,7 +26,12 @@ def test_save_preferences_flushes_and_atomically_round_trips(tmp_path: Path) -> 
 def test_save_preferences_survives_windows_bad_descriptor_fsync(
     tmp_path: Path, monkeypatch
 ) -> None:
-    expected = {"setup_seen": True, "reduce_motion": False, "last_project": "project-ebadf"}
+    expected = {
+        "setup_seen": True,
+        "reduce_motion": False,
+        "theme": "dark",
+        "last_project": "project-ebadf",
+    }
 
     def unsupported_fsync(_descriptor: int) -> None:
         raise OSError(errno.EBADF, "Bad file descriptor")

@@ -26,7 +26,7 @@ from dotlingo.paths import user_data_root
 from dotlingo.preferences import load_preferences, save_preferences
 from dotlingo.storage import ProjectStore, list_projects
 from dotlingo.task_queue import TaskQueue, build_chunks
-from dotlingo.theme import TOKENS
+from dotlingo.theme import THEME_LABELS, TOKENS, set_theme
 
 PAGES = (
     ("documents", "Перевод"),
@@ -61,7 +61,9 @@ class DotLingoApp:
         self.active: ProjectStore | None = None
         self.page = "projects"
         self.hardware: HardwareSnapshot | None = None
-        self.reduce_motion = bool(load_preferences(self.preferences_root)["reduce_motion"])
+        preferences = load_preferences(self.preferences_root)
+        self.reduce_motion = bool(preferences["reduce_motion"])
+        self.theme = set_theme(preferences.get("theme", "dark"))
         self._selected_doc = ""
         self._review_order: list[int] = []
         self._review_block: int | None = None
@@ -86,6 +88,8 @@ class DotLingoApp:
         self._documents_tree: ttk.Treeview | None = None
         self._document_selection_label: ttk.Label | None = None
         self._settings_form: tuple[Any, ...] | None = None
+        self._theme_var: tk.StringVar | None = None
+        self._status_dot: tk.Canvas | None = None
         self._closing = False
         self._pending_close = False
         self._close_wait_job: str | None = None
@@ -237,7 +241,7 @@ class DotLingoApp:
         style.configure(
             "Accent.TButton",
             background=colors["accent"],
-            foreground="#ffffff",
+            foreground=colors["accent_on"],
             padding=(16, 10),
             borderwidth=0,
             font=(colors["font"], colors["font_body"], "bold"),
@@ -245,7 +249,7 @@ class DotLingoApp:
         style.map(
             "Accent.TButton",
             background=[("disabled", colors["border"]), ("pressed", colors["accent_dim"]), ("active", colors["accent_dim"])],
-            foreground=[("disabled", colors["muted"])],
+            foreground=[("disabled", colors["muted"]), ("pressed", "#ffffff"), ("active", "#ffffff")],
         )
         style.configure(
             "Nav.TButton",
@@ -384,6 +388,100 @@ class DotLingoApp:
             )
         style.configure("TSeparator", background=colors["border_soft"])
 
+    def _change_theme(self, _event: tk.Event[Any] | None = None) -> None:
+        if self._theme_var is None:
+            return
+        selected = next(
+            (name for name, label in THEME_LABELS.items() if label == self._theme_var.get()),
+            "dark",
+        )
+        if selected == self.theme:
+            return
+        preferences = load_preferences(self.preferences_root)
+        preferences["theme"] = selected
+        try:
+            save_preferences(preferences, self.preferences_root)
+        except OSError as exc:
+            self._theme_var.set(THEME_LABELS[self.theme])
+            self.sidebar_status.configure(text=f"Не удалось сохранить тему: {exc}")
+            return
+
+        self.theme = set_theme(selected)
+        self._style()
+        self._refresh_theme_widgets()
+        self.sidebar_status.configure(text=f"Включена {THEME_LABELS[selected].lower()} тема")
+
+    def _refresh_theme_widgets(self) -> None:
+        if self._status_dot is not None and self._status_dot.winfo_exists():
+            self._status_dot.configure(background=TOKENS["bg"])
+            self._status_dot.itemconfigure("all", fill=TOKENS["accent"])
+        self._stop_nav_animation()
+        for page, indicator in self.nav_indicators.items():
+            if indicator.winfo_exists():
+                indicator.configure(
+                    background=TOKENS["accent"] if page == self.page else TOKENS["bg"]
+                )
+
+        tag_colors = {
+            "complete": TOKENS["success"],
+            "in_progress": TOKENS["accent"],
+            "queued": TOKENS["muted"],
+            "running": TOKENS["accent"],
+            "paused": TOKENS["warning"],
+            "failed": TOKENS["error"],
+            "cancelled": TOKENS["muted"],
+            "interrupted": TOKENS["warning"],
+        }
+
+        def recolor(parent: tk.Misc) -> None:
+            try:
+                children = parent.winfo_children()
+            except tk.TclError:
+                return
+            for widget in children:
+                try:
+                    if isinstance(widget, tk.Text):
+                        widget.configure(
+                            background=TOKENS["surface_raised"],
+                            foreground=TOKENS["text"],
+                            insertbackground=TOKENS["accent"],
+                            selectbackground=TOKENS["highlight"],
+                            highlightbackground=TOKENS["border"],
+                            highlightcolor=TOKENS["border_focus"],
+                        )
+                    elif isinstance(widget, tk.Listbox):
+                        widget.configure(
+                            background=TOKENS["surface_raised"],
+                            foreground=TOKENS["text"],
+                            selectbackground=TOKENS["highlight"],
+                            selectforeground=TOKENS["text"],
+                            highlightbackground=TOKENS["border"],
+                            highlightcolor=TOKENS["border_focus"],
+                        )
+                    elif isinstance(widget, tk.Canvas):
+                        widget.configure(
+                            background=TOKENS["bg"],
+                            highlightbackground=TOKENS["bg"],
+                        )
+                    elif isinstance(widget, tk.Frame):
+                        widget.configure(background=TOKENS["bg"])
+                    elif isinstance(widget, tk.Toplevel):
+                        widget.configure(background=TOKENS["bg"])
+
+                    if isinstance(widget, ttk.Treeview):
+                        for tag in widget.tag_names():
+                            if tag in tag_colors:
+                                widget.tag_configure(tag, foreground=tag_colors[tag])
+                except tk.TclError:
+                    pass
+                recolor(widget)
+
+        recolor(self.root)
+        if self.page == "queue":
+            self._update_queue_detail()
+        elif self.page == "review":
+            self._update_review_edit_feedback()
+
     def _build_shell(self) -> None:
         outer = ttk.Frame(self.root, style="Workspace.TFrame", padding=(28, 18, 28, 14))
         outer.pack(fill="both", expand=True)
@@ -399,9 +497,21 @@ class DotLingoApp:
         ttk.Label(brand_row, text="локальная переводческая мастерская", style="Muted.TLabel").grid(
             row=0, column=1, sticky="w", padx=(13, 0), pady=(3, 0)
         )
-        ttk.Label(brand_row, text="ФАЙЛЫ ОСТАЮТСЯ НА УСТРОЙСТВЕ", style="Muted.TLabel").grid(
-            row=0, column=2, sticky="e", pady=(3, 0)
+        theme_control = ttk.Frame(brand_row, style="Workspace.TFrame")
+        theme_control.grid(row=0, column=2, sticky="e")
+        ttk.Label(theme_control, text="Тема", style="Muted.TLabel").pack(
+            side="left", padx=(0, 8), pady=(3, 0)
         )
+        self._theme_var = tk.StringVar(value=THEME_LABELS[self.theme])
+        theme_combo = ttk.Combobox(
+            theme_control,
+            textvariable=self._theme_var,
+            values=tuple(THEME_LABELS.values()),
+            state="readonly",
+            width=11,
+        )
+        theme_combo.pack(side="left")
+        theme_combo.bind("<<ComboboxSelected>>", self._change_theme)
 
         navigation = ttk.Frame(outer, style="Workspace.TFrame")
         navigation.grid(row=1, column=0, sticky="ew", pady=(17, 12))
@@ -459,6 +569,7 @@ class DotLingoApp:
         )
         status_dot.grid(row=0, column=0, sticky="w", padx=(0, 8))
         status_dot.create_oval(1, 1, 8, 8, fill=TOKENS["accent"], outline="")
+        self._status_dot = status_dot
         self.sidebar_status = ttk.Label(
             status_row,
             text="Локальная работа · без облака",
@@ -2230,7 +2341,7 @@ class DotLingoApp:
                 height=6,
                 bg=TOKENS["surface_raised"],
                 fg=TOKENS["text"],
-                selectbackground=TOKENS["accent_dim"],
+                selectbackground=TOKENS["highlight"],
                 selectforeground=TOKENS["text"],
                 highlightthickness=1,
                 highlightbackground=TOKENS["border"],
