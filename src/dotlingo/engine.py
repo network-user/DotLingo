@@ -34,6 +34,8 @@ def _worker_main(
     responses: Any,
     paused: Any,
     cancelled: Any,
+    stop_sequences: tuple[str, ...] | None,
+    append_no_think: bool,
 ) -> None:
     """Load untrusted data weights in a child process and expose only text requests."""
     try:
@@ -58,7 +60,10 @@ def _worker_main(
         try:
             messages = [
                 {"role": "system", "content": request["system"]},
-                {"role": "user", "content": request["user"] + "\n/no_think"},
+                {
+                    "role": "user",
+                    "content": request["user"] + ("\n/no_think" if append_no_think else ""),
+                },
             ]
             chunks: list[str] = []
             stream = model.create_chat_completion(
@@ -67,7 +72,7 @@ def _worker_main(
                 temperature=0.15,
                 top_p=0.85,
                 max_tokens=request["max_tokens"],
-                stop=["<|im_end|>", "<|fim_suffix|>"],
+                stop=list(stop_sequences) if stop_sequences else None,
             )
             for item in stream:
                 while not paused.is_set():
@@ -122,6 +127,8 @@ class InferenceProcess:
         threads: int,
         *,
         use_gpu: bool = False,
+        stop_sequences: tuple[str, ...] | None = ("<|im_end|>", "<|fim_suffix|>"),
+        append_no_think: bool = True,
         startup_timeout: float = 180,
         idle_timeout: float = 240,
     ) -> None:
@@ -142,6 +149,7 @@ class InferenceProcess:
             args=(
                 str(self.model_path), context_size, threads, self.gpu_layers,
                 self._requests, self._responses, self._paused, self._cancelled,
+                stop_sequences, append_no_think,
             ),
             name="DotLingo inference",
             daemon=True,

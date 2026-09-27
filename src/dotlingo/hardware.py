@@ -29,9 +29,7 @@ class HardwareSnapshot:
             return "слабое устройство"
         if self.ram_total_gb < 32:
             return "среднее устройство"
-        if self.llama_gpu_offload_available:
-            return "мощная система (backend сообщает GPU-поддержку)"
-        return "мощный CPU"
+        return "мощное устройство"
 
 
 def _gpus() -> tuple[tuple[str, ...] | None, tuple[float | None, ...] | None]:
@@ -81,7 +79,10 @@ def detect(data_path: Path) -> HardwareSnapshot:
     except (OSError, AttributeError):
         total, available = None, None
     try:
-        free = round(shutil.disk_usage(data_path).free / 1024**3, 1)
+        disk_path = Path(data_path)
+        while not disk_path.exists() and disk_path.parent != disk_path:
+            disk_path = disk_path.parent
+        free = round(shutil.disk_usage(disk_path).free / 1024**3, 1)
     except OSError:
         free = None
     threads = os.cpu_count()
@@ -105,5 +106,59 @@ def assess_model(snapshot: HardwareSnapshot, model: dict) -> tuple[str, str]:
     if snapshot.ram_available_gb < required_ram:
         return "no", f"Сейчас доступно {snapshot.ram_available_gb:.1f} ГБ RAM; ориентир модели — {required_ram:.1f} ГБ."
     if snapshot.llama_gpu_offload_available:
-        return "gpu_unverified", "Backend собран с GPU-поддержкой; запуск этой модели, контекст и VRAM не проверены."
+        return "cpu_unverified", f"RAM-ориентир ({required_ram:.1f} ГБ) помещается; DotLingo пока запускает перевод на CPU, GPU offload модели не проверен."
     return "cpu_unverified", f"Расчётный ориентир RAM ({required_ram:.1f} ГБ) помещается, но CPU-запуск и пиковая память этой модели не проверены."
+
+
+def recommend_model(
+    snapshot: HardwareSnapshot,
+    models: list[dict],
+    installed_ids: set[str] | None = None,
+) -> tuple[dict | None, str]:
+    """Pick the largest documented model that fits with a small RAM reserve."""
+    installed_ids = installed_ids or set()
+    candidates = [
+        model
+        for model in models
+        if model.get("status") == "available"
+        and isinstance(model.get("estimated_ram_gb"), (int, float))
+        and isinstance(model.get("size_bytes"), int)
+    ]
+    if not candidates:
+        return None, "Нет моделей с закреплённым размером и оценкой памяти."
+    candidates.sort(key=lambda model: float(model["estimated_ram_gb"]), reverse=True)
+    eligible = []
+    for model in candidates:
+        ram = float(model["estimated_ram_gb"])
+        disk_required = int(model["size_bytes"] * 1.1)
+        memory_fits = snapshot.ram_available_gb is not None and snapshot.ram_available_gb >= ram + 1.0
+        disk_fits = (
+            model["id"] in installed_ids
+            or snapshot.disk_free_gb is not None
+            and snapshot.disk_free_gb >= disk_required / 1024**3
+        )
+        if memory_fits and disk_fits:
+            eligible.append(model)
+    if eligible:
+        choice = eligible[0]
+        reason = (
+            f"Подобрана самая крупная доступная оценка среди моделей, которым хватает места: "
+            f"ориентир {choice['estimated_ram_gb']:.1f} ГБ RAM при свободных "
+            f"{snapshot.ram_available_gb:.1f} ГБ с резервом 1 ГБ. Значение расчётное, не измерено."
+        )
+        if not snapshot.llama_runtime_available:
+            reason += " Для запуска сначала потребуется llama-cpp-python."
+        return choice, reason
+
+    smallest = candidates[-1]
+    if snapshot.disk_free_gb is None:
+        reason = "Свободное место определить не удалось; выбрана модель с наименьшей расчётной потребностью."
+    elif snapshot.ram_available_gb is None:
+        reason = "RAM определить не удалось; выбрана модель с наименьшей расчётной потребностью."
+    elif snapshot.ram_available_gb < float(smallest["estimated_ram_gb"]) + 1.0:
+        reason = "Свободной RAM мало даже для минимального резерва; выбрана наименьшая модель."
+    else:
+        reason = "Свободного места мало для моделей-кандидатов; выбрана наименьшая модель."
+    if not snapshot.llama_runtime_available:
+        reason += " Для запуска сначала потребуется llama-cpp-python."
+    return smallest, reason

@@ -181,7 +181,7 @@ class TaskQueue:
             self._emit(task_id, "running", "Подготовка локальной модели.")
             if importlib.util.find_spec("llama_cpp") is None:
                 raise InferenceError("Локальный inference-runtime не установлен. Установите llama-cpp-python.")
-            model = get_model(task["model_id"])
+            model = get_model(task["model_id"], self.model_root)
             path = model_path(model, self.model_root)
             verify_model(path, model)
             context_size = int(model.get("default_context", 4096))
@@ -191,6 +191,8 @@ class TaskQueue:
                 context_size,
                 max(1, min(8, cpu_threads)),
                 use_gpu=False,
+                stop_sequences=None if model.get("custom") else ("<|im_end|>", "<|fim_suffix|>"),
+                append_no_think=not model.get("custom"),
             )
             with self._lock:
                 self._engine = engine

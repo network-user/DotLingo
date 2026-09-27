@@ -10,10 +10,13 @@ flowchart LR
   Queue --> Proc[Spawned inference process]
   Proc --> Adapter[GGUF adapter: llama-cpp-python]
   App --> Download[Consent + pinned model download]
+  App --> Device[Hardware probe + resource recommendation]
+  App --> Custom[Confirmed local GGUF import + SHA-256]
   Download --> Stage[.part → size/SHA/GGUF check → atomic activation]
   Queue --> Store
   Formats --> Store
   Download --> Models[(LOCALAPPDATA\\DotLingo\\models)]
+  Custom --> Models
 ```
 
 ## Слои
@@ -25,7 +28,8 @@ flowchart LR
 - `task_queue.py`: один последовательный worker на проект, блоки сохраняются фрагментами; остановка завершает дочерний inference процесс. При режиме автоопределения модель классифицирует до 4000 символов документа один раз, результат кэшируется в проекте. Если язык не распознан, prompt просит модель определить его для каждого фрагмента. UI видит event dict, не engine.
 - `engine.py`: отдельный Windows spawn process для DLL/RAM ошибок; GGUF magic до старта, timeout, cancel/pause. В текущем worker для выбранной конфигурации GPU offload отключён; CPU-путь не подтверждён реальной моделью.
 - `model_download.py`, `models.py`: каталог с закреплёнными artifact revision/size/hash, allowlisted HTTPS, проверка пути/перенаправления/range/size/SHA/magic; staging переименовывается в активный вес после проверки. Файл GGUF загружается как данные, произвольный Python из модели не исполняется.
-- `hardware.py`: RAM/free disk из psutil; NVIDIA данные через `nvidia-smi` если доступен; llama backend проверяется независимо. В MVP текущий inference worker CPU only, поэтому GPU-компиляция не означает, что приложение пользуется GPU.
+- Пользовательские GGUF хранятся в `models/<custom-id>/model.gguf`; реестр содержит локальные метаданные, список языков задаёт пользователь, а совместимость и качество не подтверждаются. Импорт копирует файл только после отдельного подтверждения, сверяет GGUF magic, размер и SHA-256; исходник не меняется.
+- `hardware.py`: RAM/free disk из psutil; NVIDIA данные через `nvidia-smi` если доступен; llama backend проверяется независимо. Проверка выполняется в фоне при каждом обычном запуске и в мастере первого запуска. Рекомендация выбирает крупнейшую доступную зарегистрированную модель по расчётной RAM, запасу 1 ГБ и месту на диске; это оценка размещения, не качества. CPU-потоки настраиваются автоматически с пределом 8 и одним оставленным логическим потоком. GPU offload в MVP выключен.
 - `app.py`: тонкий Tk UI. Потоки отправляют immutable события в `queue.Queue`, widget меняется только из polling callback главного Tk thread.
 - `paths.py`, `preferences.py`: бинарники приложения, проекты и веса физически разнесены. Сборка предполагает per-user установку под `%LOCALAPPDATA%\Programs\DotLingo`.
 
@@ -46,6 +50,8 @@ flowchart LR
 ## Runtime adapters
 
 Первый адаптер: Qwen3 GGUF → llama.cpp Python binding. Каталог указывает adapter id и весовой формат; нельзя передавать safetensors или Marian-модель одному и тому же loader. Будущие адаптеры: CTranslate2 для Marian/OPUS-MT, отдельный Transformers adapter для safetensors-моделей, если будет безопасная схема без исполнения произвольного remote code. Hy-MT2 и TranslateGemma не включены в доступную загрузку.
+
+Пользовательский импорт принимает только локальный GGUF и использует тот же `llama-cpp-python` chat-completion интерфейс. Qwen-специфичные stop markers и `/no_think` для него не передаются. Совместимость встроенного chat template проверяется только при фактическом запуске. Пользователь сам указывает языки и размер контекста; значения не считаются проверенными характеристиками модели.
 
 ## Расширение на другие ОС
 

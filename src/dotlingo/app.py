@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Callable
 
 from dotlingo.formats import export_document
-from dotlingo.hardware import HardwareSnapshot, assess_model, detect
+from dotlingo.hardware import HardwareSnapshot, assess_model, detect, recommend_model
 from dotlingo.languages import (
     AUTO_LANGUAGE,
     AUTO_LANGUAGE_LABEL,
@@ -21,7 +21,7 @@ from dotlingo.languages import (
     supports_language,
 )
 from dotlingo.model_download import DownloadCancellation, DownloadCancelled, download_model
-from dotlingo.models import catalog, installed, model_path, verify_model
+from dotlingo.models import all_models, import_custom_model, installed, model_path, verify_model
 from dotlingo.paths import user_data_root
 from dotlingo.preferences import load_preferences, save_preferences
 from dotlingo.storage import ProjectStore, list_projects
@@ -61,6 +61,8 @@ class DotLingoApp:
         self.active: ProjectStore | None = None
         self.page = "projects"
         self.hardware: HardwareSnapshot | None = None
+        self._device_check_in_progress = False
+        self._model_recommendation_id: str | None = None
         preferences = load_preferences(self.preferences_root)
         self.reduce_motion = bool(preferences["reduce_motion"])
         self.theme = set_theme(preferences.get("theme", "dark"))
@@ -79,6 +81,7 @@ class DotLingoApp:
         self._model_checks: dict[str, tk.BooleanVar] = {}
         self._download_cancel: DownloadCancellation | None = None
         self._download_worker: threading.Thread | None = None
+        self._custom_model_worker: threading.Thread | None = None
         self._download_window: tk.Frame | None = None
         self._overlay: tk.Frame | None = None
         self._overlay_previous_focus: tk.Widget | None = None
@@ -117,11 +120,14 @@ class DotLingoApp:
         self.root.bind("<Configure>", self._on_root_configure, add="+")
         self._poll_events()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        setup_seen = bool(load_preferences(self.preferences_root)["setup_seen"])
         if smoke:
             self.root.withdraw()
             self.root.after(80, self._smoke_check)
-        elif not load_preferences(self.preferences_root)["setup_seen"]:
+        elif not setup_seen:
             self.root.after(250, self.open_setup_wizard)
+        else:
+            self.root.after(300, self._detect_hardware)
 
         # A queued task represents an explicit action from an earlier session. Resume those
         # durable queue entries; interrupted/failed/cancelled tasks require a deliberate click.
@@ -896,6 +902,32 @@ class DotLingoApp:
     def _active_store(self) -> ProjectStore | None:
         return self.active
 
+    def _catalog(self) -> list[dict[str, Any]]:
+        return all_models(self.models_dir)
+
+    def _recommended_model(self) -> tuple[dict[str, Any] | None, str]:
+        models = self._catalog()
+        installed_ids = {item["id"] for item in models if installed(item, self.models_dir)}
+        if self.hardware is None:
+            options = [
+                item
+                for item in models
+                if item.get("status") == "available"
+                and isinstance(item.get("estimated_ram_gb"), (int, float))
+            ]
+            options.sort(key=lambda item: float(item["estimated_ram_gb"]))
+            return (
+                (options[0], "Проверка устройства выполняется; пока выбрана самая компактная проверенная карточка.")
+                if options
+                else (None, "Нет доступных моделей для подбора.")
+            )
+        return recommend_model(self.hardware, models, installed_ids)
+
+    def _sync_recommended_model(self) -> tuple[dict[str, Any] | None, str]:
+        model, reason = self._recommended_model()
+        self._model_recommendation_id = model["id"] if model else None
+        return model, reason
+
     def _refresh_project_list(self) -> None:
         self.projects = list_projects(self.projects_dir)
 
@@ -1048,9 +1080,11 @@ class DotLingoApp:
         options_card.grid(row=3, column=0, sticky="nsew", pady=(0, 10))
         options_card.columnconfigure(0, weight=1)
         options_card.rowconfigure(4, weight=1)
-        model_choices = [item for item in catalog() if item.get("status") == "available"]
+        model_choices = [item for item in self._catalog() if item.get("status") == "available"]
         model_by_name = {item["name"]: item for item in model_choices}
-        model_var = tk.StringVar(value=model_choices[0]["name"] if model_choices else "")
+        recommended, _reason = self._recommended_model()
+        default_model = recommended or (model_choices[0] if model_choices else None)
+        model_var = tk.StringVar(value=default_model["name"] if default_model else "")
         ttk.Label(options_card, text="Модель", style="Panel.Eyebrow.TLabel").grid(
             row=0, column=0, sticky="w"
         )
@@ -1443,7 +1477,7 @@ class DotLingoApp:
         if not store:
             return
         model_id = store.project.get("model_id") or "qwen3-1.7b-q8"
-        model = next((item for item in catalog() if item["id"] == model_id), None)
+        model = next((item for item in self._catalog() if item["id"] == model_id), None)
         if model is None or not installed(model, self.models_dir):
             messagebox.showwarning("Модель не установлена", "Сначала установите выбранную модель на странице «Модели».", parent=self.root)
             return
@@ -1586,7 +1620,7 @@ class DotLingoApp:
         if source_label == AUTO_LANGUAGE:
             source_label = f"{detected.upper()} · авто" if detected else "Авто"
         model_title = next(
-            (item["name"] for item in catalog() if item["id"] == task["model_id"]),
+            (item["name"] for item in self._catalog() if item["id"] == task["model_id"]),
             task["model_id"],
         )
         return (
@@ -1652,7 +1686,7 @@ class DotLingoApp:
             "interrupted": TOKENS["warning"],
         }
         document = next((item for item in project.documents() if item.id == task["document_id"]), None)
-        model = next((item["name"] for item in catalog() if item["id"] == task["model_id"]), task["model_id"])
+        model = next((item["name"] for item in self._catalog() if item["id"] == task["model_id"]), task["model_id"])
         completed = int(task["completed"])
         total = int(task["total"])
         amount = min(100, completed * 100 / total) if total else 0
@@ -2140,19 +2174,48 @@ class DotLingoApp:
     def _show_models(self) -> None:
         self.content.columnconfigure(0, weight=1)
         self.content.rowconfigure(0, weight=0)
-        self.content.rowconfigure(1, weight=1)
+        self.content.rowconfigure(1, weight=0)
+        self.content.rowconfigure(2, weight=1)
         top = ttk.Frame(self.content)
         top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         top.columnconfigure(0, weight=1)
         ttk.Label(
             top,
-            text="Вес модели и runtime устанавливаются отдельно. Выберите модель явно; автозагрузка отключена.",
+            text="Подбор учитывает доступную память и место на диске. Загрузка начинается только по вашему подтверждению.",
             style="Muted.TLabel",
-            wraplength=520,
+            wraplength=650,
         ).grid(row=0, column=0, sticky="w")
-        ttk.Button(top, text="Обновить данные устройства", command=self._detect_hardware).grid(row=0, column=1, sticky="e")
+        ttk.Button(top, text="Проверить устройство", command=self._detect_hardware).grid(row=0, column=1, sticky="e", padx=(8, 0))
+        ttk.Button(top, text="Добавить свою GGUF", command=self._add_custom_model).grid(row=0, column=2, sticky="e", padx=(8, 0))
+
+        recommendation, recommendation_reason = self._recommended_model()
+        suggestion = self._panel(self.content, padding=(16, 12))
+        suggestion.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        suggestion.columnconfigure(0, weight=1)
+        suggested_name = recommendation["name"] if recommendation else "Подбор пока недоступен"
+        ttk.Label(suggestion, text="РЕКОМЕНДАЦИЯ ДЛЯ ЭТОГО УСТРОЙСТВА", style="Panel.Eyebrow.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(suggestion, text=suggested_name, style="Panel.Section.TLabel").grid(
+            row=1, column=0, sticky="w", pady=(3, 1)
+        )
+        ttk.Label(
+            suggestion,
+            text=f"{recommendation_reason} Подбор оценивает совместимость по ресурсам, не качество перевода; текущий inference использует CPU.",
+            style="Panel.Muted.TLabel",
+            wraplength=760,
+            justify="left",
+        ).grid(row=2, column=0, sticky="w")
+        if recommendation and self.active is not None:
+            ttk.Button(
+                suggestion,
+                text="Выбрать для проекта",
+                style="Accent.TButton",
+                command=lambda model_id=recommendation["id"]: self._select_model_for_project(model_id),
+            ).grid(row=0, column=1, rowspan=3, sticky="e", padx=(16, 0))
+
         container = ttk.Frame(self.content)
-        container.grid(row=1, column=0, sticky="nsew")
+        container.grid(row=2, column=0, sticky="nsew")
         container.columnconfigure(0, weight=1)
         container.rowconfigure(0, weight=1)
         canvas = tk.Canvas(container, background=TOKENS["bg"], highlightthickness=0)
@@ -2169,7 +2232,7 @@ class DotLingoApp:
         snapshot = self.hardware
         if snapshot is None:
             ttk.Label(cards, text="Проверка устройства ещё не запускалась.", style="Muted.TLabel").grid(row=0, column=0, sticky="w", pady=12)
-        for index, model in enumerate(catalog()):
+        for index, model in enumerate(self._catalog()):
             card = self._panel(cards)
             card.grid(row=index + 1, column=0, sticky="ew", pady=(0, 10))
             card.columnconfigure(0, weight=1)
@@ -2203,15 +2266,153 @@ class DotLingoApp:
             ttk.Label(card, text=model.get("notes", ""), style="Panel.Muted.TLabel", wraplength=790, justify="left").grid(row=3, column=0, sticky="w", pady=(0, 5))
             action = ttk.Frame(card, style="Panel.TFrame")
             action.grid(row=4, column=0, sticky="ew")
-            ttk.Button(action, text="Лицензия и карточка", command=lambda url=model["license_url"]: webbrowser.open(url)).pack(side="left")
+            if model.get("license_url"):
+                ttk.Button(action, text="Лицензия и карточка", command=lambda url=model["license_url"]: webbrowser.open(url)).pack(side="left")
+            elif model.get("custom"):
+                ttk.Label(action, text="Добавлена с устройства", style="Panel.Muted.TLabel").pack(side="left")
             if model.get("status") == "available":
                 self._model_checks[model["id"]] = tk.BooleanVar(value=False)
-                ttk.Checkbutton(action, text=f"Я ознакомился с лицензией {model['license']} и согласен скачать {model['name']} объёмом {_format_size(model['size_bytes'])}", variable=self._model_checks[model["id"]]).pack(side="left", padx=8)
+                if not model.get("custom") and not installed_now:
+                    ttk.Checkbutton(action, text=f"Я ознакомился с лицензией {model['license']} и согласен скачать {model['name']} объёмом {_format_size(model['size_bytes'])}", variable=self._model_checks[model["id"]]).pack(side="left", padx=8)
                 text = "Проверить модель" if installed_now else "Скачать модель"
                 ttk.Button(action, text=text, style="Accent.TButton", command=lambda item=model: self._consent_and_download(item)).pack(side="right")
+                if self.active is not None:
+                    ttk.Button(
+                        action,
+                        text="Выбрать для проекта",
+                        command=lambda model_id=model["id"]: self._select_model_for_project(model_id),
+                    ).pack(side="right", padx=(0, 8))
             else:
-                ttk.Label(action, text="Загрузка отключена до проверки runtime", style="Panel.Muted.TLabel").pack(side="right")
+                state_text = (
+                    "Файл не найден · добавьте GGUF заново"
+                    if model.get("custom")
+                    else "Загрузка отключена до проверки runtime"
+                )
+                ttk.Label(action, text=state_text, style="Panel.Muted.TLabel").pack(side="right")
         self.root.after_idle(lambda: canvas.configure(scrollregion=canvas.bbox("all")))
+
+    def _select_model_for_project(self, model_id: str) -> None:
+        if self.active is None:
+            messagebox.showinfo("Сначала выберите проект", "Откройте проект или создайте новый, чтобы назначить ему модель.", parent=self.root)
+            return
+        model = next((item for item in self._catalog() if item["id"] == model_id), None)
+        if model is None:
+            messagebox.showerror("Модель не найдена", "Обновите список моделей и попробуйте ещё раз.", parent=self.root)
+            return
+        if model.get("status") != "available":
+            messagebox.showwarning("Модель недоступна", "Добавьте файл модели заново или выберите другую модель.", parent=self.root)
+            return
+        unsupported = [
+            code
+            for code in self.active.target_languages()
+            if not supports_language(model, code)
+        ]
+        source = self.active.project["source_lang"]
+        if source != AUTO_LANGUAGE and not supports_language(model, source):
+            unsupported.insert(0, source)
+        if unsupported:
+            labels = ", ".join(language_label(code) for code in dict.fromkeys(unsupported))
+            messagebox.showwarning(
+                "Языки не указаны для модели",
+                f"Для этой модели не настроены языки: {labels}. Измените языки проекта или выберите другую модель.",
+                parent=self.root,
+            )
+            return
+        self.active.update_settings(model_id=model_id)
+        self.sidebar_status.configure(text=f"Для проекта выбрана модель «{model['name']}»")
+        self.show_page("models")
+
+    def _add_custom_model(self) -> None:
+        if self._custom_model_worker is not None and self._custom_model_worker.is_alive():
+            self.sidebar_status.configure(text="Импорт модели уже выполняется")
+            return
+        selected = filedialog.askopenfilename(
+            parent=self.root,
+            title="Выберите локальную GGUF-модель",
+            filetypes=[("Модели GGUF", "*.gguf")],
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            messagebox.showerror("Файл недоступен", str(exc), parent=self.root)
+            return
+        name = simpledialog.askstring("Добавить модель", "Название модели для списка:", initialvalue=path.stem, parent=self.root)
+        if not name:
+            return
+        license_name = simpledialog.askstring(
+            "Лицензия модели",
+            "Укажите лицензию из карточки модели. Можно оставить пустым, если она неизвестна.",
+            initialvalue="",
+            parent=self.root,
+        )
+        if license_name is None:
+            return
+        default_codes = ["en", "ru"]
+        if self.active is not None:
+            default_codes = list(self.active.target_languages())
+            source = self.active.project["source_lang"]
+            if source != AUTO_LANGUAGE:
+                default_codes.insert(0, source)
+        codes_value = simpledialog.askstring(
+            "Языки модели",
+            "Перечислите языковые коды, которые хотите видеть в настройках проекта, через запятую. Сверьтесь с карточкой модели. Поддержка и качество не проверяются.",
+            initialvalue=",".join(dict.fromkeys(default_codes)),
+            parent=self.root,
+        )
+        if codes_value is None:
+            return
+        context_value = simpledialog.askstring(
+            "Контекст модели",
+            "Размер контекста токенов. Используйте значение из карточки модели; по умолчанию 4096.",
+            initialvalue="4096",
+            parent=self.root,
+        )
+        if context_value is None:
+            return
+        try:
+            context_size = int(context_value)
+        except ValueError:
+            messagebox.showerror("Некорректный контекст", "Введите число токенов из списка 2048, 4096, 8192, 16384 или 32768.", parent=self.root)
+            return
+        if not messagebox.askyesno(
+            "Импортировать локальную модель?",
+            f"Файл: {path}\nРазмер: {_format_size(size)}\nПапка DotLingo: {self.models_dir}\n\nБудет создана проверенная копия GGUF. Исходный файл останется на месте. Продолжить?",
+            parent=self.root,
+        ):
+            return
+        language_codes = [code.strip() for code in codes_value.split(",")]
+        self.sidebar_status.configure(text="Копирование и проверка GGUF…")
+        self._custom_model_worker = self._submit(
+            "custom_model_import",
+            lambda: import_custom_model(
+                path,
+                name,
+                language_codes,
+                root=self.models_dir,
+                context_size=context_size,
+                license_name=license_name,
+            ),
+            self._custom_model_import_done,
+        )
+
+    def _custom_model_import_done(self, result: Any) -> None:
+        if self._pending_close:
+            return
+        if isinstance(result, Exception):
+            self.sidebar_status.configure(text="Не удалось добавить модель")
+            messagebox.showerror("Ошибка импорта модели", str(result), parent=self.root)
+            return
+        self.sidebar_status.configure(text=f"Добавлена модель «{result['name']}»")
+        if self.page == "models":
+            self.show_page("models")
+        messagebox.showinfo(
+            "Модель добавлена",
+            f"«{result['name']}» скопирована и проверена по SHA-256. Совместимость runtime и качество перевода не проверены.",
+            parent=self.root,
+        )
 
     def _consent_and_download(self, model: dict[str, Any]) -> None:
         if installed(model, self.models_dir):
@@ -2407,7 +2608,7 @@ class DotLingoApp:
             font=(TOKENS["font"], 12, "bold"),
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
         if store:
-            models = [item for item in catalog() if item.get("status") == "available"]
+            models = [item for item in self._catalog() if item.get("status") == "available"]
             model_by_name = {item["name"]: item for item in models}
             current_model = store.project.get("model_id") or "qwen3-1.7b-q8"
             initial_model = next(
@@ -2678,20 +2879,40 @@ class DotLingoApp:
             gpu = "; ".join(f"{name} ({values[index]:.1f} ГБ VRAM)" if values[index] is not None else f"{name} (VRAM неизвестна)" for index, name in enumerate(item.gpu_names))
         runtime = "доступен" if item.llama_runtime_available else "не найден"
         gpu_runtime = "не определена" if item.llama_gpu_offload_available is None else ("поддерживается" if item.llama_gpu_offload_available else "не поддерживается")
-        return f"Профиль: {item.profile}\nRAM: {ram}\nСвободный диск: {disk}\nGPU: {gpu}\nllama.cpp: {runtime}; GPU offload в этом backend: {gpu_runtime}."
+        threads = (
+            f"{max(1, min(8, item.cpu_threads - 1))} потоков inference (автонастройка)"
+            if item.cpu_threads
+            else "число потоков не удалось определить"
+        )
+        recommendation, reason = self._recommended_model()
+        recommendation_text = (
+            f"Рекомендация по ресурсам: {recommendation['name']} · {reason}"
+            if recommendation
+            else f"Рекомендация: {reason}"
+        )
+        return (
+            f"Профиль: {item.profile}\nCPU: {threads}\nRAM: {ram}\nСвободный диск: {disk}\n"
+            f"GPU: {gpu}\nllama.cpp: {runtime}; GPU offload в этом backend: {gpu_runtime}.\n"
+            f"{recommendation_text}"
+        )
 
     def _detect_hardware(self) -> None:
+        if self._device_check_in_progress:
+            return
+        self._device_check_in_progress = True
         self.sidebar_status.configure(text="Проверка устройства…")
         self._submit("hardware", lambda: detect(self.models_dir), self._hardware_done)
 
     def _hardware_done(self, result: Any) -> None:
+        self._device_check_in_progress = False
         if isinstance(result, Exception):
             self.sidebar_status.configure(text=f"Не удалось определить устройство: {result}")
             return
         self.hardware = result
-        self.sidebar_status.configure(text=f"Устройство: {result.profile}")
+        model, reason = self._sync_recommended_model()
+        self.sidebar_status.configure(text=f"Подбор: {model['name']}" if model else f"Устройство: {result.profile}")
         if hasattr(self, "_settings_hardware") and self._settings_hardware.winfo_exists():
-            self._settings_hardware.configure(text=self._hardware_text())
+            self._settings_hardware.configure(text=f"{self._hardware_text()}\n\nРекомендация: {reason}")
         if self.page == "models":
             self.show_page("models")
 
@@ -2701,7 +2922,7 @@ class DotLingoApp:
         window, panel = self._open_overlay()
         state: dict[str, Any] = {
             "step": 0,
-            "selected": "qwen3-1.7b-q8",
+            "selected": None,
             "cancel": None,
             "hardware_started": False,
             "closed": False,
@@ -2749,6 +2970,9 @@ class DotLingoApp:
             else:
                 self.hardware = result
                 details_text = self._hardware_text()
+                recommended, _reason = self._sync_recommended_model()
+                if recommended is not None:
+                    state["selected"] = recommended["id"]
             try:
                 if state["closed"] or not window.winfo_exists():
                     return
@@ -2788,9 +3012,14 @@ class DotLingoApp:
                 else:
                     continue_button.configure(state="normal")
             elif step == 1:
-                selected = next((item for item in catalog() if item["id"] == state["selected"]), catalog()[0])
-                estimate = f"Вариант для оценки: {selected['name']} · {_format_size(selected['size_bytes'])}. Размер загрузки указан по карточке модели."
+                recommended, reason = self._recommended_model()
+                selected = next(
+                    (item for item in self._catalog() if item["id"] == state["selected"]),
+                    recommended or self._catalog()[0],
+                )
+                estimate = f"Подходящий вариант: {selected['name']} · {_format_size(selected.get('size_bytes'))}."
                 ttk.Label(body, text=estimate, style="Panel.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
+                ttk.Label(body, text=reason, style="Panel.Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=4)
                 ttk.Label(body, text=self._hardware_text(), style="Panel.Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
                 ttk.Label(body, text="Установка модели необязательна. Можно отложить её и выбрать модель позже в разделе «Модели».", style="Panel.Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=8)
                 ttk.Button(buttons, text="Назад", command=lambda: render(0)).pack(side="left")
@@ -2798,10 +3027,10 @@ class DotLingoApp:
                 focus_target.pack(side="right")
             elif step == 2:
                 model_var = tk.StringVar(value=state["selected"])
-                for item in catalog():
+                for item in self._catalog():
                     row = ttk.Frame(body, style="Panel.TFrame")
                     row.pack(fill="x", pady=3)
-                    available = item.get("status") == "available"
+                    available = item.get("status") == "available" and not item.get("custom")
                     ttk.Radiobutton(
                         row,
                         text=f"{item['name']} · {_format_size(item.get('size_bytes'))}",
@@ -2809,7 +3038,8 @@ class DotLingoApp:
                         variable=model_var,
                         state="normal" if available else "disabled",
                     ).pack(side="left")
-                    ttk.Button(row, text="Карточка и лицензия", command=lambda url=item["license_url"]: webbrowser.open(url)).pack(side="right")
+                    if item.get("license_url"):
+                        ttk.Button(row, text="Карточка и лицензия", command=lambda url=item["license_url"]: webbrowser.open(url)).pack(side="right")
                 model_var.trace_add("write", lambda *_args: state.update(selected=model_var.get()))
                 consent_var = tk.BooleanVar(value=False)
                 consent = ttk.Checkbutton(body, text="Я ознакомился с лицензией выбранной модели и соглашаюсь скачать её вес.", variable=consent_var, wraplength=680)
@@ -2817,7 +3047,7 @@ class DotLingoApp:
                 ttk.Label(body, text="Лицензии различаются. Размер, версия и SHA-256 закреплены в карточке модели. Неизвестная совместимость не считается подтверждённой.", style="Panel.Muted.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=5)
 
                 def start_download() -> None:
-                    item = next(entry for entry in catalog() if entry["id"] == model_var.get())
+                    item = next(entry for entry in self._catalog() if entry["id"] == model_var.get())
                     state["selected"] = item["id"]
                     if not consent_var.get():
                         notice.configure(text="Отметьте согласие с лицензией перед загрузкой.")
@@ -3055,8 +3285,8 @@ class DotLingoApp:
             return
         if self.page == "settings" and not self._confirm_settings_change():
             return
-        worker = self._download_worker
-        if worker is not None and worker.is_alive():
+        workers = (self._download_worker, self._custom_model_worker)
+        if any(worker is not None and worker.is_alive() for worker in workers):
             self._pending_close = True
             self._close_cancel_accepted = self._download_cancel.set() if self._download_cancel else None
             self._show_close_wait_status()
@@ -3065,7 +3295,10 @@ class DotLingoApp:
         self._finalize_close()
 
     def _show_close_wait_status(self) -> None:
-        if self._close_cancel_accepted is True:
+        custom_import = self._custom_model_worker is not None and self._custom_model_worker.is_alive()
+        if custom_import:
+            message = "Импорт модели завершится перед закрытием приложения…"
+        elif self._close_cancel_accepted is True:
             message = "Отмена загрузки запрошена. Ожидается безопасное завершение…"
         elif self._close_cancel_accepted is False:
             message = "Модель уже активируется. Ожидается завершение проверки…"
@@ -3085,12 +3318,13 @@ class DotLingoApp:
         self._close_wait_job = None
         if not self._pending_close or self._closing:
             return
-        worker = self._download_worker
-        if worker is not None and worker.is_alive():
+        workers = (self._download_worker, self._custom_model_worker)
+        if any(worker is not None and worker.is_alive() for worker in workers):
             self._show_close_wait_status()
             self._close_wait_job = self.root.after(100, self._wait_for_download_close)
             return
         self._download_worker = None
+        self._custom_model_worker = None
         self._pending_close = False
         self._finalize_close()
 
