@@ -84,6 +84,7 @@ class DotLingoApp:
         self._overlay_previous_focus: tk.Widget | None = None
         self._overlay_escape: Callable[[tk.Event[Any]], str | None] | None = None
         self._nav_indicator_jobs: dict[str, str] = {}
+        self._page_title_job: str | None = None
         self.nav_indicators: dict[str, tk.Frame] = {}
         self._documents_tree: ttk.Treeview | None = None
         self._document_selection_label: ttk.Label | None = None
@@ -96,8 +97,8 @@ class DotLingoApp:
         self._close_cancel_accepted: bool | None = None
 
         self.root.title("DotLingo · локальный перевод документов")
-        self.root.geometry("1200x740")
-        self.root.minsize(900, 620)
+        self.root.geometry("1280x820")
+        self.root.minsize(1020, 680)
         self._set_icon()
         self._style()
         self._build_shell()
@@ -146,6 +147,7 @@ class DotLingoApp:
         self.root.configure(background=colors["bg"])
         style.configure("TFrame", background=colors["bg"])
         style.configure("Workspace.TFrame", background=colors["bg"])
+        style.configure("Sidebar.TFrame", background=colors["sidebar"])
         style.configure("Panel.TFrame", background=colors["surface"], borderwidth=0, relief="flat")
         style.configure("Status.TFrame", background=colors["bg"])
         style.configure(
@@ -210,6 +212,24 @@ class DotLingoApp:
             font=(colors["font"], 17, "bold"),
         )
         style.configure(
+            "Sidebar.Brand.TLabel",
+            background=colors["sidebar"],
+            foreground=colors["text"],
+            font=(colors["font"], 17, "bold"),
+        )
+        style.configure(
+            "Sidebar.Muted.TLabel",
+            background=colors["sidebar"],
+            foreground=colors["muted"],
+            font=(colors["font"], colors["font_small"]),
+        )
+        style.configure(
+            "Sidebar.Eyebrow.TLabel",
+            background=colors["sidebar"],
+            foreground=colors["muted"],
+            font=(colors["font"], 9, "bold"),
+        )
+        style.configure(
             "Eyebrow.TLabel",
             background=colors["bg"],
             foreground=colors["accent"],
@@ -253,30 +273,30 @@ class DotLingoApp:
         )
         style.configure(
             "Nav.TButton",
-            background=colors["bg"],
+            background=colors["sidebar"],
             foreground=colors["muted"],
-            anchor="center",
-            padding=(10, 10),
+            anchor="w",
+            padding=(14, 11),
             borderwidth=0,
             font=(colors["font"], colors["font_body"]),
         )
         style.map(
             "Nav.TButton",
-            background=[("pressed", colors["surface"]), ("active", colors["surface"])],
+            background=[("pressed", colors["surface_hover"]), ("active", colors["surface_hover"])],
             foreground=[("focus", colors["text"]), ("active", colors["text"])],
         )
         style.configure(
             "ActiveNav.TButton",
-            background=colors["surface"],
+            background=colors["nav_active"],
             foreground=colors["accent"],
-            anchor="center",
-            padding=(10, 10),
+            anchor="w",
+            padding=(14, 11),
             borderwidth=0,
             font=(colors["font"], colors["font_body"], "bold"),
         )
         style.map(
             "ActiveNav.TButton",
-            background=[("pressed", colors["surface"]), ("active", colors["surface"])],
+            background=[("pressed", colors["nav_active"]), ("active", colors["nav_active"])],
             foreground=[("active", colors["accent"])],
         )
         style.configure(
@@ -412,14 +432,26 @@ class DotLingoApp:
         self.sidebar_status.configure(text=f"Включена {THEME_LABELS[selected].lower()} тема")
 
     def _refresh_theme_widgets(self) -> None:
+        if self._page_title_job is not None:
+            try:
+                self.root.after_cancel(self._page_title_job)
+            except tk.TclError:
+                pass
+            self._page_title_job = None
+        self.header_title.configure(foreground=TOKENS["text"])
         if self._status_dot is not None and self._status_dot.winfo_exists():
-            self._status_dot.configure(background=TOKENS["bg"])
-            self._status_dot.itemconfigure("all", fill=TOKENS["accent"])
+            self._status_dot.configure(background=TOKENS["sidebar"])
+            self._status_dot.itemconfigure("all", fill=TOKENS["success"])
+        brand_mark = getattr(self, "_brand_mark", None)
+        if brand_mark is not None and brand_mark.winfo_exists():
+            brand_mark.configure(background=TOKENS["sidebar"])
+            brand_mark.itemconfigure("all", fill=TOKENS["accent"])
+            brand_mark.itemconfigure("brand-letter", fill=TOKENS["accent_on"])
         self._stop_nav_animation()
         for page, indicator in self.nav_indicators.items():
             if indicator.winfo_exists():
                 indicator.configure(
-                    background=TOKENS["accent"] if page == self.page else TOKENS["bg"]
+                    background=TOKENS["accent"] if page == self.page else TOKENS["sidebar"]
                 )
 
         tag_colors = {
@@ -460,11 +492,25 @@ class DotLingoApp:
                         )
                     elif isinstance(widget, tk.Canvas):
                         widget.configure(
-                            background=TOKENS["bg"],
-                            highlightbackground=TOKENS["bg"],
+                            background=(
+                                TOKENS["sidebar"]
+                                if widget in (self._status_dot, getattr(self, "_brand_mark", None))
+                                else TOKENS["bg"]
+                            ),
+                            highlightbackground=(
+                                TOKENS["sidebar"]
+                                if widget in (self._status_dot, getattr(self, "_brand_mark", None))
+                                else TOKENS["bg"]
+                            ),
                         )
                     elif isinstance(widget, tk.Frame):
-                        widget.configure(background=TOKENS["bg"])
+                        widget.configure(
+                            background=(
+                                TOKENS["sidebar"]
+                                if widget in self.nav_indicators.values()
+                                else TOKENS["bg"]
+                            )
+                        )
                     elif isinstance(widget, tk.Toplevel):
                         widget.configure(background=TOKENS["bg"])
 
@@ -483,59 +529,113 @@ class DotLingoApp:
             self._update_review_edit_feedback()
 
     def _build_shell(self) -> None:
-        outer = ttk.Frame(self.root, style="Workspace.TFrame", padding=(28, 18, 28, 14))
+        self.root.configure(background=TOKENS["bg"])
+        outer = ttk.Frame(self.root, style="Workspace.TFrame")
         outer.pack(fill="both", expand=True)
-        outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(4, weight=1)
+        outer.columnconfigure(1, weight=1)
+        outer.rowconfigure(0, weight=1)
 
-        brand_row = ttk.Frame(outer, style="Workspace.TFrame")
-        brand_row.grid(row=0, column=0, sticky="ew")
+        sidebar = ttk.Frame(outer, style="Sidebar.TFrame", padding=(16, 20, 14, 14))
+        sidebar.grid(row=0, column=0, sticky="nsew")
+        sidebar.configure(width=224)
+        sidebar.grid_propagate(False)
+        sidebar.columnconfigure(0, weight=1)
+        sidebar.rowconfigure(2, weight=1)
+
+        brand_row = ttk.Frame(sidebar, style="Sidebar.TFrame")
+        brand_row.grid(row=0, column=0, sticky="ew", pady=(0, 22))
         brand_row.columnconfigure(1, weight=1)
-        ttk.Label(brand_row, text="dotlingo", style="Brand.TLabel").grid(
-            row=0, column=0, sticky="w"
+        mark = tk.Canvas(
+            brand_row,
+            width=34,
+            height=34,
+            background=TOKENS["sidebar"],
+            highlightthickness=0,
         )
-        ttk.Label(brand_row, text="локальная переводческая мастерская", style="Muted.TLabel").grid(
-            row=0, column=1, sticky="w", padx=(13, 0), pady=(3, 0)
+        mark.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 10))
+        mark.create_oval(2, 2, 32, 32, fill=TOKENS["accent"], outline="")
+        mark.create_text(
+            17,
+            17,
+            text="d",
+            fill=TOKENS["accent_on"],
+            font=(TOKENS["font"], 19, "bold"),
+            tags="brand-letter",
         )
-        theme_control = ttk.Frame(brand_row, style="Workspace.TFrame")
-        theme_control.grid(row=0, column=2, sticky="e")
-        ttk.Label(theme_control, text="Тема", style="Muted.TLabel").pack(
-            side="left", padx=(0, 8), pady=(3, 0)
+        self._brand_mark = mark
+        ttk.Label(brand_row, text="dotlingo", style="Sidebar.Brand.TLabel").grid(
+            row=0, column=1, sticky="sw"
+        )
+        ttk.Label(
+            brand_row,
+            text="ЛОКАЛЬНЫЙ ПЕРЕВОД",
+            style="Sidebar.Muted.TLabel",
+        ).grid(row=1, column=1, sticky="nw", pady=(1, 0))
+
+        ttk.Label(sidebar, text="РАБОЧЕЕ ПРОСТРАНСТВО", style="Sidebar.Eyebrow.TLabel").grid(
+            row=1, column=0, sticky="w", pady=(0, 8)
         )
         self._theme_var = tk.StringVar(value=THEME_LABELS[self.theme])
         theme_combo = ttk.Combobox(
-            theme_control,
+            sidebar,
             textvariable=self._theme_var,
             values=tuple(THEME_LABELS.values()),
             state="readonly",
             width=11,
         )
-        theme_combo.pack(side="left")
+        theme_combo.grid(row=3, column=0, sticky="w", pady=(12, 0))
         theme_combo.bind("<<ComboboxSelected>>", self._change_theme)
 
-        navigation = ttk.Frame(outer, style="Workspace.TFrame")
-        navigation.grid(row=1, column=0, sticky="ew", pady=(17, 12))
+        navigation = ttk.Frame(sidebar, style="Sidebar.TFrame")
+        navigation.grid(row=2, column=0, sticky="nsew")
+        navigation.columnconfigure(0, weight=1)
         self.nav_buttons: dict[str, ttk.Button] = {}
         for index, (key, label) in enumerate(PAGES):
-            navigation.columnconfigure(index, weight=1, uniform="navigation")
-            row = ttk.Frame(navigation, style="Workspace.TFrame")
-            row.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 3, 0))
+            row = ttk.Frame(navigation, style="Sidebar.TFrame")
+            row.grid(row=index, column=0, sticky="ew", pady=2)
+            row.columnconfigure(1, weight=1)
+            indicator = tk.Frame(row, background=TOKENS["sidebar"], width=3, height=30)
+            indicator.grid(row=0, column=0, sticky="ns", padx=(0, 7))
             button = ttk.Button(
                 row,
                 text=label,
                 style="Nav.TButton",
                 command=lambda page=key: self.show_page(page),
             )
-            button.pack(fill="both", expand=True)
+            button.grid(row=0, column=1, sticky="ew")
             button.configure(takefocus=True)
-            indicator = tk.Frame(row, background=TOKENS["bg"], height=2)
-            indicator.place(relx=0, rely=1, relwidth=1, anchor="sw")
             self.nav_buttons[key] = button
             self.nav_indicators[key] = indicator
 
-        ttk.Separator(outer).grid(row=2, column=0, sticky="ew")
-        self.project_header = ttk.Frame(outer, style="Workspace.TFrame")
-        self.project_header.grid(row=3, column=0, sticky="ew", pady=(20, 12))
+        status_row = ttk.Frame(sidebar, style="Sidebar.TFrame")
+        status_row.grid(row=4, column=0, sticky="ew", pady=(16, 0))
+        ttk.Separator(status_row).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        status_row.columnconfigure(1, weight=1)
+        status_dot = tk.Canvas(
+            status_row,
+            width=9,
+            height=9,
+            background=TOKENS["sidebar"],
+            highlightthickness=0,
+        )
+        status_dot.grid(row=1, column=0, sticky="nw", padx=(0, 8), pady=(4, 0))
+        status_dot.create_oval(1, 1, 8, 8, fill=TOKENS["success"], outline="")
+        self._status_dot = status_dot
+        self.sidebar_status = ttk.Label(
+            status_row,
+            text="Локально и приватно",
+            style="Sidebar.Muted.TLabel",
+            anchor="w",
+            wraplength=155,
+        )
+        self.sidebar_status.grid(row=1, column=1, sticky="ew")
+
+        main = ttk.Frame(outer, style="Workspace.TFrame", padding=(32, 24, 32, 18))
+        main.grid(row=0, column=1, sticky="nsew")
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(1, weight=1)
+        self.project_header = ttk.Frame(main, style="Workspace.TFrame")
+        self.project_header.grid(row=0, column=0, sticky="ew", pady=(0, 18))
         self.project_header.columnconfigure(0, weight=1)
         self.header_title = ttk.Label(self.project_header, text="Проекты", style="Title.TLabel")
         self.header_title.grid(row=0, column=0, sticky="w")
@@ -543,12 +643,12 @@ class DotLingoApp:
             self.project_header,
             text="Локальный перевод · без облачной обработки",
             style="Muted.TLabel",
-            wraplength=980,
+            wraplength=800,
         )
-        self.header_project.grid(row=1, column=0, sticky="w", pady=(3, 0))
+        self.header_project.grid(row=1, column=0, sticky="w", pady=(4, 0))
 
-        self.page_host = ttk.Frame(outer, style="Workspace.TFrame")
-        self.page_host.grid(row=4, column=0, sticky="nsew")
+        self.page_host = ttk.Frame(main, style="Workspace.TFrame")
+        self.page_host.grid(row=1, column=0, sticky="nsew")
         self.page_host.rowconfigure(0, weight=1)
         self.page_host.columnconfigure(0, weight=1)
         self.content = ttk.Frame(self.page_host)
@@ -556,28 +656,6 @@ class DotLingoApp:
         self.content.rowconfigure(0, weight=1)
         self.content.columnconfigure(0, weight=1)
 
-        ttk.Separator(outer).grid(row=5, column=0, sticky="ew", pady=(12, 8))
-        status_row = ttk.Frame(outer, style="Status.TFrame")
-        status_row.grid(row=6, column=0, sticky="ew")
-        status_row.columnconfigure(1, weight=1)
-        status_dot = tk.Canvas(
-            status_row,
-            width=9,
-            height=9,
-            background=TOKENS["bg"],
-            highlightthickness=0,
-        )
-        status_dot.grid(row=0, column=0, sticky="w", padx=(0, 8))
-        status_dot.create_oval(1, 1, 8, 8, fill=TOKENS["accent"], outline="")
-        self._status_dot = status_dot
-        self.sidebar_status = ttk.Label(
-            status_row,
-            text="Локальная работа · без облака",
-            style="Status.Muted.TLabel",
-            anchor="w",
-            wraplength=840,
-        )
-        self.sidebar_status.grid(row=0, column=1, sticky="ew")
         self.show_page("projects")
 
     def _panel(self, parent: tk.Misc, **kwargs: Any) -> ttk.Frame:
@@ -645,6 +723,12 @@ class DotLingoApp:
         if self.page == "settings" and not self._confirm_settings_change():
             return
         self._stop_nav_animation()
+        if self._page_title_job is not None:
+            try:
+                self.root.after_cancel(self._page_title_job)
+            except tk.TclError:
+                pass
+            self._page_title_job = None
         self.page = page
         labels = dict(PAGES)
         self.header_title.configure(text=labels[page])
@@ -669,6 +753,32 @@ class DotLingoApp:
         self.content.rowconfigure(0, weight=1)
         self.content.columnconfigure(0, weight=1)
         renderers[page]()
+        self._animate_page_title()
+
+    def _animate_page_title(self) -> None:
+        if self.reduce_motion:
+            self.header_title.configure(foreground=TOKENS["text"])
+            return
+        start = tuple(int(TOKENS["accent"][index : index + 2], 16) for index in (1, 3, 5))
+        end = tuple(int(TOKENS["text"][index : index + 2], 16) for index in (1, 3, 5))
+
+        def advance(step: int = 0) -> None:
+            if self._closing or not self.header_title.winfo_exists():
+                self._page_title_job = None
+                return
+            progress = min(1.0, step / 8)
+            eased = 1 - (1 - progress) ** 2
+            color = "#" + "".join(
+                f"{round(start[index] + (end[index] - start[index]) * eased):02x}"
+                for index in range(3)
+            )
+            self.header_title.configure(foreground=color)
+            if step >= 8:
+                self._page_title_job = None
+                return
+            self._page_title_job = self.root.after(18, lambda: advance(step + 1))
+
+        advance()
 
     def _navigate_shortcut(self, page: str) -> str:
         if self._overlay is not None and self._overlay.winfo_exists():
@@ -695,7 +805,7 @@ class DotLingoApp:
             except tk.TclError:
                 pass
         start = str(indicator.cget("background"))
-        target = TOKENS["accent"] if active else TOKENS["bg"]
+        target = TOKENS["accent"] if active else TOKENS["sidebar"]
         if self.reduce_motion or start == target:
             indicator.configure(background=target)
             return
@@ -1244,8 +1354,8 @@ class DotLingoApp:
             count = len(selected)
             has_selection = count > 0
             translate_button.configure(state="normal" if has_selection else "disabled")
-            review_button.configure(state="normal" if has_selection else "disabled")
-            has_export = bool(store.exports(self._selected_doc)) if has_selection else False
+            review_button.configure(state="normal" if count == 1 else "disabled")
+            has_export = bool(store.exports(self._selected_doc)) if count == 1 else False
             export_button.configure(state="normal" if has_export else "disabled")
             if count == 1:
                 document = store.document(self._selected_doc)
@@ -1884,7 +1994,7 @@ class DotLingoApp:
     def _on_root_configure(self, event: tk.Event[Any]) -> None:
         if event.widget is not self.root:
             return
-        self.header_project.configure(wraplength=max(360, event.width - 56))
+        self.header_project.configure(wraplength=max(360, event.width - 320))
         if self.page != "review":
             return
         job = getattr(self, "_review_resize_job", None)
