@@ -90,6 +90,8 @@ class DotLingoApp:
         self._page_title_job: str | None = None
         self._page_motion_job: str | None = None
         self.nav_indicators: dict[str, tk.Frame] = {}
+        self.nav_icons: dict[str, tk.Canvas] = {}
+        self._nav_icon_jobs: dict[str, str] = {}
         self._documents_tree: ttk.Treeview | None = None
         self._document_selection_label: ttk.Label | None = None
         self._settings_form: tuple[Any, ...] | None = None
@@ -156,7 +158,22 @@ class DotLingoApp:
         style.configure("Workspace.TFrame", background=colors["bg"])
         style.configure("Sidebar.TFrame", background=colors["sidebar"])
         style.configure("Panel.TFrame", background=colors["surface"], borderwidth=0, relief="flat")
-        style.configure("Sidebar.Context.TFrame", background=colors["surface"])
+        style.configure(
+            "Glass.TFrame",
+            background=colors["surface"],
+            borderwidth=1,
+            bordercolor=colors["border_soft"],
+            lightcolor=colors["border_soft"],
+            darkcolor=colors["border_soft"],
+            relief="solid",
+        )
+        style.configure(
+            "Sidebar.Context.TFrame",
+            background=colors["surface"],
+            borderwidth=1,
+            bordercolor=colors["border_soft"],
+            relief="solid",
+        )
         style.configure("AccentRule.TFrame", background=colors["accent"])
         style.configure("Status.TFrame", background=colors["bg"])
         style.configure(
@@ -322,7 +339,7 @@ class DotLingoApp:
             background=colors["sidebar"],
             foreground=colors["muted"],
             anchor="w",
-            padding=(12, 8),
+            padding=(9, 10),
             borderwidth=0,
             font=(colors["font"], colors["font_body"]),
         )
@@ -334,16 +351,16 @@ class DotLingoApp:
         style.configure(
             "ActiveNav.TButton",
             background=colors["nav_active"],
-            foreground=colors["accent"],
+            foreground=colors["text"],
             anchor="w",
-            padding=(12, 8),
+            padding=(9, 10),
             borderwidth=0,
             font=(colors["font"], colors["font_body"], "bold"),
         )
         style.map(
             "ActiveNav.TButton",
             background=[("pressed", colors["nav_active"]), ("active", colors["nav_active"])],
-            foreground=[("active", colors["accent"]), ("focus", colors["accent"])],
+            foreground=[("active", colors["text"]), ("focus", colors["text"])],
             bordercolor=[("focus", colors["border_focus"])],
         )
         style.configure(
@@ -401,7 +418,7 @@ class DotLingoApp:
             background=colors["surface"],
             fieldbackground=colors["surface"],
             foreground=colors["text"],
-            rowheight=42,
+            rowheight=44,
             borderwidth=0,
             font=(colors["font"], colors["font_body"]),
         )
@@ -488,8 +505,10 @@ class DotLingoApp:
         brand_mark = getattr(self, "_brand_mark", None)
         if brand_mark is not None and brand_mark.winfo_exists():
             brand_mark.configure(background=TOKENS["sidebar"])
-            brand_mark.itemconfigure("all", fill=TOKENS["accent"])
-            brand_mark.itemconfigure("brand-letter", fill=TOKENS["accent_on"])
+            brand_mark.itemconfigure(
+                "brand-frame", fill=TOKENS["surface"], outline=TOKENS["border"]
+            )
+            brand_mark.itemconfigure("brand-mark", fill=TOKENS["accent"])
         self._stop_nav_animation()
         for page, indicator in self.nav_indicators.items():
             if indicator.winfo_exists():
@@ -534,18 +553,35 @@ class DotLingoApp:
                             highlightcolor=TOKENS["border_focus"],
                         )
                     elif isinstance(widget, tk.Canvas):
+                        nav_page = next(
+                            (page for page, icon in self.nav_icons.items() if icon is widget),
+                            None,
+                        )
                         widget.configure(
                             background=(
                                 TOKENS["sidebar"]
-                                if widget in (self._status_dot, getattr(self, "_brand_mark", None))
+                                if widget in (
+                                    self._status_dot,
+                                    getattr(self, "_brand_mark", None),
+                                )
+                                or nav_page is not None
                                 else TOKENS["bg"]
                             ),
                             highlightbackground=(
                                 TOKENS["sidebar"]
-                                if widget in (self._status_dot, getattr(self, "_brand_mark", None))
+                                if widget in (
+                                    self._status_dot,
+                                    getattr(self, "_brand_mark", None),
+                                )
+                                or nav_page is not None
                                 else TOKENS["bg"]
                             ),
                         )
+                        if nav_page is not None:
+                            color = (
+                                TOKENS["text"] if nav_page == self.page else TOKENS["muted"]
+                            )
+                            self._draw_nav_icon(widget, nav_page, color)
                     elif isinstance(widget, tk.Frame):
                         widget.configure(
                             background=(
@@ -601,15 +637,20 @@ class DotLingoApp:
             highlightthickness=0,
         )
         mark.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 12))
-        mark.create_rectangle(1, 1, 37, 37, fill=TOKENS["accent"], outline="")
-        mark.create_text(
-            19,
-            19,
-            text="D.",
-            fill=TOKENS["accent_on"],
-            font=(TOKENS["mono"], 16, "bold"),
-            tags="brand-letter",
+        mark.create_rectangle(
+            3,
+            3,
+            35,
+            35,
+            fill=TOKENS["surface"],
+            outline=TOKENS["border"],
+            width=1,
+            tags=("brand-frame",),
         )
+        mark.create_line(11, 10, 24, 10, fill=TOKENS["accent"], width=2, tags="brand-mark")
+        mark.create_line(11, 16, 24, 16, fill=TOKENS["accent"], width=2, tags="brand-mark")
+        mark.create_line(11, 22, 20, 22, fill=TOKENS["accent"], width=2, tags="brand-mark")
+        mark.create_line(11, 28, 21, 28, fill=TOKENS["accent"], width=2, tags="brand-mark")
         self._brand_mark = mark
         ttk.Label(brand_row, text="dotlingo", style="Sidebar.Brand.TLabel").grid(
             row=0, column=1, sticky="sw"
@@ -638,19 +679,30 @@ class DotLingoApp:
         navigation.grid(row=2, column=0, sticky="nsew")
         navigation.columnconfigure(0, weight=1)
         self.nav_buttons: dict[str, ttk.Button] = {}
-        for index, (key, label) in enumerate(PAGES):
+        for key, label in PAGES:
             row = ttk.Frame(navigation, style="Sidebar.TFrame")
             row.grid(row=index, column=0, sticky="ew", pady=2)
-            row.columnconfigure(1, weight=1)
-            indicator = tk.Frame(row, background=TOKENS["sidebar"], width=2, height=27)
-            indicator.grid(row=0, column=0, sticky="ns", padx=(0, 6))
+            row.columnconfigure(2, weight=1)
+            indicator = tk.Frame(row, background=TOKENS["sidebar"], width=3, height=24)
+            indicator.grid(row=0, column=0, sticky="ns", padx=(0, 4))
+            icon = tk.Canvas(
+                row,
+                width=22,
+                height=22,
+                background=TOKENS["sidebar"],
+                highlightthickness=0,
+                takefocus=False,
+            )
+            icon.grid(row=0, column=1, sticky="w", padx=(5, 8))
+            self.nav_icons[key] = icon
+            self._draw_nav_icon(icon, key, TOKENS["muted"])
             button = ttk.Button(
                 row,
-                text=f"{index + 1:02}   {label}",
+                text=label,
                 style="Nav.TButton",
                 command=lambda page=key: self.show_page(page),
             )
-            button.grid(row=0, column=1, sticky="ew")
+            button.grid(row=0, column=2, sticky="ew")
             button.configure(takefocus=True)
             self.nav_buttons[key] = button
             self.nav_indicators[key] = indicator
@@ -694,7 +746,7 @@ class DotLingoApp:
         )
         self.sidebar_status.grid(row=1, column=1, sticky="ew")
 
-        main = ttk.Frame(outer, style="Workspace.TFrame", padding=(34, 24, 34, 24))
+        main = ttk.Frame(outer, style="Workspace.TFrame", padding=(40, 30, 40, 28))
         main.grid(row=0, column=1, sticky="nsew")
         main.columnconfigure(0, weight=1)
         main.rowconfigure(1, weight=1)
@@ -739,7 +791,64 @@ class DotLingoApp:
         self.show_page("projects")
 
     def _panel(self, parent: tk.Misc, **kwargs: Any) -> ttk.Frame:
-        return ttk.Frame(parent, style="Panel.TFrame", padding=kwargs.pop("padding", TOKENS["spacing_md"]), **kwargs)
+        return ttk.Frame(
+            parent,
+            style="Glass.TFrame",
+            padding=kwargs.pop("padding", TOKENS["spacing_md"]),
+            **kwargs,
+        )
+
+    @staticmethod
+    def _draw_nav_icon(canvas: tk.Canvas, page: str, color: str) -> None:
+        canvas.delete("all")
+        tags = ("glyph",)
+
+        def line(*coords: int, width: float = 1.5) -> None:
+            canvas.create_line(
+                *coords,
+                fill=color,
+                width=width,
+                capstyle="round",
+                joinstyle="round",
+                tags=tags,
+            )
+
+        if page == "documents":
+            canvas.create_rectangle(5, 2, 17, 20, outline=color, width=1.5, tags=tags)
+            line(8, 8, 14, 8)
+            line(8, 11, 14, 11)
+            line(8, 14, 13, 14)
+        elif page == "review":
+            canvas.create_rectangle(3, 3, 15, 19, outline=color, width=1.5, tags=tags)
+            line(6, 8, 12, 8)
+            line(6, 11, 10, 11)
+            canvas.create_oval(11, 11, 19, 19, outline=color, width=1.5, tags=tags)
+            line(17, 17, 20, 20)
+        elif page == "queue":
+            for y in (5, 11, 17):
+                canvas.create_oval(3, y - 1, 5, y + 1, fill=color, outline=color, tags=tags)
+                line(8, y, 19, y)
+        elif page == "projects":
+            line(2, 7, 8, 7, 10, 9, 20, 9, 20, 18, 2, 18, 2, 7)
+            line(3, 9, 19, 9)
+        elif page == "models":
+            for y in (4, 10, 16):
+                canvas.create_rectangle(4, y, 18, y + 3, outline=color, width=1.3, tags=tags)
+        elif page == "glossary":
+            line(4, 6, 4, 5, 8, 5, 8, 8, 5, 10, width=1.6)
+            line(12, 6, 12, 5, 16, 5, 16, 8, 13, 10, width=1.6)
+            line(4, 14, 18, 14)
+            line(4, 18, 15, 18)
+        elif page == "settings":
+            canvas.create_oval(5, 5, 17, 17, outline=color, width=1.5, tags=tags)
+            canvas.create_oval(9, 9, 13, 13, outline=color, width=1.5, tags=tags)
+            for x1, y1, x2, y2 in (
+                (11, 2, 11, 5),
+                (11, 17, 11, 20),
+                (2, 11, 5, 11),
+                (17, 11, 20, 11),
+            ):
+                line(x1, y1, x2, y2)
 
     def _heading(self, parent: tk.Misc, text: str) -> ttk.Label:
         return ttk.Label(parent, text=text, style="Section.TLabel")
@@ -755,9 +864,12 @@ class DotLingoApp:
             insertbackground=TOKENS["accent"],
             selectbackground=TOKENS["highlight"],
             relief="flat",
-            padx=10,
-            pady=9,
-            font=(TOKENS["font"], TOKENS["font_body"]),
+            padx=14,
+            pady=12,
+            spacing1=2,
+            spacing2=5,
+            spacing3=3,
+            font=(TOKENS["font"], TOKENS["font_body"] + 1),
             highlightthickness=1,
             highlightbackground=TOKENS["border"],
             highlightcolor=TOKENS["border_focus"],
@@ -798,6 +910,7 @@ class DotLingoApp:
     def show_page(self, page: str) -> None:
         if page not in dict(PAGES):
             return
+        previous_page = self.page
         if self.page == "review" and not self._confirm_review_change():
             return
         if self.page == "settings" and not self._confirm_settings_change():
@@ -814,8 +927,16 @@ class DotLingoApp:
             text=project_title if len(project_title) <= 44 else f"{project_title[:43]}…"
         )
         for key, button in self.nav_buttons.items():
-            button.configure(style="ActiveNav.TButton" if key == page else "Nav.TButton")
+            active = key == page
+            button.configure(style="ActiveNav.TButton" if active else "Nav.TButton")
+            self._draw_nav_icon(
+                self.nav_icons[key],
+                key,
+                TOKENS["text"] if active else TOKENS["muted"],
+            )
             self._animate_nav_indicator(key, key == page)
+        if page != previous_page:
+            self._animate_nav_icon(page)
         self._clear_content()
         renderers = {
             "projects": self._show_projects,
@@ -846,25 +967,25 @@ class DotLingoApp:
                     pass
                 setattr(self, name, None)
         if hasattr(self, "content") and self.content.winfo_exists():
-            self.content.grid_configure(padx=0)
+            self.content.grid_configure(padx=0, pady=0)
 
     def _animate_page_content(self) -> None:
         if self.reduce_motion:
-            self.content.grid_configure(padx=0)
+            self.content.grid_configure(padx=0, pady=0)
             return
-        self.content.grid_configure(padx=(14, 0))
+        self.content.grid_configure(pady=(6, 0))
 
         def advance(step: int = 0) -> None:
             if self._closing or not self.content.winfo_exists():
                 self._page_motion_job = None
                 return
-            progress = min(1.0, step / 8)
+            progress = min(1.0, step / 6)
             eased = 1 - (1 - progress) ** 3
-            self.content.grid_configure(padx=(round(14 * (1 - eased)), 0))
-            if step >= 8:
+            self.content.grid_configure(pady=(round(6 * (1 - eased)), 0))
+            if step >= 6:
                 self._page_motion_job = None
                 return
-            self._page_motion_job = self.root.after(16, lambda: advance(step + 1))
+            self._page_motion_job = self.root.after(18, lambda: advance(step + 1))
 
         advance()
 
@@ -873,19 +994,19 @@ class DotLingoApp:
         if self.reduce_motion:
             self._title_rule.configure(width=68)
             return
-        self._title_rule.configure(width=8)
+        self._title_rule.configure(width=12)
 
         def advance(step: int = 0) -> None:
             if self._closing or not self._title_rule.winfo_exists():
                 self._page_title_job = None
                 return
-            progress = min(1.0, step / 10)
+            progress = min(1.0, step / 8)
             eased = 1 - (1 - progress) ** 3
-            self._title_rule.configure(width=round(8 + 60 * eased))
-            if step >= 10:
+            self._title_rule.configure(width=round(12 + 48 * eased))
+            if step >= 8:
                 self._page_title_job = None
                 return
-            self._page_title_job = self.root.after(16, lambda: advance(step + 1))
+            self._page_title_job = self.root.after(18, lambda: advance(step + 1))
 
         advance()
 
@@ -941,13 +1062,43 @@ class DotLingoApp:
 
         self._nav_indicator_jobs[page] = self.root.after(16, lambda: advance(1))
 
+    def _animate_nav_icon(self, page: str) -> None:
+        canvas = self.nav_icons[page]
+        previous = self._nav_icon_jobs.pop(page, None)
+        if previous is not None:
+            try:
+                self.root.after_cancel(previous)
+            except tk.TclError:
+                pass
+        if self.reduce_motion:
+            return
+
+        offset = 2
+        canvas.move("glyph", 0, offset)
+        offset_value = [offset]
+
+        def settle(step: int = 0) -> None:
+            if self._closing or not canvas.winfo_exists():
+                self._nav_icon_jobs.pop(page, None)
+                return
+            next_offset = round(2 * (1 - min(1.0, step / 5)) ** 2)
+            canvas.move("glyph", 0, next_offset - offset_value[0])
+            offset_value[0] = next_offset
+            if step >= 5:
+                self._nav_icon_jobs.pop(page, None)
+                return
+            self._nav_icon_jobs[page] = self.root.after(16, lambda: settle(step + 1))
+
+        self._nav_icon_jobs[page] = self.root.after(16, lambda: settle(1))
+
     def _stop_nav_animation(self) -> None:
-        for job in self._nav_indicator_jobs.values():
+        for job in (*self._nav_indicator_jobs.values(), *self._nav_icon_jobs.values()):
             try:
                 self.root.after_cancel(job)
             except tk.TclError:
                 pass
         self._nav_indicator_jobs.clear()
+        self._nav_icon_jobs.clear()
 
     def _focus_review_search(self) -> None:
         if self.page != "review":
@@ -2169,7 +2320,7 @@ class DotLingoApp:
             return
         if getattr(self, "_review_resize_job", None) is not None:
             self._review_resize_job = None
-        orient = "vertical" if self.root.winfo_width() < 980 else "horizontal"
+        orient = "vertical" if self.root.winfo_width() < 1120 else "horizontal"
         if body.cget("orient") != orient:
             body.configure(orient=orient)
 
@@ -2995,6 +3146,12 @@ class DotLingoApp:
             for page, indicator in self.nav_indicators.items():
                 indicator.configure(
                     background=TOKENS["accent"] if page == self.page else TOKENS["sidebar"]
+                )
+                icon = self.nav_icons[page]
+                self._draw_nav_icon(
+                    icon,
+                    page,
+                    TOKENS["text"] if page == self.page else TOKENS["muted"],
                 )
         for progress in (
             getattr(self, "_wizard_progress", (None,))[0],
