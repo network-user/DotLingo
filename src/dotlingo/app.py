@@ -4,6 +4,7 @@ import argparse
 import ctypes
 import math
 import queue
+import sqlite3
 import sys
 import threading
 import tkinter as tk
@@ -514,6 +515,11 @@ class DotLingoApp:
         scale = min(width, height) / 24
         center_x, center_y = width / 2, height / 2
         stroke = max(1.35, scale * 1.4)
+        icon_background = TOKENS["surface_raised"] if name in {"sun", "moon"} and selected else background
+        try:
+            has_focus = canvas.focus_get() is canvas
+        except tk.TclError:
+            has_focus = False
 
         def xy(x: float, y: float) -> tuple[float, float]:
             return center_x + (x - 12) * scale, center_y + (y - 12) * scale
@@ -537,10 +543,12 @@ class DotLingoApp:
                 *xy(x1, y1), *xy(x2, y2), outline=foreground, fill=fill, width=stroke
             )
 
-        if name in {"sun", "moon"} and selected:
+        if name in {"sun", "moon"} and (selected or has_focus):
             canvas.create_rectangle(
                 2, 2, width - 2, height - 2,
-                fill=TOKENS["surface_raised"], outline=TOKENS["border"], width=1,
+                fill=icon_background,
+                outline=TOKENS["border_focus"] if has_focus else TOKENS["border"],
+                width=1,
             )
 
         if name == "folder":
@@ -591,7 +599,7 @@ class DotLingoApp:
         elif name == "moon":
             oval(5, 4, 19, 20)
             canvas.create_oval(
-                *xy(11, 2), *xy(21, 14), fill=background, outline=background
+                *xy(11, 2), *xy(21, 14), fill=icon_background, outline=icon_background
             )
 
     def _refresh_icons(self) -> None:
@@ -747,6 +755,8 @@ class DotLingoApp:
             icon.bind("<Button-1>", lambda _event, selected=theme: self._change_theme(selected))
             icon.bind("<Return>", lambda _event, selected=theme: self._change_theme(selected))
             icon.bind("<space>", lambda _event, selected=theme: self._change_theme(selected))
+            icon.bind("<FocusIn>", lambda _event: self._refresh_icons())
+            icon.bind("<FocusOut>", lambda _event: self._refresh_icons())
             self.theme_icons[theme] = icon
 
         navigation = ttk.Frame(sidebar, style="Sidebar.TFrame")
@@ -1300,7 +1310,14 @@ class DotLingoApp:
                     text="Нет доступной модели. Сначала добавьте модель на странице «Модели»."
                 )
                 return
-            details = [selected_model.get("ui_description", "")]
+            details = [
+                selected_model.get("ui_description")
+                or (
+                    "Пользовательская GGUF-модель; совместимость runtime и качество перевода не проверены."
+                    if selected_model.get("custom")
+                    else "Описание модели пока не заполнено."
+                )
+            ]
             if recommended is not None:
                 if selected_model["id"] == recommended["id"]:
                     details.append(f"Рекомендация для устройства: {recommendation_reason}")
@@ -1398,9 +1415,8 @@ class DotLingoApp:
             removed_source = source_code in selected_targets
             selected_targets.discard(source_code)
             if removed_source and not selected_targets:
-                selected_model = model_by_name.get(model_var.get())
                 fallback = next(
-                    (code for code in supported_languages(selected_model or {}) if code != source_code),
+                    (code for code in target_widgets if code != source_code),
                     None,
                 )
                 if fallback is not None:
@@ -1510,7 +1526,7 @@ class DotLingoApp:
                     target_langs=targets,
                     model_id=selected_model["id"],
                 )
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, sqlite3.Error) as exc:
                 messagebox.showerror("Не удалось создать проект", str(exc), parent=dialog)
                 return
             self._refresh_project_list()
@@ -2535,7 +2551,8 @@ class DotLingoApp:
                 run_state += " · точный Windows запуск ещё не проверен"
             language_count = len(supported_languages(model))
             language_line = (
-                f"В выборе проекта: {language_count} языковых кода. "
+                f"{('В выборе проекта' if model.get('status') == 'available' else 'В метаданных модели')}: "
+                f"{language_count} языковых кода. "
                 "Качество отдельных направлений в DotLingo не измерялось."
                 if language_count
                 else "Список языков для выбора в проекте не подтверждён."
@@ -2547,8 +2564,16 @@ class DotLingoApp:
                 wraplength=790,
                 justify="left",
             ).grid(row=3, column=0, columnspan=2, sticky="w", pady=6)
+            if model.get("ui_details"):
+                ttk.Label(
+                    card,
+                    text=f"Техническое примечание: {model['ui_details']}",
+                    style="Panel.Muted.TLabel",
+                    wraplength=790,
+                    justify="left",
+                ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 5))
             action = ttk.Frame(card, style="Panel.TFrame")
-            action.grid(row=4, column=0, columnspan=2, sticky="ew")
+            action.grid(row=5, column=0, columnspan=2, sticky="ew")
             if model.get("card_url"):
                 ttk.Button(
                     action,
@@ -3338,15 +3363,48 @@ class DotLingoApp:
                     row = ttk.Frame(body, style="Panel.TFrame")
                     row.pack(fill="x", pady=3)
                     available = item.get("status") == "available" and not item.get("custom")
-                    ttk.Radiobutton(
+                    row.columnconfigure(0, weight=1)
+                    selector = ttk.Radiobutton(
                         row,
                         text=f"{item['name']} · {_format_size(item.get('size_bytes'))}",
                         value=item["id"],
                         variable=model_var,
                         state="normal" if available else "disabled",
-                    ).pack(side="left")
+                    )
+                    selector.grid(row=0, column=0, sticky="w")
+                    status_text = (
+                        "Пользовательская модель"
+                        if item.get("custom")
+                        else "Требует проверки"
+                        if item.get("status") != "available"
+                        else "Установлена"
+                        if installed(item, self.models_dir)
+                        else "Доступна для загрузки"
+                    )
+                    ttk.Label(row, text=status_text, style="Panel.Muted.TLabel").grid(
+                        row=0, column=1, sticky="e", padx=(8, 0)
+                    )
+                    ttk.Label(
+                        row,
+                        text=item.get("ui_description") or item.get("notes", ""),
+                        style="Panel.Muted.TLabel",
+                        wraplength=600,
+                        justify="left",
+                    ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 4))
+                    links = ttk.Frame(row, style="Panel.TFrame")
+                    links.grid(row=2, column=0, columnspan=2, sticky="w")
+                    if item.get("card_url"):
+                        ttk.Button(
+                            links,
+                            text="Карточка модели",
+                            command=lambda url=item["card_url"]: webbrowser.open(url),
+                        ).pack(side="left")
                     if item.get("license_url"):
-                        ttk.Button(row, text="Карточка и лицензия", command=lambda url=item["license_url"]: webbrowser.open(url)).pack(side="right")
+                        ttk.Button(
+                            links,
+                            text="Лицензия",
+                            command=lambda url=item["license_url"]: webbrowser.open(url),
+                        ).pack(side="left", padx=(5, 0))
                 model_var.trace_add("write", lambda *_args: state.update(selected=model_var.get()))
                 consent_var = tk.BooleanVar(value=False)
                 consent = ttk.Checkbutton(body, text="Я ознакомился с лицензией выбранной модели и соглашаюсь скачать её вес.", variable=consent_var, wraplength=680)
