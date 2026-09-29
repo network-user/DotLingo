@@ -36,13 +36,19 @@ def _sha256_path(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
+@contextmanager
+def _connect(db_path: Path):
+    """Yield a short-lived connection; always commit and close (Windows file locks)."""
     connection = sqlite3.connect(db_path, timeout=15)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = FULL")
-    return connection
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 SCHEMA = """

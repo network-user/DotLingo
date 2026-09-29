@@ -36,7 +36,7 @@ def _create_project(api: Api, model_id: str = "", targets: list[str] | None = No
             "title": "Тестовый проект",
             "modelId": model_id,
             "sourceLang": "auto",
-            "targetLangs": targets or ["ru"],
+            "targetLangs": ["ru"] if targets is None else targets,
         }
     )
 

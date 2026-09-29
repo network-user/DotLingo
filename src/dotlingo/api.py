@@ -275,14 +275,14 @@ class Api:
         queue = self.project_queues.pop(key, None)
         if queue is not None:
             queue.close(timeout=1)
-        try:
-            delete_project(self.projects_dir, project_id)
-        except (OSError, ValueError) as exc:
-            return _err(f"Не удалось удалить проект: {exc}")
         with self._lock:
             self.projects = [p for p in self.projects if p.project["id"] != project_id]
             if self.active_project_id == project_id:
                 self.active_project_id = None
+        try:
+            delete_project(self.projects_dir, project_id)
+        except (OSError, ValueError) as exc:
+            return _err(f"Не удалось удалить проект: {exc}")
         return _ok(None)
 
     def updateProjectSettings(self, data: dict[str, Any]) -> dict[str, Any]:
