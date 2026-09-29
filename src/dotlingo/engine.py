@@ -3,7 +3,6 @@ from __future__ import annotations
 import multiprocessing as mp
 import queue
 import re
-import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -156,7 +155,6 @@ class InferenceProcess:
         )
         self._started = False
         self._request_id = 0
-        self._write_lock = threading.Lock()
 
     def start(self) -> None:
         if self._started:

@@ -162,6 +162,13 @@ class TaskQueue:
                     self._pending.put(task_id)
                     time.sleep(0.1)
                     continue
+                # Re-check the persisted status under the lock: a pause() racing
+                # with this worker must not let a paused task start translating.
+                try:
+                    if self.store.task(task_id)["status"] != "queued":
+                        continue
+                except KeyError:
+                    continue
                 self._current_task = task_id
                 self._paused = False
                 self._cancelled.discard(task_id)

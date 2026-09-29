@@ -1,0 +1,788 @@
+/* ==========================================================================
+   DotLingo - компоненты: кнопки, панели, модалки, тосты, таблицы, чипы,
+   поля, прогрессбары, пустые состояния, badge, kbd.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Кнопки
+   -------------------------------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 34px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--text);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease),
+    box-shadow var(--dur-base) var(--ease);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.btn .icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+/* Primary - акцентная монохромная */
+.btn--primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn--primary:active:not(:disabled) {
+  background: var(--accent-active);
+}
+
+/* Ghost - прозрачная с hairline */
+.btn--ghost {
+  border-color: var(--hairline);
+  color: var(--text);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--hairline-strong);
+}
+
+/* Danger */
+.btn--danger {
+  color: var(--error);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--error-bg);
+}
+
+.btn--sm {
+  min-height: 28px;
+  padding: 0 12px;
+  font-size: var(--fs-small);
+}
+
+.btn--sm .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.btn--lg {
+  min-height: 42px;
+  padding: 0 22px;
+  font-size: var(--fs-body-lg);
+}
+
+/* Иконочная кнопка-«стекло» для плотных мест (не по ТЗ, нужна страницам) */
+.btn--icon {
+  padding: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-pill);
+}
+
+/* --------------------------------------------------------------------------
+   Панели
+   -------------------------------------------------------------------------- */
+.panel {
+  position: relative;
+  padding: var(--sp-4);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+}
+
+.panel--raised {
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.panel__title {
+  font-size: var(--fs-heading);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.panel__subtitle {
+  margin-top: 2px;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+}
+
+.panel__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Fallback без backdrop-filter */
+@supports not (backdrop-filter: blur(1px)) {
+  .panel {
+    background: var(--surface-solid);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Чипы
+   -------------------------------------------------------------------------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  max-width: 260px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip .icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.chip--button {
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.chip--button:hover {
+  background: var(--surface-hover);
+  border-color: var(--hairline-strong);
+}
+
+.chip--removable .chip__remove {
+  display: inline-flex;
+  margin-right: -4px;
+  margin-left: 2px;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-pill);
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.chip--removable .chip__remove .icon {
+  width: 11px;
+  height: 11px;
+}
+
+.chip--removable .chip__remove:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+/* --------------------------------------------------------------------------
+   Поля ввода
+   -------------------------------------------------------------------------- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field__label {
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.field__hint {
+  font-size: var(--fs-caption);
+  color: var(--text-tertiary);
+}
+
+.field__hint--error {
+  color: var(--error);
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-body);
+  transition: border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.input:hover,
+.select:hover,
+.textarea:hover {
+  border-color: var(--hairline-strong);
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-halo);
+  outline: none;
+}
+
+.textarea {
+  min-height: 84px;
+  padding: 8px 12px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: var(--chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px;
+}
+
+.select:invalid,
+.input:invalid {
+  border-color: var(--error);
+}
+
+/* --------------------------------------------------------------------------
+   Таблицы
+   -------------------------------------------------------------------------- */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-body);
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px var(--sp-3);
+  text-align: left;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  background: var(--surface-solid);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.table td {
+  padding: 12px var(--sp-3);
+  border-bottom: 1px solid var(--hairline);
+  vertical-align: middle;
+}
+
+.table tbody tr {
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.table tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table__row--selected {
+  background: var(--surface-hover);
+}
+
+/* --------------------------------------------------------------------------
+   Прогрессбары
+   -------------------------------------------------------------------------- */
+.progress {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--surface-hover);
+  overflow: hidden;
+}
+
+.progress__bar {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur-slow) var(--ease);
+}
+
+.progress__bar--indeterminate {
+  width: 30%;
+  animation: progress-slide 1.4s var(--ease) infinite;
+}
+
+@keyframes progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(433%);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Модалки
+   -------------------------------------------------------------------------- */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  background: var(--scrim);
+  -webkit-backdrop-filter: blur(var(--blur-modal, 8px)) saturate(120%);
+  backdrop-filter: blur(var(--blur-modal, 8px)) saturate(120%);
+  opacity: 0;
+  animation: modal-scrim-in var(--dur-base) var(--ease) forwards;
+}
+
+@keyframes modal-scrim-in {
+  to {
+    opacity: 1;
+  }
+}
+
+.modal-scrim--closing {
+  animation: modal-scrim-out var(--dur-base) var(--ease) forwards;
+}
+
+@keyframes modal-scrim-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.modal {
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100vh - 2 * var(--sp-5));
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-xl);
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
+  animation: modal-in 200ms var(--ease) forwards;
+}
+
+@keyframes modal-in {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal-scrim--closing .modal {
+  animation: modal-out var(--dur-base) var(--ease) forwards;
+}
+
+@keyframes modal-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+.modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5) 0;
+}
+
+.modal__title {
+  font-size: var(--fs-subtitle);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.modal__subtitle {
+  margin-top: 4px;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+}
+
+.modal__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: -2px -6px 0 0;
+  border-radius: var(--r-pill);
+  color: var(--text-tertiary);
+  transition: background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.modal__close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.modal__close .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.modal__body {
+  padding: var(--sp-3) var(--sp-5);
+  overflow-y: auto;
+  font-size: var(--fs-body);
+}
+
+.modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5) var(--sp-5);
+}
+
+.modal__footer--danger {
+  justify-content: flex-start;
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .modal {
+    background: var(--surface-raised-solid);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Тосты
+   -------------------------------------------------------------------------- */
+.toasts {
+  position: fixed;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-width: 360px;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow-md);
+  font-size: var(--fs-small);
+  color: var(--text);
+  opacity: 0;
+  transform: translateY(10px);
+  animation: toast-in var(--dur-base) var(--ease) forwards;
+  pointer-events: auto;
+}
+
+@keyframes toast-in {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.toast--closing {
+  animation: toast-out var(--dur-base) var(--ease) forwards;
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.toast__icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+
+.toast__icon .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.toast--error .toast__icon {
+  color: var(--error);
+}
+
+.toast--success .toast__icon {
+  color: var(--success);
+}
+
+.toast--warning .toast__icon {
+  color: var(--warning);
+}
+
+.toast--info .toast__icon {
+  color: var(--info);
+}
+
+.toast__message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast__close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: -2px -4px 0 0;
+  border-radius: var(--r-pill);
+  color: var(--text-tertiary);
+  transition: color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.toast__close:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.toast__close .icon {
+  width: 11px;
+  height: 11px;
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .toast {
+    background: var(--surface-raised-solid);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Badge
+   -------------------------------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-caption);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.badge__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.badge--success {
+  color: var(--success);
+  background: var(--success-bg);
+}
+
+.badge--error {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.badge--warning {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.badge--muted {
+  color: var(--text-secondary);
+  background: var(--info-bg);
+}
+
+/* --------------------------------------------------------------------------
+   Пустые состояния
+   -------------------------------------------------------------------------- */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-5) var(--sp-4);
+  text-align: center;
+}
+
+.empty__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: var(--sp-1);
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--text-tertiary);
+}
+
+.empty__icon .icon {
+  width: 24px;
+  height: 24px;
+}
+
+.empty__title {
+  font-size: var(--fs-body-lg);
+  font-weight: 600;
+}
+
+.empty__text {
+  max-width: 380px;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+}
+
+.empty__action {
+  margin-top: var(--sp-2);
+}
+
+/* --------------------------------------------------------------------------
+   kbd
+   -------------------------------------------------------------------------- */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline-strong);
+  border-bottom-width: 2px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-secondary);
+  box-shadow: 0 1px 0 var(--hairline);
+}
+
+/* --------------------------------------------------------------------------
+   Спиннер
+   -------------------------------------------------------------------------- */
+.spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--hairline-strong);
+  border-top-color: var(--accent);
+  animation: spinner-rotate 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.spinner--sm {
+  width: 14px;
+  height: 14px;
+}
+
+.spinner--lg {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -292,6 +292,7 @@ class ProjectStore:
     def update_settings(
         self,
         *,
+        title: str | None = None,
         source_lang: str | None = None,
         target_lang: str | None = None,
         target_langs: list[str] | tuple[str, ...] | None = None,
@@ -300,6 +301,7 @@ class ProjectStore:
         rules: str | None = None,
     ) -> None:
         values = {
+            "title": title,
             "source_lang": source_lang,
             "target_lang": target_lang,
             "target_langs_json": (
@@ -311,6 +313,8 @@ class ProjectStore:
             "context": context,
             "rules": rules,
         }
+        if title is not None:
+            values["title"] = title.strip() or "Новый проект"
         values = {key: value for key, value in values.items() if value is not None}
         if target_langs is not None:
             targets = list(dict.fromkeys(target_langs))
@@ -355,6 +359,23 @@ class ProjectStore:
                 (pair["source_lang"], chosen_target),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def update_glossary_term(self, term_id: int, source: str, target: str) -> None:
+        if not source.strip() or not target.strip():
+            raise ValueError("Обе формы термина должны быть заполнены.")
+        with _connect(self.db_path) as db:
+            cursor = db.execute(
+                "UPDATE glossary SET source=?, target=? WHERE id=?",
+                (source.strip(), target.strip(), int(term_id)),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(term_id)
+
+    def delete_glossary_term(self, term_id: int) -> None:
+        with _connect(self.db_path) as db:
+            cursor = db.execute("DELETE FROM glossary WHERE id=?", (int(term_id),))
+            if cursor.rowcount == 0:
+                raise KeyError(term_id)
 
     def import_file(self, path: Path) -> DocumentRecord:
         path = Path(path)
@@ -700,3 +721,14 @@ def list_projects(base: Path) -> list[ProjectStore]:
             except (OSError, sqlite3.DatabaseError):
                 continue
     return sorted(result, key=lambda project: project.project["updated_at"], reverse=True)
+
+
+def delete_project(base: Path, project_id: str) -> None:
+    """Remove one project directory; never touch anything outside base."""
+    base = Path(base).resolve()
+    root = base / project_id
+    if not root.is_dir():
+        return
+    if root.resolve().parent != base:
+        raise ValueError("Каталог проекта находится вне хранилища проектов.")
+    shutil.rmtree(root)
