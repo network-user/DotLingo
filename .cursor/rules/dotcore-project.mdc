@@ -9,7 +9,7 @@ alwaysApply: true
 
 Канонические инструкции: [AGENTS.md](../../AGENTS.md).
 
-- **Тип:** настольное приложение на Python и Tkinter.
+- **Тип:** настольное приложение на Python и pywebview (Edge WebView2); веб-слой `src/dotlingo/web/` без сборки.
 - **Установка разработки:** `python -m pip install -e ".[dev,pdf]"`.
 - **Запуск:** `python -m dotlingo`.
 - **Тесты:** `python -m pytest -q`.
