@@ -1,1 +1,378 @@
 /* Страницы: Модели, Глоссарий, Настройки, мастер первого запуска. */
+
+/* --------------------------------------------------------------------------
+   Модели: панель рекомендации и панель «проверка не запускалась»
+   -------------------------------------------------------------------------- */
+
+.model-rec {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.model-rec__eyebrow {
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.model-rec__name {
+  font-size: var(--fs-subtitle);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.model-rec__reason {
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.model-rec__disclaimer {
+  font-size: var(--fs-caption);
+  color: var(--text-tertiary);
+}
+
+.model-rec__actions {
+  margin-top: var(--sp-1);
+}
+
+.hw-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.hw-panel__title {
+  font-size: var(--fs-body-lg);
+  font-weight: 600;
+}
+
+.hw-panel__text {
+  margin-top: 2px;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+}
+
+/* --------------------------------------------------------------------------
+   Модели: сетка карточек
+   -------------------------------------------------------------------------- */
+
+.model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--sp-3);
+}
+
+.model-grid .empty {
+  grid-column: 1 / -1;
+}
+
+.model-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.model-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.model-card__name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-heading);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.model-card__desc {
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.model-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.model-meta__row {
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+}
+
+.model-meta__row--muted {
+  font-size: var(--fs-caption);
+  color: var(--text-tertiary);
+}
+
+/* Вердикт совместимости с устройством */
+.model-compat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.model-compat__verdict {
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.model-compat__verdict--no {
+  color: var(--error);
+}
+
+.model-compat__verdict--unknown,
+.model-compat__verdict--runtime_missing {
+  color: var(--warning);
+}
+
+.model-compat__verdict--cpu_unverified {
+  color: var(--success);
+}
+
+.model-compat__reason {
+  font-size: var(--fs-caption);
+  color: var(--text-tertiary);
+}
+
+.model-warn {
+  font-size: var(--fs-caption);
+  color: var(--warning);
+}
+
+/* Чипы языков */
+.model-card__langs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.model-lang {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.model-lang--more {
+  font-family: var(--font-mono);
+  border-style: dashed;
+  color: var(--text-tertiary);
+}
+
+/* Кнопка-раскрытие «Подробнее» */
+.model-card__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 2px 0;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.model-card__toggle:hover {
+  color: var(--text);
+}
+
+.model-card__toggle .icon {
+  width: 14px;
+  height: 14px;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.model-card__toggle.is-open .icon {
+  transform: rotate(180deg);
+}
+
+/* Развёрнутый блок деталей */
+.model-card__details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--hairline);
+}
+
+.model-card__details-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.model-card__details-label {
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
+.model-card__details-text {
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Футер карточки */
+.model-card__footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--hairline);
+}
+
+.model-card__status-note {
+  font-size: var(--fs-small);
+  color: var(--text-tertiary);
+}
+
+.model-card__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+}
+
+.model-link {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-decoration-color: var(--hairline-strong);
+  text-underline-offset: 3px;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.model-link:hover {
+  color: var(--text);
+}
+
+/* Подпись магазина под сеткой */
+.model-shop-note {
+  padding: 0 var(--sp-1);
+  font-size: var(--fs-caption);
+  color: var(--text-tertiary);
+}
+
+/* --------------------------------------------------------------------------
+   Модели: consent-чекбокс (кастомная отрисовка галки)
+   -------------------------------------------------------------------------- */
+
+.consent-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.consent-check__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.consent-check__box {
+  position: relative;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border-radius: 5px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  transition: background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.consent-check__box::after {
+  content: "";
+  position: absolute;
+  left: 4.5px;
+  top: 1.5px;
+  width: 4px;
+  height: 8px;
+  border-right: 2px solid var(--accent-text);
+  border-bottom: 2px solid var(--accent-text);
+  transform: rotate(45deg) scale(0.6);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.consent-check:hover .consent-check__box {
+  border-color: var(--text-tertiary);
+}
+
+.consent-check__input:checked ~ .consent-check__box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.consent-check__input:checked ~ .consent-check__box::after {
+  opacity: 1;
+  transform: rotate(45deg) scale(1);
+}
+
+.consent-check__input:focus-visible ~ .consent-check__box {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.consent-check__label {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* --------------------------------------------------------------------------
+   Модели: модалка загрузки
+   -------------------------------------------------------------------------- */
+
+.download-note {
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.download-status {
+  font-size: var(--fs-caption);
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------------------------
+   Модели: модалка импорта своей модели
+   -------------------------------------------------------------------------- */
+
+.model-import__file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.model-import__file-row .input {
+  flex: 1;
+  min-width: 0;
+}
