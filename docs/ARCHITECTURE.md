@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart LR
-  UI[Tk desktop UI] --> App[Application services]
+  UI[pywebview UI (web/ + api.py мост)] --> App[Application services]
   App --> Store[(Project SQLite + immutable source copy)]
   App --> Formats[Format importers / writers]
   App --> Queue[Persistent cancellable task queue]
@@ -21,7 +21,7 @@ flowchart LR
 
 ## Слои
 
-- `formats.py`: importer/writer boundary и нормализованные `ParsedDocument`/`Block`; никаких Tk типов.
+- `formats.py`: importer/writer boundary и нормализованные `ParsedDocument`/`Block`; никаких UI-типов.
 - `segmentation.py`, `glossary.py`: чистые функции. Segmentation ограничивает порции; имена из глоссария защищаются уникальными маркерами на каждое совпадение.
 - `storage.py`: отдельная SQLite база на проект (`WAL`, `synchronous=FULL`), immutable source copy, SHA-256, parsed tree, переводы по целевому языку, очередь, обнаруженный исходный язык, события и экспортные записи. Задача фиксирует модель, направление, контекст и правила на момент постановки в очередь.
 - `languages.py`: названия языков и список кодов, доступных в выборе для каждой модели. Это интерфейсная выборка из заявленной поддержки, а не гарантия качества языковой пары.
@@ -30,7 +30,9 @@ flowchart LR
 - `model_download.py`, `models.py`: каталог с закреплёнными artifact revision/size/hash, allowlisted HTTPS, проверка пути/перенаправления/range/size/SHA/magic; staging переименовывается в активный вес после проверки. Файл GGUF загружается как данные, произвольный Python из модели не исполняется.
 - Пользовательские GGUF хранятся в `models/<custom-id>/model.gguf`; реестр содержит локальные метаданные, список языков задаёт пользователь, а совместимость и качество не подтверждаются. Импорт копирует файл только после отдельного подтверждения, сверяет GGUF magic, размер и SHA-256; исходник не меняется.
 - `hardware.py`: RAM/free disk из psutil; NVIDIA данные через `nvidia-smi` если доступен; llama backend проверяется независимо. Проверка выполняется в фоне при каждом обычном запуске и в мастере первого запуска. Рекомендация выбирает крупнейшую доступную зарегистрированную модель по расчётной RAM, запасу 1 ГБ и месту на диске; это оценка размещения, не качества. CPU-потоки настраиваются автоматически с пределом 8 и одним оставленным логическим потоком. GPU offload в MVP выключен.
-- `app.py`: тонкий Tk UI. Потоки отправляют immutable события в `queue.Queue`, widget меняется только из polling callback главного Tk thread.
+- `app.py`: тонкая точка входа. Создаёт окно pywebview 1280x820 (минимальный размер 1020x680) с `js_api`-мостом и локальной HTTP-раздачей `web/`; `http_server=True` обязателен, потому что ES-модули не загружаются с `file://` (CORS). Параметры: `--data-dir`, `--smoke-test`. При ошибке старта (отсутствие WebView2) печатает подсказку и показывает MessageBox; закрытие окна вызывает `closeGracefully` моста.
+- `api.py`: мост `js_api` между web UI и ядром. Методы camelCase, ответы в едином конверте `{ok, data}` либо `{ok: false, error, code}`. Длительные действия (импорт документов, загрузка и проверка модели, импорт своего GGUF, детект оборудования) выполняются в daemon worker-потоках и сразу возвращают `{started: true}`; результаты доставляются push-событиями через `evaluate_js` в `window.DL.push_event`: `task_event`, `download_progress`, `hardware_detected`, `documents_imported`, `download_done`, `model_verified`, `custom_model_imported`, `export_done`. Ранее UI опрашивал события через Tk `root.after(150)`; polling удалён, обновления приходят только push-событиями. Нативные диалоги выбора файлов - через `window.create_file_dialog` моста.
+- `web/`: статический vanilla JS на ES-модулях, без сборочного шага. `index.html`; `styles/` (`tokens` - тема через атрибут `[data-theme]` на `<html>`, `base`, `components`, `shell`, `pages-work`, `pages-library`); `js/` (`main`, `bridge` - вызовы моста и `push_event`, `store`, `router`, `components`, `icons`); `js/pages/` (`projects`, `documents`, `review`, `queue`, `models`, `glossary`, `settings`, `wizard`). Python-модуль `theme.py` удалён: темы задаются только CSS.
 - `paths.py`, `preferences.py`: бинарники приложения, проекты и веса физически разнесены. Сборка предполагает per-user установку под `%LOCALAPPDATA%\Programs\DotLingo`.
 
 ## Поток документа

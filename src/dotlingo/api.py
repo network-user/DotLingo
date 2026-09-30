@@ -41,6 +41,15 @@ from dotlingo.task_queue import TaskQueue, build_chunks
 IMPORT_EXTENSIONS = ("*.txt;*.md;*.markdown;*.docx;*.epub;*.pdf", "Все файлы (*.*)")
 
 
+EXPORT_ALLOWED = {
+    "txt": (".txt", ".md"),
+    "markdown": (".md", ".txt"),
+    "docx": (".docx", ".txt", ".md"),
+    "epub": (".epub", ".txt", ".md"),
+    "pdf": (".txt", ".md"),
+}
+
+
 def _ok(data: Any = None) -> dict[str, Any]:
     return {"ok": True, "data": data}
 
@@ -64,6 +73,94 @@ def _runtime_available() -> bool:
     except ImportError:
         return False
     return True
+
+
+SPECTRUM_TICKS = 160
+
+HARDWARE_CACHE = "hardware.json"
+
+
+def _serialize_hardware(
+    snapshot: HardwareSnapshot, detected_at: str | None = None
+) -> dict[str, Any]:
+    return {
+        "profile": snapshot.profile,
+        "cpuThreads": snapshot.cpu_threads,
+        "ramTotalGb": snapshot.ram_total_gb,
+        "ramAvailableGb": snapshot.ram_available_gb,
+        "diskFreeGb": snapshot.disk_free_gb,
+        "gpuNames": list(snapshot.gpu_names or ()),
+        "gpuVramGb": [value if value is not None else None for value in (snapshot.gpu_vram_gb or ())],
+        "llamaRuntimeAvailable": snapshot.llama_runtime_available,
+        "llamaGpuOffloadAvailable": snapshot.llama_gpu_offload_available,
+        "detectedAt": detected_at or datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _hardware_from_cache(data: dict[str, Any]) -> HardwareSnapshot:
+    return HardwareSnapshot(
+        cpu_threads=int(data["cpuThreads"]),
+        ram_total_gb=float(data["ramTotalGb"]),
+        ram_available_gb=float(data["ramAvailableGb"]),
+        disk_free_gb=float(data["diskFreeGb"]),
+        gpu_names=tuple(data.get("gpuNames") or ()),
+        gpu_vram_gb=tuple(data.get("gpuVramGb") or ()),
+        llama_runtime_available=bool(data.get("llamaRuntimeAvailable")),
+        llama_gpu_offload_available=data.get("llamaGpuOffloadAvailable"),
+    )
+
+
+def _load_hardware_cache(root: Path) -> tuple[HardwareSnapshot | None, str | None]:
+    """Прочитать кэш последней проверки устройства; молча при любой порче."""
+    try:
+        data = json.loads((Path(root) / HARDWARE_CACHE).read_text(encoding="utf-8"))
+        snapshot = _hardware_from_cache(data)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, None
+    detected_at = data.get("detectedAt")
+    return snapshot, detected_at if isinstance(detected_at, str) else None
+
+
+def _save_hardware_cache(root: Path, snapshot: HardwareSnapshot, detected_at: str) -> None:
+    """Атомарно записать кэш проверки устройства."""
+    path = Path(root) / HARDWARE_CACHE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".tmp")
+        temp.write_text(
+            json.dumps(_serialize_hardware(snapshot, detected_at), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(temp, path)
+    except OSError:
+        # Кэш не критичен: без него проверка просто выполнится заново.
+        pass
+
+
+def _block_spectrum(blocks: list[Any], translations: dict[int, str]) -> list[float]:
+    """Спектр перевода: одно значение на блок (или корзину блоков).
+
+    -1.0 - нетранслируемый блок, 0.0 - не переведён, 1.0 - переведён;
+    для длинных документоов значения усредняются в корзины (не более SPECTRUM_TICKS).
+    """
+    flags: list[float] = []
+    for block in blocks:
+        if not getattr(block, "translatable", False):
+            flags.append(-1.0)
+        else:
+            flags.append(1.0 if (translations.get(block.order) or "").strip() else 0.0)
+    if len(flags) <= SPECTRUM_TICKS:
+        return flags
+    bucket = -(-len(flags) // SPECTRUM_TICKS)
+    result: list[float] = []
+    for start in range(0, len(flags), bucket):
+        chunk = flags[start : start + bucket]
+        meaningful = [value for value in chunk if value >= 0]
+        if not meaningful:
+            result.append(-1.0)
+        else:
+            result.append(round(sum(meaningful) / len(meaningful), 2))
+    return result
 
 
 def _serialize_project(store: ProjectStore, *, with_counts: bool = False) -> dict[str, Any]:
@@ -99,12 +196,12 @@ class Api:
         self.projects: list[ProjectStore] = list_projects(self.projects_dir)
         self.project_queues: dict[str, TaskQueue] = {}
         self.active_project_id: str | None = None
-        self.hardware: HardwareSnapshot | None = None
         self._lock = threading.RLock()
         self._window: Any = None
         self._workers: list[threading.Thread] = []
         self._download_cancel: DownloadCancellation | None = None
         self._closing = False
+        self.hardware, self._hardware_detected_at = _load_hardware_cache(self.data_dir)
         preferences = load_preferences(self.preferences_root)
         self._preferences = preferences
         last = preferences.get("last_project") or ""
@@ -372,6 +469,7 @@ class Api:
             blocks = store.blocks(record.id)
             total_translatable = sum(1 for block in blocks if block.translatable)
             progress_by_target: dict[str, dict[str, int]] = {}
+            spectrum_by_target: dict[str, list[float]] = {}
             for lang in targets:
                 translations = store.translations(record.id, target_lang=lang)
                 done = sum(
@@ -380,6 +478,7 @@ class Api:
                     if block.translatable and translations.get(block.order, "").strip()
                 )
                 progress_by_target[lang] = {"done": done, "total": total_translatable}
+                spectrum_by_target[lang] = _block_spectrum(blocks, translations)
             exports = store.exports(record.id)
             detected = store.detected_language(record.id)
             result.append(
@@ -389,6 +488,7 @@ class Api:
                     "format": record.format,
                     "warnings": list(record.warnings),
                     "progressByTarget": progress_by_target,
+                    "spectrumByTarget": spectrum_by_target,
                     "exportCount": len(exports),
                     "detectedLanguage": detected,
                 }
@@ -649,13 +749,23 @@ class Api:
     def getHardware(self) -> dict[str, Any]:
         if self.hardware is None:
             return _ok(None)
-        return _ok(_serialize_hardware(self.hardware))
+        return _ok(_serialize_hardware(self.hardware, self._hardware_detected_at))
+
+    def getLanguages(self) -> dict[str, Any]:
+        """Словарь код → русское название для UI."""
+        return _ok(dict(LANGUAGES))
 
     def detectHardware(self) -> dict[str, Any]:
+        """Локальная проверка устройства; результат кэшируется до явного повтора."""
+
         def work() -> None:
             snapshot = detect(self.models_dir)
-            self.hardware = snapshot
-            self._push("hardware_detected", _serialize_hardware(snapshot))
+            detected_at = datetime.now(timezone.utc).isoformat()
+            with self._lock:
+                self.hardware = snapshot
+                self._hardware_detected_at = detected_at
+            _save_hardware_cache(self.data_dir, snapshot, detected_at)
+            self._push("hardware_detected", _serialize_hardware(snapshot, detected_at))
 
         self._spawn(work, "device_check")
         return _ok({"started": True})
@@ -865,10 +975,29 @@ class Api:
             return _ok([])
         return _ok([str(item) for item in paths])
 
+    def resolveGGUFPath(self) -> dict[str, Any]:
+        """Нативный диалог выбора локального GGUF-файла."""
+        if self._window is None:
+            return _ok(None)
+        try:
+            paths = self._window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=("GGUF-модели (*.gguf)", "Все файлы (*.*)"),
+            )
+        except Exception:
+            return _ok(None)
+        if not paths:
+            return _ok(None)
+        return _ok(str(paths[0]) if isinstance(paths, (list, tuple)) else str(paths))
+
     def resolveExportPath(self, default_name: str, allowed_extensions: list[str]) -> dict[str, Any]:
         if self._window is None:
             return _ok(None)
-        patterns = [f"*.{".".join(ext)}" if False else f"*{ext}" for ext in allowed_extensions]
+        extensions = [
+            ext if ext.startswith(".") else f".{ext}" for ext in (allowed_extensions or [".txt"])
+        ]
+        patterns = [f"*{ext}" for ext in extensions]
         try:
             paths = self._window.create_file_dialog(
                 webview.SAVE_DIALOG,
@@ -880,7 +1009,22 @@ class Api:
             return _ok(None)
         if not paths:
             return _ok(None)
-        return _ok(str(paths[0]) if isinstance(paths, (list, tuple)) else str(paths))
+        chosen = str(paths[0]) if isinstance(paths, (list, tuple)) else str(paths)
+        suffix = Path(chosen).suffix.lower()
+        if suffix not in extensions:
+            chosen = f"{chosen}{extensions[0]}"
+        return _ok(chosen)
+
+    def getExportExtensions(self, doc_id: str) -> dict[str, Any]:
+        """Допустимые расширения экспорта по формату документа (матрица форматов)."""
+        store = self._active_store()
+        if store is None:
+            return _err("Сначала выберите проект.", "no_project")
+        try:
+            record = store.document(doc_id)
+        except KeyError:
+            return _err("Документ не найден.", "not_found")
+        return _ok(list(EXPORT_ALLOWED.get(record.format, (".txt", ".md"))))
 
     def revealPath(self, path: str) -> dict[str, Any]:
         if not path:
@@ -930,18 +1074,3 @@ class Api:
             if has_queued:
                 self._queue_for(store).start()
         return _ok(None)
-
-
-def _serialize_hardware(snapshot: HardwareSnapshot) -> dict[str, Any]:
-    return {
-        "profile": snapshot.profile,
-        "cpuThreads": snapshot.cpu_threads,
-        "ramTotalGb": snapshot.ram_total_gb,
-        "ramAvailableGb": snapshot.ram_available_gb,
-        "diskFreeGb": snapshot.disk_free_gb,
-        "gpuNames": list(snapshot.gpu_names or ()),
-        "gpuVramGb": [value if value is not None else None for value in (snapshot.gpu_vram_gb or ())],
-        "llamaRuntimeAvailable": snapshot.llama_runtime_available,
-        "llamaGpuOffloadAvailable": snapshot.llama_gpu_offload_available,
-        "detectedAt": datetime.now(timezone.utc).isoformat(),
-    }

@@ -13,11 +13,19 @@ const state = {
   page: '',
   /** @type {'dark'|'light'} активная тема */
   theme: 'dark',
-  /** @type {object|null} информация об устройстве (CPU, RAM, диск) */
+  /** @type {boolean} уменьшить движение и переходы интерфейса */
+  reduceMotion: false,
+  /** @type {object|null} информация об устройстве (HardwareSnapshot) */
   hardware: null,
   /** @type {Array<object>} доступные модели */
   models: [],
-  /** @type {Array<object>} события очереди задач */
+  /** @type {object|null} рекомендация устройства {id, reason} */
+  recommendation: null,
+  /** @type {Object<string, string>} языки: код → русское название */
+  languages: {},
+  /** @type {object|null} каталоги данных {projectsDir, modelsDir} */
+  dataDirs: null,
+  /** @type {Array<object>} события очереди задач (push из Python) */
   taskEvents: [],
   /** @type {boolean} bridge на моках (demo data) */
   demo: false,

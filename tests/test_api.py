@@ -134,10 +134,11 @@ def test_project_validation(tmp_path: Path) -> None:
     model = _available_model()
     api = _make_api(tmp_path)
     assert _create_project(api, model["id"], targets=[])["code"] == "no_targets"
-    unsupported = next(
-        (code for code in ("de", "fr", "ja", "zz") if not supports_language(model, code)),
-        "zz",
-    )
+    from dotlingo.languages import LANGUAGES
+
+    unsupported = next((code for code in LANGUAGES if not supports_language(model, code)), None)
+    if unsupported is None:
+        pytest.skip("Модель поддерживает все известные языки.")
     result = _create_project(api, model["id"], targets=[unsupported])
     assert result["code"] == "language_unsupported"
     assert api.renameProject("missing", "x")["ok"] is False
@@ -172,6 +173,9 @@ def test_document_import_edit_export(tmp_path: Path) -> None:
     assert len(documents) == 1
     doc_id = documents[0]["id"]
     assert documents[0]["progressByTarget"]["ru"]["total"] > 0
+    spectrum = documents[0]["spectrumByTarget"]["ru"]
+    assert spectrum, "спектр документа не должен быть пуст"
+    assert any(value == 1.0 for value in spectrum) is False  # ещё нет переводов
 
     detail = api.getDocument(doc_id)["data"]
     assert detail["blocks"], "блоки должны быть"
@@ -180,6 +184,8 @@ def test_document_import_edit_export(tmp_path: Path) -> None:
     saved = api.saveEdit(doc_id, order, "Исправленный перевод.", "ru")
     assert saved["ok"] is True
     assert api.getDocument(doc_id)["data"]["translations"]["ru"][str(order)] == "Исправленный перевод."
+    spectrum = api.listDocuments()["data"][0]["spectrumByTarget"]["ru"]
+    assert any(value == 1.0 for value in spectrum) is True
 
     destination = tmp_path / "export" / "sample.translated-ru.txt"
     destination.parent.mkdir(exist_ok=True)
@@ -253,11 +259,8 @@ def test_glossary_crud(tmp_path: Path) -> None:
     assert added["ok"] is True
 
     terms = api.listGlossary("ru")["data"]
-    assert len(terms) == 1
-    assert terms[0]["source"] == "term"
-    assert terms[0]["target"] == "термин"
+    assert terms == [{"id": 1, "source": "term", "target": "термин"}]
     term_id = terms[0]["id"]
-    assert isinstance(term_id, int)
 
     updated = api.updateGlossaryTerm({"id": term_id, "source": "term", "target": "термин 2"})
     assert updated["ok"] is True
@@ -280,6 +283,37 @@ def test_list_models_catalog(tmp_path: Path) -> None:
     assert models, "каталог не должен быть пуст"
     assert all(item["installState"] in {"installed", "available", "missing", "unverified"} for item in models)
     assert {item["id"] for item in models} >= {model["id"] for model in catalog()}
+
+
+# --------------------------------------------------------------------- hardware
+
+
+def test_hardware_cached_until_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dotlingo.hardware import HardwareSnapshot
+
+    api = _make_api(tmp_path, sync=True)
+    assert api.getHardware()["data"] is None
+
+    snapshot = HardwareSnapshot(
+        cpu_threads=8,
+        ram_total_gb=16.0,
+        ram_available_gb=8.0,
+        disk_free_gb=100.0,
+        gpu_names=("NVIDIA Demo",),
+        gpu_vram_gb=(4.0,),
+        llama_runtime_available=True,
+        llama_gpu_offload_available=None,
+    )
+    monkeypatch.setattr(api_module, "detect", lambda _path: snapshot)
+    assert api.detectHardware()["ok"] is True
+    assert (tmp_path / "hardware.json").is_file()
+
+    # Новый экземпляр поднимает кэш мгновенно, без повторной проверки.
+    cached = Api(tmp_path).getHardware()["data"]
+    assert cached is not None
+    assert cached["cpuThreads"] == 8
+    assert cached["gpuNames"] == ["NVIDIA Demo"]
+    assert cached["detectedAt"]
 
 
 # --------------------------------------------------------------------- close semantics

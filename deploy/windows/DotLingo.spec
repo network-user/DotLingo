@@ -17,19 +17,42 @@ if find_spec("pypdf") is None:
 llama_datas, llama_binaries, llama_hidden = collect_all("llama_cpp")
 pypdf_datas, pypdf_binaries, pypdf_hidden = collect_all("pypdf")
 docx_datas, docx_binaries, docx_hidden = collect_all("docx")
+webview_datas, webview_binaries, webview_hidden = collect_all("webview")
+clr_datas, clr_binaries, clr_hidden = collect_all("clr_loader")
+pythonnet_datas, pythonnet_binaries, pythonnet_hidden = collect_all("pythonnet")
 
-datas = llama_datas + pypdf_datas + docx_datas + [
-    (str(src_root / "dotlingo" / "models.json"), "dotlingo"),
-    (str(src_root / "dotlingo" / "assets"), "dotlingo/assets"),
-    (str(src_root / "dotlingo" / "web"), "dotlingo/web"),
-]
-binaries = llama_binaries + pypdf_binaries + docx_binaries
-hiddenimports = llama_hidden + pypdf_hidden + docx_hidden + [
-    "dotlingo.app",
-    "dotlingo.hardware",
-    "dotlingo.model_download",
-    "dotlingo.task_queue",
-]
+datas = (
+    llama_datas
+    + pypdf_datas
+    + docx_datas
+    + webview_datas
+    + clr_datas
+    + pythonnet_datas
+    + [
+        (str(src_root / "dotlingo" / "models.json"), "dotlingo"),
+        (str(src_root / "dotlingo" / "assets"), "dotlingo/assets"),
+        (str(src_root / "dotlingo" / "web"), "dotlingo/web"),
+    ]
+)
+binaries = llama_binaries + pypdf_binaries + docx_binaries + webview_binaries + clr_binaries + pythonnet_binaries
+hiddenimports = (
+    llama_hidden
+    + pypdf_hidden
+    + docx_hidden
+    + webview_hidden
+    + clr_hidden
+    + pythonnet_hidden
+    + [
+        "dotlingo.app",
+        "dotlingo.api",
+        "dotlingo.hardware",
+        "dotlingo.model_download",
+        "dotlingo.task_queue",
+        "bottle",
+        "webview.platforms.edgechromium",
+        "webview.platforms.winforms",
+    ]
+)
 
 a = Analysis(
     [str(src_root / "dotlingo" / "__main__.py")],
@@ -40,7 +63,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["PySide6", "PyQt6", "PyQt5", "torch", "transformers", "jupyter"],
+    excludes=["tkinter", "PySide6", "PyQt6", "PyQt5", "torch", "transformers", "jupyter"],
     noarchive=False,
     optimize=1,
 )

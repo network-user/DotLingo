@@ -26,14 +26,7 @@ dotlingo = "dotlingo.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-dotlingo = [
-  "models.json",
-  "assets/*",
-  "web/*.html",
-  "web/js/*.js",
-  "web/js/pages/*.js",
-  "web/styles/*.css",
-]
+dotlingo = ["models.json", "assets/*", "web/**"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

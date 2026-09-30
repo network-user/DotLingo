@@ -1,6 +1,7 @@
 /**
- * Обёртка над pywebview.api: промис-хелпер call(method, ...args),
- * ожидание готовности bridge и dev-фолбэк с мок-ответами.
+ * Обёртка над pywebview.api: call(method, ...args) всегда возвращает
+ * распакованный конверт {ok, data, error, code} → data (или кидает BridgeError).
+ * Ожидание готовности bridge и dev-фолбэк с мок-ответами.
  */
 
 /** Таймаут готовности api, когда window.pywebview существует. */
@@ -14,105 +15,86 @@ let readyPromise = null;
 let demoMode = false;
 
 /* -------------------------------------------------------------------------
+ * BridgeError: ошибка метода api (ok: false)
+ * ------------------------------------------------------------------------- */
+
+export class BridgeError extends Error {
+  /**
+   * @param {string} message
+   * @param {string} [code]
+   */
+  constructor(message, code = 'error') {
+    super(message);
+    this.name = 'BridgeError';
+    this.code = code;
+  }
+}
+
+/* -------------------------------------------------------------------------
  * Мок-ответы для dev-режима (index.html открыт без pywebview)
  * ------------------------------------------------------------------------- */
 
-const DEMO_PREFS = {
-  theme: 'dark',
-  reduce_motion: false,
-  setup_seen: true,
-  last_project: '',
-};
+const MOCK_LANGUAGES = { ru: 'Русский', en: 'Английский', de: 'Немецкий', fr: 'Французский' };
 
-const DEMO_LANGUAGES = {
-  auto: { code: 'auto', label: 'Автоопределение моделью' },
-  languages: [
-    { code: 'en', label: 'Английский' },
-    { code: 'ru', label: 'Русский' },
-    { code: 'de', label: 'Немецкий' },
-    { code: 'fr', label: 'Французский' },
-    { code: 'zh', label: 'Китайский' },
-  ],
-};
+const MOCK_PREFS = { theme: 'dark', reduce_motion: false, last_project: '', setup_seen: true };
 
-const DEMO_HARDWARE = {
-  profile: 'демо',
-  cpuThreads: 4,
-  ramTotalGb: 16,
-  ramAvailableGb: 9.5,
-  diskFreeGb: 120,
-  gpuNames: [],
-  gpuVramGb: [],
-  llamaRuntimeAvailable: false,
-  llamaGpuOffloadAvailable: false,
-};
-
-const DEMO_MODELS = {
+const MOCK_MODELS = {
   models: [
     {
       id: 'demo-model',
-      name: 'Demo Model',
+      name: 'Demo Model Q4_K_M',
       custom: false,
       status: 'available',
       installState: 'available',
       installed: false,
       sizeBytes: 4096000000,
       sizeLabel: '3.81 ГБ',
-      estimatedRamGb: 6,
-      license: 'Не указана',
+      estimatedRamGb: 5.2,
+      license: 'Apache-2.0',
       licenseUrl: '',
       cardUrl: '',
-      revision: 'demo',
+      repo: '',
+      revision: '',
       quantization: 'Q4_K_M',
-      testedOnWindows: false,
-      languageCodes: ['en', 'ru'],
-      uiDescription: 'Демонстрационная карточка, не модель перевода.',
+      testedOnWindows: true,
+      languageCodes: ['ru', 'en', 'de', 'fr'],
+      uiDescription: 'Демонстрационная карточка модели.',
       uiDetails: '',
+      notes: '',
       compatibility: null,
     },
   ],
   recommendation: null,
 };
 
-function demoError() {
-  const error = new Error('Это демонстрационные данные. Запустите DotLingo, чтобы сохранить изменения.');
-  error.code = 'demo';
-  throw error;
-}
-
 /**
- * Мок-ответ по имени метода api. Форма совпадает с полем data настоящего моста.
+ * Мок-ответ по имени метода api (конверт как в api.py).
  * @param {string} method
+ * @returns {{ok: boolean, data: unknown}}
  */
 function mockResponse(method) {
   switch (method) {
     case 'getPreferences':
-      return { ...DEMO_PREFS };
+      return { ok: true, data: { ...MOCK_PREFS } };
     case 'setPreferences':
-      return { ...DEMO_PREFS };
-    case 'listLanguages':
-      return DEMO_LANGUAGES;
+      return { ok: true, data: { ...MOCK_PREFS } };
+    case 'getLanguages':
+      return { ok: true, data: MOCK_LANGUAGES };
     case 'listProjects':
-      return [];
+      return { ok: true, data: [] };
     case 'getActiveProject':
-      return null;
-    case 'listModels':
-      return DEMO_MODELS;
+      return { ok: true, data: null };
     case 'getHardware':
-      return { ...DEMO_HARDWARE };
-    case 'listTasks':
-      return [];
+      return { ok: true, data: null };
+    case 'listModels':
+      return { ok: true, data: MOCK_MODELS };
     case 'getDataDirs':
-      return {
-        projectsDir: 'demo/projects',
-        modelsDir: 'demo/models',
-        dataDir: 'demo',
-      };
-    case 'detectHardware':
-      return { started: true };
+      return { ok: true, data: { projectsDir: 'C:\\demo\\projects', modelsDir: 'C:\\demo\\models' } };
+    case 'listTasks':
+      return { ok: true, data: [] };
     default:
-      demoError();
-      return null;
+      console.warn(`[bridge] demo: нет мока для метода ${method}`);
+      return { ok: true, data: null };
   }
 }
 
@@ -135,8 +117,6 @@ export function waitReady() {
       resolve(true);
       return;
     }
-    // pywebview инжектит объект до старта скриптов: раз его нет - почти
-    // наверняка открыт обычный браузер, долго ждать смысла нет.
     const timeout = window.pywebview ? READY_TIMEOUT_MS : NO_BRIDGE_TIMEOUT_MS;
     const timer = setTimeout(() => resolve(Boolean(window.pywebview?.api)), timeout);
     window.addEventListener(
@@ -153,32 +133,47 @@ export function waitReady() {
 }
 
 /**
- * Вызвать метод pywebview.api; в dev-режиме возвращает мок.
- * @param {string} method - имя метода api.
+ * Вызвать метод pywebview.api и распаковать конверт.
+ * В dev-режиме возвращает мок. При ok:false кидает BridgeError.
+ * @param {string} method - имя метода api (camelCase).
  * @param {...unknown} args
- * @returns {Promise<unknown>}
+ * @returns {Promise<unknown>} data из конверта.
  */
 export async function call(method, ...args) {
   const ready = await waitReady();
   if (ready) {
     const fn = window.pywebview.api[method];
     if (typeof fn !== 'function') {
-      throw new Error(`Метод ${method} недоступен`);
+      throw new BridgeError(`Метод api.${method} не найден`);
     }
-    const result = await fn(...args);
-    if (result && typeof result === 'object' && 'ok' in result) {
-      if (!result.ok) {
-        const error = new Error(result.error || 'Ошибка');
-        error.code = result.code || 'error';
-        throw error;
-      }
-      return result.data;
+    const envelope = await fn(...args);
+    if (!envelope || typeof envelope !== 'object') {
+      throw new BridgeError(`Пустой ответ метода ${method}`);
     }
-    return result;
+    if (envelope.ok !== true) {
+      throw new BridgeError(envelope.error || 'Неизвестная ошибка', envelope.code || 'error');
+    }
+    return envelope.data;
   }
   activateDemoMode();
   await new Promise((r) => setTimeout(r, 120));
-  return mockResponse(method, args);
+  const mocked = mockResponse(method);
+  if (mocked.ok !== true) throw new BridgeError(mocked.error || 'demo error', mocked.code);
+  return mocked.data;
+}
+
+/**
+ * Как call, но не кидает исключение: возвращает [data, null] или [null, error].
+ * @param {string} method
+ * @param {...unknown} args
+ * @returns {Promise<[unknown, BridgeError|null]>}
+ */
+export async function tryCall(method, ...args) {
+  try {
+    return [await call(method, ...args), null];
+  } catch (e) {
+    return [null, e instanceof BridgeError ? e : new BridgeError(String(e))];
+  }
 }
 
 /**

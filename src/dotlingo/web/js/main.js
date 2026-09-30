@@ -1,32 +1,15 @@
 /**
- * Точка входа: boot, роутер, тема, горячие клавиши.
- * Страниц в реестре пока нет - придет волна 2 (другие агенты).
+ * Точка входа: boot, роутер, тема, горячие клавиши, push-события из Python.
  */
 
-import { call, isDemo, activateDemoMode, waitReady } from './bridge.js';
+import { call, isDemo, activateDemoMode, waitReady, tryCall } from './bridge.js';
 import * as store from './store.js';
 import * as router from './router.js';
 import * as components from './components.js';
 import { icon } from './icons.js';
-import './pages/events.js';
-import './pages/projects.js';
-import './pages/documents.js';
-import './pages/review.js';
-import './pages/queue.js';
-import './pages/models.js';
-import './pages/glossary.js';
-import './pages/settings.js';
 
 /** Порядок страниц для Ctrl+1..7 (совпадает с навигацией в index.html). */
-const PAGE_ORDER = [
-  'projects',
-  'documents',
-  'review',
-  'queue',
-  'models',
-  'glossary',
-  'settings',
-];
+const PAGE_ORDER = ['projects', 'documents', 'review', 'queue', 'models', 'glossary', 'settings'];
 
 const DEFAULT_PAGE = 'projects';
 const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая' };
@@ -36,24 +19,29 @@ const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая' };
  * ------------------------------------------------------------------------- */
 
 async function boot() {
+  // Контракт для консольной отладки (и для страниц); push_event появится ниже.
+  window.DL = { store, router, call, components, isDemo };
+
   wireShell();
   wireKeyboard();
+  wirePushEvents();
 
   // Стартуем с тёмной темой до прихода prefs, чтобы не мигало.
   store.set('theme', 'dark');
   applyTheme('dark');
 
+  try {
+    await import('./pages/index.js');
+  } catch (e) {
+    console.error('[pages] не удалось загрузить', e);
+  }
+
   router.showPage(DEFAULT_PAGE);
-
-  // Фоновая инициализация данных: не блокирует отрисовку каркаса.
   initBridgeData();
-
-  const pushEvent = window.DL?.push_event;
-  window.DL = { store, router, call, components, isDemo, push_event: pushEvent };
 }
 
 /**
- * Определяет режим bridge, подтягивает prefs/проекты/железо/модели.
+ * Определяет режим bridge, подтягивает prefs/проекты/железо/модели/языки.
  * Ошибки отдельных вызовов не роняют каркас.
  */
 async function initBridgeData() {
@@ -63,43 +51,84 @@ async function initBridgeData() {
     store.set('demo', true);
   }
 
-  const prefs = await safe(() => call('getPreferences'), {});
+  const [prefs] = await tryCall('getPreferences');
   const theme = prefs?.theme === 'light' ? 'light' : 'dark';
-  store.set('theme', theme);
+  store.patch({ theme, reduceMotion: Boolean(prefs?.reduce_motion) });
   applyTheme(theme);
-  applyMotion(Boolean(prefs?.reduce_motion));
+  document.documentElement.dataset.reduceMotion = prefs?.reduce_motion ? 'true' : 'false';
 
-  const [projects, hardware, models, active, languages] = await Promise.all([
-    safe(() => call('listProjects'), []),
-    safe(() => call('getHardware'), null),
-    safe(() => call('listModels'), { models: [], recommendation: null }),
-    safe(() => call('getActiveProject'), null),
-    safe(() => call('listLanguages'), null),
+  const loaded = await Promise.all([
+    tryCall('listProjects'),
+    tryCall('getActiveProject'),
+    tryCall('getHardware'),
+    tryCall('listModels'),
+    tryCall('getLanguages'),
+    tryCall('getDataDirs'),
   ]);
+  const [projects, active, hardware, models, languages, dirs] = loaded.map(([data]) => data);
 
   store.patch({
-    projects: projects || [],
+    projects: projects ?? [],
+    activeProject: active ?? null,
     hardware,
-    models: models?.models || [],
-    recommendation: models?.recommendation || null,
-    activeProject: active,
-    languages,
-    reduceMotion: Boolean(prefs?.reduce_motion),
+    models: models?.models ?? [],
+    recommendation: models?.recommendation ?? null,
+    languages: languages ?? {},
+    dataDirs: dirs ?? null,
   });
 
-  renderDeviceStatus(hardware);
-  renderActiveProject(active);
-  if (!isDemo() && prefs && prefs.setup_seen === false) welcome();
+  renderDeviceStatus(store.get('hardware'));
 }
 
-/** Пробует вызвать bridge-метод, при любой ошибке возвращает fallback. */
-async function safe(fn, fallback) {
-  try {
-    return await fn();
-  } catch (e) {
-    console.warn('[boot]', e?.message ?? e);
-    return fallback;
-  }
+/* -------------------------------------------------------------------------
+ * Push-события из Python: window.DL.push_event(name, payload)
+ * ------------------------------------------------------------------------- */
+
+/** Обработчики push-событий по имени. */
+const pushHandlers = {
+  task_event(payload) {
+    store.pushTaskEvent(payload);
+    store.emit('task_event', payload);
+  },
+  hardware_detected(payload) {
+    store.set('hardware', payload);
+    renderDeviceStatus(payload);
+    store.emit('hardware_detected', payload);
+  },
+  documents_imported(payload) {
+    store.emit('documents_imported', payload);
+  },
+  export_done(payload) {
+    store.emit('export_done', payload);
+  },
+  download_progress(payload) {
+    store.emit('download_progress', payload);
+  },
+  download_done(payload) {
+    store.emit('download_done', payload);
+  },
+  model_verified(payload) {
+    store.emit('model_verified', payload);
+  },
+  custom_model_imported(payload) {
+    store.emit('custom_model_imported', payload);
+  },
+};
+
+/** Точка входа для Python (api._push): window.DL.push_event(name, payload). */
+function wirePushEvents() {
+  window.DL.push_event = (name, payload) => {
+    const handler = pushHandlers[name];
+    if (!handler) {
+      console.warn('[push] нет обработчика для', name);
+      return;
+    }
+    try {
+      handler(payload);
+    } catch (e) {
+      console.error('[push]', name, e);
+    }
+  };
 }
 
 /* -------------------------------------------------------------------------
@@ -117,21 +146,16 @@ function wireShell() {
     btn.addEventListener('click', () => router.showPage(btn.dataset.page));
   });
 
+  // Переключатель темы.
   document.getElementById('theme-toggle')?.addEventListener('click', () => {
     const next = store.get('theme') === 'dark' ? 'light' : 'dark';
     store.set('theme', next);
+    applyTheme(next);
     call('setPreferences', { theme: next }).catch(() => {});
   });
 
-  document.getElementById('active-project')?.addEventListener('click', () => {
-    router.showPage('projects');
-  });
-
-  store.watch('theme', applyTheme);
-  store.watch('hardware', renderDeviceStatus);
-  store.watch('activeProject', renderActiveProject);
+  // Первичное состояние индикатора устройства.
   renderDeviceStatus(null);
-  renderActiveProject(null);
 }
 
 /** Применяет тему к <html data-theme> и обновляет кнопку-переключатель. */
@@ -148,49 +172,9 @@ function applyTheme(theme) {
   }
 }
 
-function applyMotion(enabled) {
-  document.documentElement.dataset.reduceMotion = enabled ? 'true' : 'false';
-}
-
-function renderActiveProject(project) {
-  const label = document.getElementById('active-project-label');
-  if (!label) return;
-  label.textContent = project?.title || 'Не выбран';
-}
-
-function welcome() {
-  let marked = false;
-  const mark = () => {
-    if (marked) return;
-    marked = true;
-    call('setPreferences', { setup_seen: true }).catch(() => {});
-  };
-  const dialog = components.modal({
-    title: 'Локальный перевод',
-    subtitle: 'Оригинал остаётся копией. Модель скачивается только когда вы подтвердите файл.',
-    onClose: mark,
-    render: (body) => {
-      body.append(components.el('div', { class: 'stack stack--lg' }, [
-        components.el('p', { class: 'muted', text: 'Создайте проект, добавьте документ и выберите модель под память компьютера.' }),
-        components.el('p', { class: 'muted', text: 'Перевод идёт очередью, без оценки срока. Проверка стоит рядом с исходным текстом.' }),
-      ]));
-    },
-    actions: [
-      {
-        label: 'Начать',
-        variant: 'primary',
-        onClick: () => {
-          mark();
-          dialog.close();
-        },
-      },
-    ],
-  });
-}
-
 /**
- * Индикатор устройства в подвале боковой панели.
- * @param {object|null} hw
+ * Обновляет индикатор устройства в подвале sidebar.
+ * @param {object|null} hw - сериализованный HardwareSnapshot.
  */
 function renderDeviceStatus(hw) {
   const status = document.getElementById('device-status');
@@ -199,13 +183,15 @@ function renderDeviceStatus(hw) {
 
   if (!hw) {
     status.dataset.state = 'unknown';
-    label.textContent = isDemo() ? 'demo data' : 'Устройство…';
+    label.textContent = isDemo() ? 'demo data' : 'Проверка устройства…';
     return;
   }
 
   const parts = [];
+  if (hw.cpuThreads) parts.push(`${hw.cpuThreads} потоков CPU`);
+  if (hw.ramTotalGb) parts.push(`${components.formatBytes(hw.ramTotalGb * 1024 ** 3)} RAM`);
   if (hw.profile) parts.push(hw.profile);
-  if (hw.ramTotalGb) parts.push(`${hw.ramTotalGb} ГБ RAM`);
+
   status.dataset.state = hw.llamaRuntimeAvailable ? 'ok' : 'warn';
   label.textContent = parts.join(' · ') || 'Готово';
 }

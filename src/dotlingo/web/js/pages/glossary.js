@@ -1,191 +1,366 @@
 /**
- * Глоссарий открытого проекта: термины по целевому языку.
+ * Страница «Глоссарий»: термины исходный → перевод по выбранному целевому
+ * языку активного проекта. Инлайн-редактирование, добавление, удаление.
  */
 
-import { call } from '../bridge.js';
-import { confirmDialog, modal, spinner } from '../components.js';
-import * as router from '../router.js';
+import { call, tryCall } from '../bridge.js';
 import * as store from '../store.js';
+import * as router from '../router.js';
 import {
-  button,
   el,
-  emptyState,
-  field,
-  langDisplay,
-  requireProject,
-  run,
-  selectBox,
+  button,
   toast,
-} from './common.js';
+  emptyState,
+  confirmDialog,
+  spinner,
+} from '../components.js';
 
-let generation = 0;
+/** Ключ store с выбранным целевым языком глоссария. */
+const LANG_KEY = 'glossaryTargetLang';
 
-router.registerPage('glossary', {
-  title: 'Глоссарий',
-  subtitle: 'Термин подставляется в запрос и возвращается в перевод как есть',
-  actions: () => [
-    button({
-      label: 'Добавить термин',
-      iconName: 'plus',
-      variant: 'primary',
-      onClick: () => openEditor(),
-    }),
-  ],
-  render(host) {
-    const ticket = ++generation;
-    paint(host, ticket);
-  },
-  destroy() {
-    generation += 1;
-  },
-});
+/* -------------------------------------------------------------------------
+ * Хелперы
+ * ------------------------------------------------------------------------- */
 
-async function paint(host, ticket, lang) {
-  host.replaceChildren(spinner());
+/** Метка языка из store.languages, иначе код в верхнем регистре. */
+function langLabel(code) {
+  const languages = store.get('languages') || {};
+  if (code === 'auto') return 'Авто';
+  return languages[code] || code.toUpperCase();
+}
+
+/** Текущий целевой язык: сохранённый (если валиден) или первый из проекта. */
+function currentLang(project) {
+  const saved = store.get(LANG_KEY);
+  if (saved && project.targetLangs.includes(saved)) return saved;
+  return project.targetLangs[0] ?? '';
+}
+
+/* -------------------------------------------------------------------------
+ * Рендер
+ * ------------------------------------------------------------------------- */
+
+function render(host) {
   const project = store.get('activeProject');
+
   if (!project) {
-    host.replaceChildren();
-    requireProject(host, 'Глоссарий хранится в проекте и делится по целевому языку.');
+    host.append(noProjectState());
     return;
   }
-  const targets = project.targetLangs || [];
-  const current = targets.includes(lang) ? lang : targets[0];
-  if (!current) {
-    host.replaceChildren(emptyState({
-      iconName: 'book',
-      title: 'Нет целевого языка',
-      text: 'Сначала укажите его в проекте.',
-      action: button({
-        label: 'К проекту',
-        variant: 'primary',
-        onClick: () => router.showPage('projects'),
+
+  const lang = currentLang(project);
+
+  const langSelect = el('select', {
+    class: 'select gl-lang-select',
+    onChange: (e) => {
+      store.set(LANG_KEY, e.target.value);
+      refresh(host);
+    },
+  });
+  fillLangOptions(langSelect, project.targetLangs, lang);
+
+  const head = el('div', { class: 'panel__header' }, [
+    el('div', {}, [
+      el('h2', {
+        class: 'panel__title',
+        text: `${langLabel(project.sourceLang || 'auto')} → ${langLabel(lang)}`,
       }),
-    }));
-    return;
-  }
-  const terms = await run(() => call('listGlossary', current));
-  if (ticket !== generation || !host.isConnected) return;
-  if (terms === undefined) {
-    host.replaceChildren(emptyState({ iconName: 'error', title: 'Глоссарий не прочитался' }));
-    return;
-  }
-  const langSelect = selectBox(
-    targets.map((code) => ({ value: code, label: langDisplay(code) })),
-    current,
+    ]),
+    el('div', { class: 'panel__actions' }, [langSelect]),
+  ]);
+
+  const body = el('div', { class: 'gl-body' }, [
+    el('div', { class: 'page-loading' }, [spinner('lg')]),
+  ]);
+
+  const panel = el('section', { class: 'panel gl-panel' }, [head, body]);
+
+  host.append(el('div', { class: 'gl-page stack' }, [panel]));
+  void refresh(host);
+}
+
+/** Пустое состояние «нет проекта». */
+function noProjectState() {
+  return emptyState({
+    iconName: 'book',
+    title: 'Сначала выберите проект',
+    text: 'Глоссарий хранится внутри проекта.',
+    action: button({
+      label: 'К проектам',
+      variant: 'ghost',
+      onClick: () => router.showPage('projects'),
+    }),
+  });
+}
+
+/** Заполняет селект целевых языков. */
+function fillLangOptions(select, codes, value) {
+  select.replaceChildren(
+    ...codes.map((code) => el('option', { value: code, text: langLabel(code) }))
   );
-  langSelect.addEventListener('change', () => paint(host, ticket, langSelect.value));
+  select.value = value;
+}
 
-  const body = el('tbody');
-  for (const term of terms) {
-    body.append(el('tr', {}, [
-      el('td', { text: term.source }),
-      el('td', { text: term.target }),
-      el('td', {}, [
-        el('div', { class: 'row-actions' }, [
-          button({
-            label: 'Править',
-            iconName: 'edit',
-            size: 'sm',
-            onClick: () => openEditor(term, current, host, ticket),
-          }),
-          button({
-            label: 'Удалить',
-            iconName: 'trash',
-            size: 'sm',
-            variant: 'danger',
-            onClick: () => removeTerm(term, current, host, ticket),
-          }),
-        ]),
-      ]),
-    ]));
+/** Загружает список терминов и перерисовывает таблицу. */
+async function refresh(host) {
+  const project = store.get('activeProject');
+  const body = host.querySelector('.gl-body');
+  if (!project || !body) return;
+  const lang = currentLang(project);
+
+  const [terms, err] = await tryCall('listGlossary', lang);
+  if (!body.isConnected) return;
+  if (err) {
+    body.replaceChildren(
+      emptyState({ iconName: 'error', title: 'Не удалось загрузить глоссарий', text: err.message })
+    );
+    return;
   }
 
-  const table = terms.length
-    ? el('div', { class: 'table-wrap' }, [
-      el('table', { class: 'table' }, [
-        el('thead', {}, [
-          el('tr', {}, [
-            el('th', { text: 'Оригинал' }),
-            el('th', { text: 'Перевод' }),
-            el('th', { text: '' }),
-          ]),
-        ]),
-        body,
-      ]),
-    ])
-    : emptyState({
-      iconName: 'book',
-      title: 'Терминов пока нет',
-      text: 'Пара фиксирует, как слово должно звучать в выбранном языке.',
+  body.replaceChildren(
+    buildTable(terms ?? [], lang, host),
+    (terms ?? []).length === 0
+      ? emptyState({
+          iconName: 'book',
+          title: 'В глоссарии пока нет терминов',
+          text: 'Добавьте пары термин → перевод, чтобы защищать их от искажения.',
+        })
+      : null,
+    buildFootnote()
+  );
+}
+
+/** Таблица терминов со строкой добавления. */
+function buildTable(terms, lang, host) {
+  const table = el('table', { class: 'table gl-table' });
+  const thead = el('thead', {}, [
+    el('tr', {}, [
+      el('th', { text: 'Исходный термин' }),
+      el('th', { text: 'Перевод' }),
+      el('th', { class: 'gl-table__actions-head', text: '' }),
+    ]),
+  ]);
+
+  const addRow = buildAddRow(lang, host);
+  const tbody = el('tbody', {}, [addRow, ...terms.map((term) => termRow(term, host))]);
+
+  table.append(thead, tbody);
+  return table;
+}
+
+/** Строка добавления нового термина. */
+function buildAddRow(lang, host) {
+  const sourceInput = el('input', {
+    class: 'input gl-cell-input',
+    type: 'text',
+    placeholder: 'Термин',
+  });
+  const targetInput = el('input', {
+    class: 'input gl-cell-input',
+    type: 'text',
+    placeholder: 'Перевод',
+  });
+
+  const submitBtn = button({
+    label: 'Добавить',
+    variant: 'primary',
+    size: 'sm',
+    disabled: true,
+    onClick: () => addTerm(sourceInput, targetInput, lang, host),
+  });
+
+  const sync = () => {
+    submitBtn.disabled = !sourceInput.value.trim() || !targetInput.value.trim();
+  };
+  sourceInput.addEventListener('input', sync);
+  targetInput.addEventListener('input', sync);
+  sourceInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !submitBtn.disabled) submitBtn.click();
+  });
+  targetInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !submitBtn.disabled) submitBtn.click();
+  });
+
+  return el('tr', { class: 'gl-add-row' }, [
+    el('td', {}, [sourceInput]),
+    el('td', {}, [targetInput]),
+    el('td', { class: 'gl-table__actions' }, [submitBtn]),
+  ]);
+}
+
+/** Добавление термина. */
+async function addTerm(sourceInput, targetInput, lang, host) {
+  const source = sourceInput.value.trim();
+  const target = targetInput.value.trim();
+  if (!source || !target) return;
+
+  try {
+    await call('addGlossaryTerm', { source, target, targetLang: lang });
+    sourceInput.value = '';
+    targetInput.value = '';
+    toast('Термин добавлён', 'success');
+    void refresh(host);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+/** Строка существующего термина с инлайн-редактированием. */
+function termRow(term, host) {
+  const hasId = term.id != null;
+  const cells = [];
+
+  const makeCell = (field) => {
+    const cell = el('td', { class: 'gl-cell' });
+    cell.append(el('span', { class: 'gl-cell__text', text: term[field] }));
+
+    cell.addEventListener('dblclick', () => {
+      if (cell.querySelector('.gl-cell-input') || !hasId) return;
+      startEdit(cell, term, field, host);
     });
 
-  host.replaceChildren(
-    el('div', { class: 'stack stack--lg' }, [
-      el('div', { class: 'toolbar' }, [langSelect]),
-      table,
-    ]),
-  );
+    return cell;
+  };
+
+  cells.push(makeCell('source'));
+  cells.push(makeCell('target'));
+
+  const actionsCell = el('td', { class: 'gl-table__actions' });
+  if (hasId) {
+    actionsCell.append(
+      button({
+        iconName: 'trash',
+        variant: 'ghost',
+        size: 'sm',
+        title: 'Удалить термин',
+        onClick: () => deleteTermFlow(term, host),
+      })
+    );
+  }
+
+  return el('tr', { class: 'gl-row', dataset: { id: hasId ? String(term.id) : '' } }, [
+    ...cells,
+    actionsCell,
+  ]);
 }
 
-function openEditor(term, lang, host, ticket) {
-  const project = store.get('activeProject');
-  const targets = project?.targetLangs || [];
-  const source = el('input', { class: 'input', value: term?.source || '' });
-  const target = el('input', { class: 'input', value: term?.target || '' });
-  const langSelect = selectBox(
-    targets.map((code) => ({ value: code, label: langDisplay(code) })),
-    lang || targets[0] || '',
-  );
-  const dialog = modal({
-    title: term ? 'Термин' : 'Новый термин',
-    subtitle: 'Обе формы обязательны',
-    render: (body) => {
-      body.append(el('div', { class: 'stack stack--lg' }, [
-        term ? null : field('Язык перевода', langSelect),
-        field('Как в оригинале', source),
-        field('Как в переводе', target),
-      ]));
-    },
-    actions: [
-      { label: 'Отмена', onClick: () => dialog.close() },
-      {
-        label: 'Сохранить',
-        variant: 'primary',
-        onClick: async () => {
-          const saved = await run(() => term
-            ? call('updateGlossaryTerm', {
-              id: term.id,
-              source: source.value,
-              target: target.value,
-            })
-            : call('addGlossaryTerm', {
-              source: source.value,
-              target: target.value,
-              targetLang: langSelect.value,
-            }));
-          if (saved === undefined) return;
-          dialog.close();
-          const page = document.querySelector('#page-host .page');
-          if (page && router.currentPage() === 'glossary') {
-            paint(page, generation, term ? lang : langSelect.value);
-          }
-          toast('Термин записан', 'success');
-        },
-      },
-    ],
+/** Превращает ячейку в input для правки. */
+function startEdit(cell, term, field, host) {
+  const text = cell.querySelector('.gl-cell__text');
+  if (!text) return;
+
+  const input = el('input', {
+    class: 'input gl-cell-input',
+    type: 'text',
+    value: term[field],
   });
-  source.focus();
+
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    input.remove();
+    text.hidden = false;
+  };
+
+  const commit = async () => {
+    if (done) return;
+    const value = input.value.trim();
+    if (value === term[field]) {
+      finish();
+      return;
+    }
+    if (!value) {
+      finish();
+      return;
+    }
+    const next = { ...term, [field]: value };
+    done = true;
+    input.disabled = true;
+    try {
+      await call('updateGlossaryTerm', {
+        id: term.id,
+        source: next.source,
+        target: next.target,
+      });
+      toast('Термин обновлён', 'success');
+      void refresh(host);
+    } catch (e) {
+      toast(e.message, 'error');
+      input.remove();
+      text.hidden = false;
+    }
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      finish();
+    }
+  });
+  input.addEventListener('blur', () => commit());
+
+  text.hidden = true;
+  cell.append(input);
+  input.focus();
+  input.select();
 }
 
-async function removeTerm(term, lang, host, ticket) {
-  const yes = await confirmDialog({
-    title: 'Удалить термин?',
-    text: `${term.source} → ${term.target}`,
+/** Удаление термина с подтверждением. */
+async function deleteTermFlow(term, host) {
+  const confirmed = await confirmDialog({
+    title: `Удалить термин «${term.source}»?`,
+    text: 'Термин будет удалён из глоссария проекта.',
     confirmLabel: 'Удалить',
     danger: true,
   });
-  if (!yes) return;
-  const done = await run(() => call('deleteGlossaryTerm', term.id));
-  if (done === undefined) return;
-  paint(host, ticket, lang);
+  if (!confirmed) return;
+  try {
+    await call('deleteGlossaryTerm', term.id);
+    toast('Термин удалён', 'success');
+    void refresh(host);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
+
+/** Подпись под таблицей. */
+function buildFootnote() {
+  return el('p', {
+    class: 'gl-footnote text-tertiary',
+    text: 'Совпадения без учёта регистра защищаются внутри каждого фрагмента при переводе.',
+  });
+}
+
+/* -------------------------------------------------------------------------
+ * Действия шапки
+ * ------------------------------------------------------------------------- */
+
+function actions(host) {
+  if (!store.get('activeProject')) return [];
+  return [
+    button({
+      label: 'Добавить термин',
+      variant: 'primary',
+      iconName: 'plus',
+      onClick: () => {
+        const input = host.querySelector('.gl-add-row .gl-cell-input');
+        input?.focus();
+      },
+    }),
+  ];
+}
+
+/* -------------------------------------------------------------------------
+ * Регистрация
+ * ------------------------------------------------------------------------- */
+
+router.registerPage('glossary', {
+  title: 'Глоссарий',
+  subtitle: 'Защита терминов при переводе',
+  render,
+  actions,
+});

@@ -2,6 +2,8 @@
 
 ## ADR-001 · Отделить core от UI, в MVP использовать Tkinter
 
+**Статус:** заменён ADR-008.
+
 **Решение:** форматная логика, storage, очередь и inference не зависят от UI. Windows shell сделан на стандартном Tkinter, фоновые действия сообщают в main thread через очередь.
 
 **Причина:** пользователь просил тонкий desktop UI и Qt-free core. Tk есть в стандартном CPython и PyInstaller умеет упаковывать Tcl/Tk; это уменьшает дополнительный Qt runtime. Нативный UI можно заменить, сохранив core.
@@ -55,3 +57,13 @@
 **Решение:** PDF parser требует извлекаемый текст на каждой странице. При вероятном скане сообщает номера страниц; OCR недоступен.
 
 **Причина:** OCR должен иметь отдельные language packs, binary provenance, загрузку и ручную проверку качества. Tesseract OCR код под Apache-2.0, но основной проект указывает, что для новых версий нет официального Windows installer, а данные языков — отдельные файлы. Не включать зависимость молча. [Tesseract Windows/download notes](https://tesseract-ocr.github.io/tessdoc/Downloads.html), [install/language data](https://tesseract-ocr.github.io/tessdoc/Installation.html).
+
+## ADR-008 · Переход UI с Tkinter на pywebview
+
+**Статус:** принято 2026-09-30.
+
+**Контекст:** Tkinter-монолит в `app.py` (3700+ строк) ограничивал дизайн: нет blur, скруглений и анимаций, тему приходилось перекрашивать рекурсивной заменой цветов виджетов, набор виджетов устарел. Ядро (formats, storage, очередь, inference) уже UI-независимо и переделки не требовало.
+
+**Решение:** pywebview 5 (на Windows - Edge WebView2 через pythonnet) и статический vanilla JS на ES-модулях без сборочного шага (`src/dotlingo/web/`). Локальный HTTP-сервер pywebview раздаёт `web/`; `http_server=True` обязателен, потому что ES-модули не загружаются с `file://` (CORS). Мост `js_api` в `api.py`: camelCase-методы, единый конверт `{ok, data}` / `{ok: false, error, code}`; результаты фоновых действий приходят push-событиями через `evaluate_js`. Дизайн - Apple-glass монохром с чёрным приоритетом; темы переключаются атрибутом CSS `[data-theme]`, `theme.py` удалён.
+
+**Последствия:** добавлены зависимость `pywebview` и требование WebView2 runtime на чистых Windows 10 (Win11 и обновлённые Win10 уже содержат его; установщик проверяет реестр и показывает подсказку). UI-тесты выполняются через мост без окна: `python -m dotlingo --smoke-test`. PyInstaller собирает webview/pythonnet/clr_loader через `collect_all`; `tkinter` исключён из бандла.

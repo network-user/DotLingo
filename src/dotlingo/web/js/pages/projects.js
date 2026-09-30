@@ -1,338 +1,529 @@
 /**
- * Проекты: список, создание, языки, модель, контекст и правила.
+ * Страница «Проекты»: сетка glass-карточек, создание/переименование/удаление.
  */
 
-import { call } from '../bridge.js';
-import { confirmDialog, modal, spinner, toast } from '../components.js';
-import * as router from '../router.js';
+import { call, tryCall } from '../bridge.js';
 import * as store from '../store.js';
-import {
-  allLanguageOptions,
-  button,
-  el,
-  emptyState,
-  field,
-  formatWhen,
-  langDisplay,
-  languageChecks,
-  loadLanguages,
-  loadModels,
-  reloadProjects,
-  run,
-  selectBox,
-} from './common.js';
+import * as router from '../router.js';
+import { el, button, badge, chip, toast, emptyState, modal, confirmDialog, spinner } from '../components.js';
 
-let generation = 0;
+const TASK_LABELS = {
+  queued: 'В очереди',
+  running: 'Перевод',
+  paused: 'Пауза',
+  complete: 'Готово',
+  failed: 'Ошибка',
+  cancelled: 'Отменено',
+  interrupted: 'Прервано',
+};
 
-router.registerPage('projects', {
-  title: 'Проекты',
-  subtitle: 'Оригинал остаётся отдельным файлом, перевод и экспорт пишутся рядом',
-  actions: () => [
+const TASK_TONES = {
+  queued: 'muted',
+  running: 'muted',
+  paused: 'warning',
+  complete: 'success',
+  failed: 'error',
+  cancelled: 'muted',
+  interrupted: 'warning',
+};
+
+/** Короткая метка языка: название из store.languages или код. */
+function langLabel(code) {
+  const languages = store.get('languages') || {};
+  return languages[code] || code.toUpperCase();
+}
+
+const MONTHS_SHORT = [
+  'янв', 'фев', 'мар', 'апр', 'мая', 'июн',
+  'июл', 'авг', 'сен', 'окт', 'ноя', 'дек',
+];
+
+/** Дата в формате «29 сент 2026, 14:05». */
+function formatDate(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const month = MONTHS_SHORT[date.getMonth()];
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${date.getDate()} ${month} ${date.getFullYear()}, ${hh}:${mm}`;
+}
+
+/* -------------------------------------------------------------------------
+ * Рендер
+ * ------------------------------------------------------------------------- */
+
+function render(host) {
+  host.append(el('div', { class: 'project-grid' }));
+  void refresh(host);
+}
+
+/** Загружает список и перерисовывает сетку. */
+async function refresh(host) {
+  const grid = host.querySelector('.project-grid');
+  if (!grid) return;
+
+  grid.replaceChildren(el('div', { class: 'page-loading' }, [spinner('lg')]));
+
+  const [projects, err] = await tryCall('listProjects');
+  if (!grid.isConnected) return;
+  if (err) {
+    grid.replaceChildren(
+      emptyState({ iconName: 'error', title: 'Не удалось загрузить проекты', text: err.message })
+    );
+    return;
+  }
+
+  store.set('projects', projects ?? []);
+
+  if (!projects || projects.length === 0) {
+    grid.replaceChildren(
+      emptyState({
+        iconName: 'folder',
+        title: 'Создайте первый проект',
+        text: 'Проект хранит документы, языки перевода и глоссарий.',
+        action: button({
+          label: 'Новый проект',
+          variant: 'primary',
+          iconName: 'plus',
+          onClick: () => openCreateProjectModal(),
+        }),
+      })
+    );
+    return;
+  }
+
+  grid.replaceChildren(...projects.map((project) => projectCard(project, grid)));
+}
+
+/** Карточка проекта. */
+function projectCard(project, grid) {
+  /** Кнопка действия карточки: клик не должен открывать проект. */
+  const cardAction = (iconName, title, onClick) =>
+    button({
+      iconName,
+      variant: 'ghost',
+      size: 'sm',
+      title,
+      onClick: (e) => {
+        e.stopPropagation();
+        onClick();
+      },
+    });
+
+  const actionsBox = el('div', { class: 'card-actions' }, [
+    cardAction('folder', 'Открыть', () => openProject(project)),
+    cardAction('edit', 'Переименовать', () => openRenameModal(project, grid)),
+    cardAction('trash', 'Удалить', () => deleteProjectFlow(project, grid)),
+  ]);
+
+  const meta = el('div', { class: 'project-card__langs row row--wrap' }, [
+    chip({ label: langLabel(project.sourceLang) }),
+    el('span', { class: 'project-card__arrow', text: '→' }),
+    ...project.targetLangs.map((code) => chip({ label: langLabel(code) })),
+  ]);
+
+  const tasks = el('div', { class: 'project-card__tasks row row--wrap' },
+    Object.entries(project.taskSummary || {}).map(([status, count]) =>
+      badge({ label: `${TASK_LABELS[status] ?? status}: ${count}`, tone: TASK_TONES[status] ?? 'muted' })
+    )
+  );
+
+  const card = el('article', {
+    class: 'project-card panel',
+    dataset: { id: project.id },
+    onClick: () => openProject(project),
+  }, [
+    actionsBox,
+    el('h3', { class: 'project-card__title', text: project.title }),
+    meta,
+    el('div', {
+      class: 'project-card__docs text-secondary',
+      text: `${project.documentCount ?? 0} ${plural(project.documentCount ?? 0)}`,
+    }),
+    tasks,
+    project.updatedAt
+      ? el('div', { class: 'project-card__date text-tertiary', text: formatDate(project.updatedAt) })
+      : null,
+  ]);
+
+  return card;
+}
+
+/** Русская плюрализация для «документ». */
+function plural(n) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'документ';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'документа';
+  return 'документов';
+}
+
+/** Открыть проект и перейти к документам. */
+async function openProject(project) {
+  try {
+    const data = await call('openProject', project.id);
+    store.set('activeProject', data);
+    router.showPage('documents');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+/* -------------------------------------------------------------------------
+ * Действия
+ * ------------------------------------------------------------------------- */
+
+/** Кнопки для шапки. */
+function actions(host) {
+  return [
     button({
       label: 'Новый проект',
-      iconName: 'plus',
       variant: 'primary',
-      onClick: () => openCreate(),
+      iconName: 'plus',
+      onClick: () => openCreateProjectModal(),
     }),
-  ],
-  render(host) {
-    host.append(spinner());
-    paint(host);
-  },
-  destroy() {
-    generation += 1;
-  },
-});
-
-async function paint(host) {
-  const ticket = ++generation;
-  const loaded = await run(() => reloadProjects());
-  if (ticket !== generation || !host.isConnected) return;
-  if (loaded === undefined) {
-    host.replaceChildren(emptyState({ iconName: 'error', title: 'Не удалось прочитать проекты' }));
-    return;
-  }
-  await run(() => Promise.all([loadModels(), loadLanguages()]));
-  if (ticket !== generation || !host.isConnected) return;
-
-  const projects = store.get('projects') || [];
-  const active = store.get('activeProject');
-  const list = el('div', { class: 'item-list' });
-  if (!projects.length) {
-    list.append(
-      emptyState({
-        iconName: 'folder',
-        title: 'Проектов пока нет',
-        text: 'Создайте проект и укажите языки. Модель можно выбрать сейчас или позже.',
-      }),
-    );
-  }
-  for (const project of projects) {
-    const open = active?.id === project.id;
-    list.append(
-      el('button', {
-        class: open ? 'item is-active' : 'item',
-        type: 'button',
-        onClick: () => selectProject(host, project.id),
-      }, [
-        el('div', { class: 'item__title truncate', text: project.title }),
-        el('div', { class: 'item__meta', text: describe(project) }),
-      ]),
-    );
-  }
-
-  const detail = el('div', { class: 'stack--lg stack' });
-  if (!active) {
-    detail.append(
-      emptyState({
-        iconName: 'folder',
-        title: 'Выберите проект',
-        text: 'Слева список. Новый проект задаёт исходный язык, цели и необязательную модель.',
-      }),
-    );
-  } else {
-    detail.append(settingsPanel(host, active));
-  }
-
-  host.replaceChildren(el('div', { class: 'split-page' }, [list, detail]));
+  ];
 }
 
-function describe(project) {
-  const targets = (project.targetLangs || []).map(langDisplay).join(', ');
-  const docs = project.documentCount == null ? '' : ` · документов ${project.documentCount}`;
-  const when = project.updatedAt ? ` · ${formatWhen(project.updatedAt)}` : '';
-  return `${langDisplay(project.sourceLang)} → ${targets || 'язык не выбран'}${docs}${when}`;
-}
-
-async function selectProject(host, projectId) {
-  const opened = await run(async () => {
-    await call('openProject', projectId);
-    return reloadProjects();
-  });
-  if (opened === undefined) return;
-  paint(host);
-}
-
-function settingsPanel(host, project) {
-  const models = store.get('models') || [];
-  const title = el('input', { class: 'input', value: project.title || '' });
-  const source = selectBox(
-    [
-      { value: 'auto', label: langDisplay('auto') },
-      ...allLanguageOptions().map((item) => ({ value: item.code, label: `${item.label} · ${item.code}` })),
-    ],
-    project.sourceLang || 'auto',
-  );
-  const model = selectBox(
-    [
-      { value: '', label: 'Не выбрана' },
-      ...models.map((item) => ({
-        value: item.id,
-        label: `${item.name} · ${item.installState === 'installed' ? 'установлена' : item.installState === 'available' ? 'не загружена' : item.installState}`,
-      })),
-    ],
-    project.modelId || '',
-  );
-  const checksHost = el('div');
-  const context = el('textarea', { class: 'textarea', value: project.context || '' });
-  const rules = el('textarea', { class: 'textarea', value: project.rules || '' });
-
-  const redrawChecks = () => {
-    const chosen = models.find((item) => item.id === model.value);
-    const allowed = chosen ? new Set(chosen.languageCodes || []) : null;
-    const selected = new Set(
-      [...checksHost.querySelectorAll('input:checked')].map((input) => input.value),
-    );
-    if (!checksHost.childElementCount) {
-      for (const code of project.targetLangs || []) selected.add(code);
-    }
-    const picker = languageChecks(
-      allLanguageOptions().map((item) => {
-        const blocked = allowed ? !allowed.has(item.code) : false;
-        const same = source.value !== 'auto' && item.code === source.value;
-        return {
-          code: item.code,
-          label: `${item.label} · ${item.code}`,
-          disabled: blocked || same,
-          title: blocked ? 'Этой модели нет в списке языков карточки' : '',
-        };
-      }),
-      selected,
-    );
-    checksHost.replaceChildren(picker.element);
-    checksHost._value = picker.value;
-  };
-  model.addEventListener('change', redrawChecks);
-  source.addEventListener('change', redrawChecks);
-  redrawChecks();
-
-  const panel = el('section', { class: 'panel panel--raised stack stack--lg' }, [
-    el('header', { class: 'panel__header' }, [
-      el('div', {}, [
-        el('div', { class: 'panel__title', text: project.title || 'Проект' }),
-        el('p', { class: 'panel__subtitle', text: 'Языки ограничиваются выбранной моделью' }),
-      ]),
-      el('div', { class: 'panel__actions' }, [
-        button({
-          label: 'Удалить',
-          iconName: 'trash',
-          variant: 'danger',
-          onClick: () => removeProject(host, project),
-        }),
-      ]),
-    ]),
-    el('div', { class: 'form-grid' }, [
-      el('div', { class: 'field--full' }, [field('Название', title)]),
-      field('Исходный язык', source, 'Автоопределение отдаёт язык модели при запуске перевода'),
-      field('Модель', model, 'Вес можно загрузить позже на странице «Модели»'),
-      el('div', { class: 'field field--full' }, [
-        el('span', { class: 'field__label', text: 'Целевые языки' }),
-        checksHost,
-      ]),
-      el('div', { class: 'field--full' }, [
-        field('Контекст', context, 'Коротко: о чём документ. Попадает в запрос каждого фрагмента'),
-      ]),
-      el('div', { class: 'field--full' }, [
-        field('Правила', rules, 'Тон, обращения, что не переводить. Тоже копируются в задачу'),
-      ]),
-    ]),
-    el('div', { class: 'row row--between' }, [
-      button({
-        label: 'К документам',
-        iconName: 'document',
-        onClick: () => router.showPage('documents'),
-      }),
-      button({
-        label: 'Сохранить',
-        variant: 'primary',
-        onClick: () => save(host, project, { title, source, model, checksHost, context, rules }),
-      }),
-    ]),
-  ]);
-  return panel;
-}
-
-async function save(host, project, form) {
-  const title = form.title.value.trim();
-  const targets = form.checksHost._value ? form.checksHost._value() : [];
-  if (!title) {
-    toast('Название проекта не может быть пустым', 'warning');
-    return;
-  }
-  if (!targets.length) {
-    toast('Выберите хотя бы один целевой язык', 'warning');
-    return;
-  }
-  const saved = await run(async () => {
-    if (title !== project.title) await call('renameProject', project.id, title);
-    await call('updateProjectSettings', {
-      modelId: form.model.value,
-      sourceLang: form.source.value,
-      targetLangs: targets,
-      context: form.context.value,
-      rules: form.rules.value,
-    });
-    return reloadProjects();
-  });
-  if (saved === undefined) return;
-  toast('Настройки проекта сохранены', 'success');
-  paint(host);
-}
-
-async function removeProject(host, project) {
-  const yes = await confirmDialog({
-    title: `Удалить «${project.title}»?`,
-    text: 'Пропадут копия оригинала, переводы, глоссарий и очередь этого проекта. Исходный файл на диске, откуда его импортировали, не трогается.',
-    confirmLabel: 'Удалить',
-    danger: true,
-  });
-  if (!yes) return;
-  const done = await run(async () => {
-    await call('deleteProject', project.id);
-    return reloadProjects();
-  });
-  if (done === undefined) return;
-  paint(host);
-}
-
-function openCreate() {
-  const models = store.get('models') || [];
-  const title = el('input', { class: 'input', value: '', placeholder: 'Например, договор поставки' });
-  const source = selectBox(
-    [
-      { value: 'auto', label: langDisplay('auto') },
-      ...allLanguageOptions().map((item) => ({ value: item.code, label: `${item.label} · ${item.code}` })),
-    ],
-    'auto',
-  );
-  const model = selectBox(
-    [
-      { value: '', label: 'Выбрать позже' },
-      ...models.map((item) => ({ value: item.id, label: item.name })),
-    ],
-    '',
-  );
-  const checksHost = el('div');
-  const redraw = () => {
-    const chosen = models.find((item) => item.id === model.value);
-    const allowed = chosen ? new Set(chosen.languageCodes || []) : null;
-    const selected = new Set(
-      [...checksHost.querySelectorAll('input:checked')].map((input) => input.value),
-    );
-    if (!checksHost.childElementCount && !allowed) selected.add('ru');
-    const picker = languageChecks(
-      allLanguageOptions().map((item) => ({
-        code: item.code,
-        label: `${item.label} · ${item.code}`,
-        disabled: allowed ? !allowed.has(item.code) || (source.value !== 'auto' && item.code === source.value) : source.value !== 'auto' && item.code === source.value,
-        title: allowed && !allowed.has(item.code) ? 'Нет в карточке модели' : '',
-      })),
-      selected,
-    );
-    checksHost.replaceChildren(picker.element);
-    checksHost._value = picker.value;
-  };
-  model.addEventListener('change', redraw);
-  source.addEventListener('change', redraw);
-  redraw();
+/** Переименование проекта. */
+function openRenameModal(project, grid) {
+  let input;
 
   const dialog = modal({
-    title: 'Новый проект',
-    subtitle: 'Один исходник можно перевести на несколько языков',
+    title: 'Переименовать проект',
     render: (body) => {
+      input = el('input', {
+        class: 'input',
+        type: 'text',
+        value: project.title,
+        placeholder: 'Название проекта',
+      });
       body.append(
-        el('div', { class: 'stack stack--lg' }, [
-          field('Название', title),
-          field('Исходный язык', source),
-          field('Модель', model),
-          el('div', { class: 'field' }, [
-            el('span', { class: 'field__label', text: 'Целевые языки' }),
-            checksHost,
-          ]),
-        ]),
+        el('div', { class: 'field' }, [
+          el('label', { class: 'field__label', text: 'Название' }),
+          input,
+        ])
       );
     },
     actions: [
-      { label: 'Отмена', onClick: () => dialog.close() },
+      { label: 'Отмена' },
       {
-        label: 'Создать',
+        label: 'Сохранить',
         variant: 'primary',
         onClick: async () => {
-          const targets = checksHost._value ? checksHost._value() : [];
-          const created = await run(() => call('createProject', {
-            title: title.value.trim() || 'Новый проект',
-            modelId: model.value,
-            sourceLang: source.value,
-            targetLangs: targets,
-          }));
-          if (created === undefined) return;
-          dialog.close();
-          await run(() => reloadProjects());
-          const host = document.querySelector('#page-host .page');
-          if (host && router.currentPage() === 'projects') paint(host);
+          const title = input.value.trim();
+          if (!title) {
+            toast('Название проекта не может быть пустым.', 'error');
+            return;
+          }
+          try {
+            await call('renameProject', project.id, title);
+            dialog.close();
+            toast('Проект переименован', 'success');
+            void refresh(grid.closest('.page') ?? grid);
+          } catch (e) {
+            toast(e.message, 'error');
+          }
         },
       },
     ],
   });
-  title.focus();
+
+  input?.focus();
+  input?.select();
 }
+
+/** Удаление проекта с подтверждением. */
+async function deleteProjectFlow(project, grid) {
+  const confirmed = await confirmDialog({
+    title: `Удалить проект «${project.title}»?`,
+    text: 'Проект и все его переводы будут удалены.',
+    confirmLabel: 'Удалить',
+    danger: true,
+  });
+  if (!confirmed) return;
+  try {
+    await call('deleteProject', project.id);
+    toast('Проект удалён', 'success');
+    if (store.get('activeProject')?.id === project.id) store.set('activeProject', null);
+    void refresh(grid.closest('.page') ?? grid);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+/* -------------------------------------------------------------------------
+ * Модалка создания проекта (переиспользуется страницей «Документы»)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Открывает модалку создания проекта. Экспортируется для pages/documents.js.
+ */
+export function openCreateProjectModal() {
+  /** @type {Array<object>} модели с installState installed/available */
+  let models = [];
+  /** @type {string} выбранная модель */
+  let modelId = '';
+  /** @type {Set<string>} выбранные целевые языки */
+  const targets = new Set();
+  /** @type {string} исходный язык ('auto' или код) */
+  let sourceLang = 'auto';
+  /** @type {string} поисковый фильтр целевых языков */
+  let targetFilter = '';
+
+  let modelList;
+  let sourceSelect;
+  let targetGrid;
+  let counter;
+  let errorText;
+  let createBtn;
+  let titleInput;
+
+  const dialog = modal({
+    title: 'Новый проект',
+    dismissable: true,
+    render: (body) => {
+      modelList = el('div', { class: 'model-picker' });
+      sourceSelect = el('select', { class: 'select' });
+      targetGrid = el('div', { class: 'lang-grid' });
+      counter = el('span', { class: 'text-secondary', text: '0 выбрано' });
+      errorText = el('div', { class: 'field-error' });
+
+      const targetSearch = el('input', {
+        class: 'input',
+        type: 'search',
+        placeholder: 'Поиск языка…',
+        onInput: (e) => {
+          targetFilter = e.target.value.trim().toLowerCase();
+          renderTargets();
+        },
+      });
+
+      titleInput = el('input', { class: 'input', type: 'text', placeholder: 'Необязательно' });
+
+      body.append(
+        el('div', { class: 'field' }, [
+          el('label', { class: 'field__label', text: 'Название' }),
+          titleInput,
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', { class: 'field__label', text: 'Модель' }),
+          modelList,
+          el('p', { class: 'field__hint', text: 'Список языков зависит от модели.' }),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', { class: 'field__label', text: 'Исходный язык' }),
+          sourceSelect,
+        ]),
+        el('div', { class: 'field' }, [
+          el('div', { class: 'row row--between' }, [
+            el('label', { class: 'field__label', text: 'Целевые языки' }),
+            counter,
+          ]),
+          targetSearch,
+          targetGrid,
+        ]),
+        errorText
+      );
+
+      sourceSelect.addEventListener('change', () => {
+        sourceLang = sourceSelect.value;
+        targets.delete(sourceLang);
+        renderTargets();
+        updateCounter();
+      });
+    },
+    actions: [
+      { label: 'Отмена' },
+      {
+        label: 'Создать',
+        variant: 'primary',
+        onClick: () => submit(),
+      },
+    ],
+  });
+
+  createBtn = dialog.root.querySelector('.modal__footer .btn--primary');
+
+  /** Обновляет счётчик выбранных целевых языков. */
+  function updateCounter() {
+    if (counter) counter.textContent = `${targets.size} выбрано`;
+  }
+
+  /** Показать/скрыть inline-ошибку формы. */
+  function showError(text) {
+    if (errorText) {
+      errorText.textContent = text ?? '';
+      errorText.classList.toggle('is-visible', Boolean(text));
+    }
+  }
+
+  /** Текущий объект модели. */
+  function currentModel() {
+    return models.find((m) => m.id === modelId) ?? null;
+  }
+
+  /** Перерисовывает список карточек моделей. */
+  function renderModels() {
+    modelList.replaceChildren(
+      ...models.map((model) => {
+        const selected = model.id === modelId;
+        const card = el('button', {
+          class: `model-option${selected ? ' is-selected' : ''}`,
+          type: 'button',
+          dataset: { id: model.id },
+          onClick: () => {
+            modelId = model.id;
+            targets.clear();
+            renderModels();
+            renderSourceSelect();
+            renderTargets();
+            updateCounter();
+          },
+        }, [
+          el('div', { class: 'model-option__main' }, [
+            el('span', { class: 'model-option__name', text: model.name }),
+            el('span', {
+              class: 'model-option__meta text-tertiary',
+              text: [model.sizeLabel, model.quantization].filter(Boolean).join(' · '),
+            }),
+          ]),
+          badge({
+            label: model.installState === 'installed' ? 'Установлена' : 'Доступна',
+            tone: model.installState === 'installed' ? 'success' : 'muted',
+          }),
+        ]);
+        return card;
+      })
+    );
+  }
+
+  /** Перерисовывает селект исходного языка. */
+  function renderSourceSelect() {
+    const model = currentModel();
+    const codes = model ? model.languageCodes : [];
+    sourceSelect.replaceChildren(
+      el('option', { value: 'auto', text: 'Авто' }),
+      ...codes.map((code) => el('option', { value: code, text: langLabel(code) }))
+    );
+    const keep = codes.includes(sourceLang) ? sourceLang : 'auto';
+    sourceLang = keep;
+    sourceSelect.value = keep;
+  }
+
+  /** Перерисовывает сетку целевых языков с фильтром. */
+  function renderTargets() {
+    const model = currentModel();
+    const codes = model ? model.languageCodes.filter((code) => code !== sourceLang) : [];
+    const needle = targetFilter;
+    const filtered = needle
+      ? codes.filter((code) => langLabel(code).toLowerCase().includes(needle) || code.includes(needle))
+      : codes;
+
+    targetGrid.replaceChildren(
+      ...filtered.map((code) => {
+        const selected = targets.has(code);
+        return el('button', {
+          class: `lang-chip${selected ? ' is-selected' : ''}`,
+          type: 'button',
+          dataset: { code },
+          onClick: () => {
+            if (targets.has(code)) targets.delete(code);
+            else targets.add(code);
+            renderTargets();
+            updateCounter();
+          },
+        }, [
+          el('span', {
+            class: `lang-chip__dot${selected ? ' is-on' : ''}`,
+          }),
+          el('span', { class: 'lang-chip__label', text: langLabel(code) }),
+          el('span', { class: 'lang-chip__code text-tertiary', text: code }),
+        ]);
+      }),
+      filtered.length === 0
+        ? el('div', { class: 'text-tertiary', text: 'Ничего не найдено.' })
+        : null
+    );
+  }
+
+  /** Валидация и создание проекта. */
+  async function submit() {
+    showError('');
+    const title = titleInput ? titleInput.value.trim() : '';
+
+    if (!modelId) {
+      showError('Выберите модель.');
+      return;
+    }
+    if (targets.size === 0) {
+      showError('Выберите хотя бы один целевой язык.');
+      return;
+    }
+
+    if (createBtn) createBtn.disabled = true;
+    try {
+      const data = await call('createProject', {
+        title,
+        modelId,
+        sourceLang,
+        targetLangs: [...targets],
+      });
+      dialog.close();
+      store.set('activeProject', data);
+      router.showPage('documents');
+      toast('Проект создан', 'success');
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      if (createBtn) createBtn.disabled = false;
+    }
+  }
+
+  /** Первичная загрузка списка моделей. */
+  async function loadModels() {
+    modelList.replaceChildren(
+      el('div', { class: 'row', style: { padding: 'var(--sp-2) 0' } }, [spinner()])
+    );
+    const [data, err] = await tryCall('listModels');
+    if (!modelList.isConnected) return;
+    if (err) {
+      modelList.replaceChildren(
+        el('p', { class: 'field__hint field__hint--error', text: err.message })
+      );
+      return;
+    }
+    models = (data?.models ?? []).filter(
+      (model) => model.installState === 'installed' || model.installState === 'available'
+    );
+    const recommendation = store.get('recommendation')?.id;
+    modelId =
+      (recommendation && models.some((m) => m.id === recommendation) && recommendation) ||
+      models.find((m) => m.installState === 'installed')?.id ||
+      models[0]?.id ||
+      '';
+    renderModels();
+    renderSourceSelect();
+    renderTargets();
+    updateCounter();
+    if (models.length === 0) {
+      modelList.append(
+        el('p', { class: 'field__hint field__hint--error', text: 'Нет доступных моделей.' })
+      );
+    }
+  }
+
+  void loadModels();
+}
+
+/* -------------------------------------------------------------------------
+ * Регистрация
+ * ------------------------------------------------------------------------- */
+
+router.registerPage('projects', {
+  title: 'Проекты',
+  subtitle: 'Локальные проекты переводов',
+  render,
+  actions,
+});
