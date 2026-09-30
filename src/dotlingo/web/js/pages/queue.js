@@ -5,6 +5,7 @@
 
 import { tryCall } from '../bridge.js';
 import * as store from '../store.js';
+import * as router from '../router.js';
 import {
   el,
   button,

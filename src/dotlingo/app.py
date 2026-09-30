@@ -11,6 +11,7 @@ from pathlib import Path
 import webview
 
 from dotlingo.api import Api
+from dotlingo.paths import app_resource
 
 WINDOW_TITLE = "DotLingo · локальный перевод документов"
 WEBVIEW2_HINT = (
@@ -32,8 +33,8 @@ def _show_webview2_hint() -> None:
 
 
 def _index_url() -> str:
-    local = Path(__file__).resolve().parent / "web" / "index.html"
-    return local.as_uri()
+    """Абсолютный путь к index.html: pywebview раздаёт его через локальный HTTP-сервер."""
+    return str(app_resource("web/index.html"))
 
 
 def _on_started(api: Api) -> None:
@@ -84,7 +85,8 @@ def main() -> None:
     api.attach_window(window)
     window.events.closed += api.closeGracefully
     try:
-        webview.start(func=_on_started, func_args=(api,))
+        # http_server=True обязателен: ES-модули не грузятся с file:// (CORS).
+        webview.start(func=_on_started, func_args=(api,), http_server=True)
     except Exception:
         _show_webview2_hint()
         sys.exit(1)
