@@ -10,6 +10,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
   "psutil>=6,<8",
   "python-docx>=1.1,<2",
+  "pywebview>=5,<6",
 ]
 
 [project.optional-dependencies]
@@ -25,7 +26,7 @@ dotlingo = "dotlingo.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-dotlingo = ["models.json", "assets/*"]
+dotlingo = ["models.json", "assets/*", "web/**"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
