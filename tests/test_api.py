@@ -123,7 +123,11 @@ def test_project_validation(tmp_path: Path) -> None:
     model = _available_model()
     api = _make_api(tmp_path)
     assert _create_project(api, model["id"], targets=[])["code"] == "no_targets"
-    unsupported = next(code for code in ("de", "fr", "ja") if not supports_language(model, code))
+    from dotlingo.languages import LANGUAGES
+
+    unsupported = next((code for code in LANGUAGES if not supports_language(model, code)), None)
+    if unsupported is None:
+        pytest.skip("Модель поддерживает все известные языки.")
     result = _create_project(api, model["id"], targets=[unsupported])
     assert result["code"] == "language_unsupported"
     assert api.renameProject("missing", "x")["ok"] is False

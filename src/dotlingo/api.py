@@ -17,6 +17,7 @@ from dotlingo.formats import export_document
 from dotlingo.hardware import HardwareSnapshot, assess_model, detect, recommend_model
 from dotlingo.languages import (
     AUTO_LANGUAGE,
+    LANGUAGES,
     language_label,
     supported_languages,
     supports_language,
@@ -37,6 +38,15 @@ from dotlingo.storage import ProjectStore, delete_project, list_projects
 from dotlingo.task_queue import TaskQueue, build_chunks
 
 IMPORT_EXTENSIONS = ("*.txt;*.md;*.markdown;*.docx;*.epub;*.pdf", "Все файлы (*.*)")
+
+
+EXPORT_ALLOWED = {
+    "txt": (".txt", ".md"),
+    "markdown": (".md", ".txt"),
+    "docx": (".docx", ".txt", ".md"),
+    "epub": (".epub", ".txt", ".md"),
+    "pdf": (".txt", ".md"),
+}
 
 
 def _ok(data: Any = None) -> dict[str, Any]:
@@ -641,6 +651,10 @@ class Api:
             return _ok(None)
         return _ok(_serialize_hardware(self.hardware))
 
+    def getLanguages(self) -> dict[str, Any]:
+        """Словарь код → русское название для UI."""
+        return _ok(dict(LANGUAGES))
+
     def detectHardware(self) -> dict[str, Any]:
         def work() -> None:
             snapshot = detect(self.models_dir)
@@ -842,7 +856,10 @@ class Api:
     def resolveExportPath(self, default_name: str, allowed_extensions: list[str]) -> dict[str, Any]:
         if self._window is None:
             return _ok(None)
-        patterns = [f"*.{".".join(ext)}" if False else f"*{ext}" for ext in allowed_extensions]
+        extensions = [
+            ext if ext.startswith(".") else f".{ext}" for ext in (allowed_extensions or [".txt"])
+        ]
+        patterns = [f"*{ext}" for ext in extensions]
         try:
             paths = self._window.create_file_dialog(
                 webview.SAVE_DIALOG,
@@ -854,7 +871,22 @@ class Api:
             return _ok(None)
         if not paths:
             return _ok(None)
-        return _ok(str(paths[0]) if isinstance(paths, (list, tuple)) else str(paths))
+        chosen = str(paths[0]) if isinstance(paths, (list, tuple)) else str(paths)
+        suffix = Path(chosen).suffix.lower()
+        if suffix not in extensions:
+            chosen = f"{chosen}{extensions[0]}"
+        return _ok(chosen)
+
+    def getExportExtensions(self, doc_id: str) -> dict[str, Any]:
+        """Допустимые расширения экспорта по формату документа (матрица форматов)."""
+        store = self._active_store()
+        if store is None:
+            return _err("Сначала выберите проект.", "no_project")
+        try:
+            record = store.document(doc_id)
+        except KeyError:
+            return _err("Документ не найден.", "not_found")
+        return _ok(list(EXPORT_ALLOWED.get(record.format, (".txt", ".md"))))
 
     def revealPath(self, path: str) -> dict[str, Any]:
         if not path:

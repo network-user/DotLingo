@@ -1,6 +1,7 @@
 /**
- * Обёртка над pywebview.api: промис-хелпер call(method, ...args),
- * ожидание готовности bridge и dev-фолбэк с мок-ответами.
+ * Обёртка над pywebview.api: call(method, ...args) всегда возвращает
+ * распакованный конверт {ok, data, error, code} → data (или кидает BridgeError).
+ * Ожидание готовности bridge и dev-фолбэк с мок-ответами.
  */
 
 /** Таймаут готовности api, когда window.pywebview существует. */
@@ -14,66 +15,86 @@ let readyPromise = null;
 let demoMode = false;
 
 /* -------------------------------------------------------------------------
+ * BridgeError: ошибка метода api (ok: false)
+ * ------------------------------------------------------------------------- */
+
+export class BridgeError extends Error {
+  /**
+   * @param {string} message
+   * @param {string} [code]
+   */
+  constructor(message, code = 'error') {
+    super(message);
+    this.name = 'BridgeError';
+    this.code = code;
+  }
+}
+
+/* -------------------------------------------------------------------------
  * Мок-ответы для dev-режима (index.html открыт без pywebview)
  * ------------------------------------------------------------------------- */
 
-const MOCK_PROJECTS = {
-  projects: [
-    {
-      id: 'demo-1',
-      name: 'Демо-проект',
-      source_lang: 'en',
-      target_lang: 'ru',
-      created_at: '2026-09-20T10:00:00',
-      documents: 3,
-    },
-  ],
-};
+const MOCK_LANGUAGES = { ru: 'Русский', en: 'Английский', de: 'Немецкий', fr: 'Французский' };
 
-const MOCK_PREFS = {
-  theme: 'dark',
-  last_project: null,
-  cpu_threads: 4,
-};
-
-const MOCK_HARDWARE = {
-  cpu: 'Demo CPU',
-  cores: 8,
-  ram_total_gb: 16,
-  ram_available_gb: 9.5,
-  disk_free_gb: 120,
-};
+const MOCK_PREFS = { theme: 'dark', reduce_motion: false, last_project: '', setup_seen: true };
 
 const MOCK_MODELS = {
   models: [
     {
       id: 'demo-model',
       name: 'Demo Model Q4_K_M',
-      size_bytes: 4096000000,
-      downloaded: false,
+      custom: false,
+      status: 'available',
+      installState: 'available',
+      installed: false,
+      sizeBytes: 4096000000,
+      sizeLabel: '3.81 ГБ',
+      estimatedRamGb: 5.2,
+      license: 'Apache-2.0',
+      licenseUrl: '',
+      cardUrl: '',
+      repo: '',
+      revision: '',
+      quantization: 'Q4_K_M',
+      testedOnWindows: true,
+      languageCodes: ['ru', 'en', 'de', 'fr'],
+      uiDescription: 'Демонстрационная карточка модели.',
+      uiDetails: '',
+      notes: '',
+      compatibility: null,
     },
   ],
+  recommendation: null,
 };
 
 /**
- * Мок-ответ по имени метода api.
+ * Мок-ответ по имени метода api (конверт как в api.py).
  * @param {string} method
+ * @returns {{ok: boolean, data: unknown}}
  */
 function mockResponse(method) {
   switch (method) {
-    case 'get_prefs':
-      return { ...MOCK_PREFS };
-    case 'list_projects':
-      return MOCK_PROJECTS;
-    case 'get_hardware':
-      return { ...MOCK_HARDWARE };
-    case 'list_models':
-      return MOCK_MODELS;
-    case 'set_theme':
-      return { ok: true };
+    case 'getPreferences':
+      return { ok: true, data: { ...MOCK_PREFS } };
+    case 'setPreferences':
+      return { ok: true, data: { ...MOCK_PREFS } };
+    case 'getLanguages':
+      return { ok: true, data: MOCK_LANGUAGES };
+    case 'listProjects':
+      return { ok: true, data: [] };
+    case 'getActiveProject':
+      return { ok: true, data: null };
+    case 'getHardware':
+      return { ok: true, data: null };
+    case 'listModels':
+      return { ok: true, data: MOCK_MODELS };
+    case 'getDataDirs':
+      return { ok: true, data: { projectsDir: 'C:\\demo\\projects', modelsDir: 'C:\\demo\\models' } };
+    case 'listTasks':
+      return { ok: true, data: [] };
     default:
       console.warn(`[bridge] demo: нет мока для метода ${method}`);
-      return { ok: true, demo: true };
+      return { ok: true, data: null };
   }
 }
 
@@ -96,8 +117,6 @@ export function waitReady() {
       resolve(true);
       return;
     }
-    // pywebview инжектит объект до старта скриптов: раз его нет - почти
-    // наверняка открыт обычный браузер, долго ждать смысла нет.
     const timeout = window.pywebview ? READY_TIMEOUT_MS : NO_BRIDGE_TIMEOUT_MS;
     const timer = setTimeout(() => resolve(Boolean(window.pywebview?.api)), timeout);
     window.addEventListener(
@@ -114,23 +133,47 @@ export function waitReady() {
 }
 
 /**
- * Вызвать метод pywebview.api; в dev-режиме возвращает мок.
- * @param {string} method - имя метода api.
+ * Вызвать метод pywebview.api и распаковать конверт.
+ * В dev-режиме возвращает мок. При ok:false кидает BridgeError.
+ * @param {string} method - имя метода api (camelCase).
  * @param {...unknown} args
- * @returns {Promise<unknown>}
+ * @returns {Promise<unknown>} data из конверта.
  */
 export async function call(method, ...args) {
   const ready = await waitReady();
   if (ready) {
     const fn = window.pywebview.api[method];
     if (typeof fn !== 'function') {
-      throw new Error(`[bridge] метод api.${method} не найден`);
+      throw new BridgeError(`Метод api.${method} не найден`);
     }
-    return fn(...args);
+    const envelope = await fn(...args);
+    if (!envelope || typeof envelope !== 'object') {
+      throw new BridgeError(`Пустой ответ метода ${method}`);
+    }
+    if (envelope.ok !== true) {
+      throw new BridgeError(envelope.error || 'Неизвестная ошибка', envelope.code || 'error');
+    }
+    return envelope.data;
   }
   activateDemoMode();
-  await new Promise((r) => setTimeout(r, 160));
-  return mockResponse(method, args);
+  await new Promise((r) => setTimeout(r, 120));
+  const mocked = mockResponse(method);
+  if (mocked.ok !== true) throw new BridgeError(mocked.error || 'demo error', mocked.code);
+  return mocked.data;
+}
+
+/**
+ * Как call, но не кидает исключение: возвращает [data, null] или [null, error].
+ * @param {string} method
+ * @param {...unknown} args
+ * @returns {Promise<[unknown, BridgeError|null]>}
+ */
+export async function tryCall(method, ...args) {
+  try {
+    return [await call(method, ...args), null];
+  } catch (e) {
+    return [null, e instanceof BridgeError ? e : new BridgeError(String(e))];
+  }
 }
 
 /**
