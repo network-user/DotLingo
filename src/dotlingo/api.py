@@ -853,6 +853,22 @@ class Api:
             return _ok([])
         return _ok([str(item) for item in paths])
 
+    def resolveGGUFPath(self) -> dict[str, Any]:
+        """Нативный диалог выбора локального GGUF-файла."""
+        if self._window is None:
+            return _ok(None)
+        try:
+            paths = self._window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=("GGUF-модели (*.gguf)", "Все файлы (*.*)"),
+            )
+        except Exception:
+            return _ok(None)
+        if not paths:
+            return _ok(None)
+        return _ok(str(paths[0]) if isinstance(paths, (list, tuple)) else str(paths))
+
     def resolveExportPath(self, default_name: str, allowed_extensions: list[str]) -> dict[str, Any]:
         if self._window is None:
             return _ok(None)
