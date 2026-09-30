@@ -82,7 +82,7 @@ export function showPage(name) {
   const actions = document.getElementById('page-actions');
 
   const page = document.createElement('div');
-  page.className = 'page';
+  page.className = def?.layout ? `page page--${def.layout}` : 'page';
 
   if (def) {
     if (title) title.textContent = def.title ?? PAGE_TITLES[name] ?? name;

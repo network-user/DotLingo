@@ -21,6 +21,7 @@ docx_datas, docx_binaries, docx_hidden = collect_all("docx")
 datas = llama_datas + pypdf_datas + docx_datas + [
     (str(src_root / "dotlingo" / "models.json"), "dotlingo"),
     (str(src_root / "dotlingo" / "assets"), "dotlingo/assets"),
+    (str(src_root / "dotlingo" / "web"), "dotlingo/web"),
 ]
 binaries = llama_binaries + pypdf_binaries + docx_binaries
 hiddenimports = llama_hidden + pypdf_hidden + docx_hidden + [

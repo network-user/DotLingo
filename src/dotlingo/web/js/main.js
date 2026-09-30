@@ -8,6 +8,14 @@ import * as store from './store.js';
 import * as router from './router.js';
 import * as components from './components.js';
 import { icon } from './icons.js';
+import './pages/events.js';
+import './pages/projects.js';
+import './pages/documents.js';
+import './pages/review.js';
+import './pages/queue.js';
+import './pages/models.js';
+import './pages/glossary.js';
+import './pages/settings.js';
 
 /** Порядок страниц для Ctrl+1..7 (совпадает с навигацией в index.html). */
 const PAGE_ORDER = [
@@ -40,8 +48,8 @@ async function boot() {
   // Фоновая инициализация данных: не блокирует отрисовку каркаса.
   initBridgeData();
 
-  // Контракт для консольной отладки (и для волны 2).
-  window.DL = { store, router, call, components, isDemo };
+  const pushEvent = window.DL?.push_event;
+  window.DL = { store, router, call, components, isDemo, push_event: pushEvent };
 }
 
 /**
@@ -55,24 +63,33 @@ async function initBridgeData() {
     store.set('demo', true);
   }
 
-  const prefs = await safe(() => call('get_prefs'), {});
+  const prefs = await safe(() => call('getPreferences'), {});
   const theme = prefs?.theme === 'light' ? 'light' : 'dark';
   store.set('theme', theme);
   applyTheme(theme);
+  applyMotion(Boolean(prefs?.reduce_motion));
 
-  const [projects, hardware, models] = await Promise.all([
-    safe(() => call('list_projects'), { projects: [] }),
-    safe(() => call('get_hardware'), null),
-    safe(() => call('list_models'), { models: [] }),
+  const [projects, hardware, models, active, languages] = await Promise.all([
+    safe(() => call('listProjects'), []),
+    safe(() => call('getHardware'), null),
+    safe(() => call('listModels'), { models: [], recommendation: null }),
+    safe(() => call('getActiveProject'), null),
+    safe(() => call('listLanguages'), null),
   ]);
 
   store.patch({
-    projects: projects?.projects ?? [],
+    projects: projects || [],
     hardware,
-    models: models?.models ?? [],
+    models: models?.models || [],
+    recommendation: models?.recommendation || null,
+    activeProject: active,
+    languages,
+    reduceMotion: Boolean(prefs?.reduce_motion),
   });
 
   renderDeviceStatus(hardware);
+  renderActiveProject(active);
+  if (!isDemo() && prefs && prefs.setup_seen === false) welcome();
 }
 
 /** Пробует вызвать bridge-метод, при любой ошибке возвращает fallback. */
@@ -100,16 +117,21 @@ function wireShell() {
     btn.addEventListener('click', () => router.showPage(btn.dataset.page));
   });
 
-  // Переключатель темы.
   document.getElementById('theme-toggle')?.addEventListener('click', () => {
     const next = store.get('theme') === 'dark' ? 'light' : 'dark';
     store.set('theme', next);
-    applyTheme(next);
-    call('set_theme', next).catch(() => {});
+    call('setPreferences', { theme: next }).catch(() => {});
   });
 
-  // Первичное состояние индикатора устройства.
+  document.getElementById('active-project')?.addEventListener('click', () => {
+    router.showPage('projects');
+  });
+
+  store.watch('theme', applyTheme);
+  store.watch('hardware', renderDeviceStatus);
+  store.watch('activeProject', renderActiveProject);
   renderDeviceStatus(null);
+  renderActiveProject(null);
 }
 
 /** Применяет тему к <html data-theme> и обновляет кнопку-переключатель. */
@@ -126,9 +148,49 @@ function applyTheme(theme) {
   }
 }
 
+function applyMotion(enabled) {
+  document.documentElement.dataset.reduceMotion = enabled ? 'true' : 'false';
+}
+
+function renderActiveProject(project) {
+  const label = document.getElementById('active-project-label');
+  if (!label) return;
+  label.textContent = project?.title || 'Не выбран';
+}
+
+function welcome() {
+  let marked = false;
+  const mark = () => {
+    if (marked) return;
+    marked = true;
+    call('setPreferences', { setup_seen: true }).catch(() => {});
+  };
+  const dialog = components.modal({
+    title: 'Локальный перевод',
+    subtitle: 'Оригинал остаётся копией. Модель скачивается только когда вы подтвердите файл.',
+    onClose: mark,
+    render: (body) => {
+      body.append(components.el('div', { class: 'stack stack--lg' }, [
+        components.el('p', { class: 'muted', text: 'Создайте проект, добавьте документ и выберите модель под память компьютера.' }),
+        components.el('p', { class: 'muted', text: 'Перевод идёт очередью, без оценки срока. Проверка стоит рядом с исходным текстом.' }),
+      ]));
+    },
+    actions: [
+      {
+        label: 'Начать',
+        variant: 'primary',
+        onClick: () => {
+          mark();
+          dialog.close();
+        },
+      },
+    ],
+  });
+}
+
 /**
- * Обновляет индикатор устройства в подвале sidebar.
- * @param {object|null} hw - ответ get_hardware (cpu, cores, ram_*).
+ * Индикатор устройства в подвале боковой панели.
+ * @param {object|null} hw
  */
 function renderDeviceStatus(hw) {
   const status = document.getElementById('device-status');
@@ -142,11 +204,9 @@ function renderDeviceStatus(hw) {
   }
 
   const parts = [];
-  if (hw.cpu) parts.push(hw.cpu);
-  else if (hw.cores) parts.push(`${hw.cores} ядер`);
-  if (hw.ram_total_gb) parts.push(`${components.formatBytes(hw.ram_total_gb * 1024 ** 3)} RAM`);
-
-  status.dataset.state = 'ok';
+  if (hw.profile) parts.push(hw.profile);
+  if (hw.ramTotalGb) parts.push(`${hw.ramTotalGb} ГБ RAM`);
+  status.dataset.state = hw.llamaRuntimeAvailable ? 'ok' : 'warn';
   label.textContent = parts.join(' · ') || 'Готово';
 }
 

@@ -85,6 +85,17 @@ def fake_queue(monkeypatch: pytest.MonkeyPatch):
 # --------------------------------------------------------------------- preferences
 
 
+def test_list_languages(tmp_path: Path) -> None:
+    data = Api(tmp_path).listLanguages()["data"]
+    assert data["auto"]["code"] == "auto"
+    codes = {item["code"] for item in data["languages"]}
+    assert {"ru", "en"} <= codes
+
+
+def test_resolve_model_path_without_window(tmp_path: Path) -> None:
+    assert Api(tmp_path).resolveModelPath()["data"] is None
+
+
 def test_preferences_roundtrip(tmp_path: Path) -> None:
     api = _make_api(tmp_path)
     assert api.getPreferences()["ok"] is True
@@ -123,7 +134,10 @@ def test_project_validation(tmp_path: Path) -> None:
     model = _available_model()
     api = _make_api(tmp_path)
     assert _create_project(api, model["id"], targets=[])["code"] == "no_targets"
-    unsupported = next(code for code in ("de", "fr", "ja") if not supports_language(model, code))
+    unsupported = next(
+        (code for code in ("de", "fr", "ja", "zz") if not supports_language(model, code)),
+        "zz",
+    )
     result = _create_project(api, model["id"], targets=[unsupported])
     assert result["code"] == "language_unsupported"
     assert api.renameProject("missing", "x")["ok"] is False
@@ -239,10 +253,20 @@ def test_glossary_crud(tmp_path: Path) -> None:
     assert added["ok"] is True
 
     terms = api.listGlossary("ru")["data"]
-    assert terms == [{"source": "term", "target": "термин"}]
+    assert len(terms) == 1
+    assert terms[0]["source"] == "term"
+    assert terms[0]["target"] == "термин"
+    term_id = terms[0]["id"]
+    assert isinstance(term_id, int)
 
-    assert api.updateGlossaryTerm({"id": 1, "source": "", "target": "x"})["ok"] is False
+    updated = api.updateGlossaryTerm({"id": term_id, "source": "term", "target": "термин 2"})
+    assert updated["ok"] is True
+    assert api.listGlossary("ru")["data"][0]["target"] == "термин 2"
+
+    assert api.updateGlossaryTerm({"id": term_id, "source": "", "target": "x"})["ok"] is False
     assert api.deleteGlossaryTerm(999)["ok"] is False
+    assert api.deleteGlossaryTerm(term_id)["ok"] is True
+    assert api.listGlossary("ru")["data"] == []
 
 
 # --------------------------------------------------------------------- models

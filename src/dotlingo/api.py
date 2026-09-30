@@ -17,6 +17,8 @@ from dotlingo.formats import export_document
 from dotlingo.hardware import HardwareSnapshot, assess_model, detect, recommend_model
 from dotlingo.languages import (
     AUTO_LANGUAGE,
+    AUTO_LANGUAGE_LABEL,
+    LANGUAGES,
     language_label,
     supported_languages,
     supports_language,
@@ -184,6 +186,14 @@ class Api:
 
     def getPreferences(self) -> dict[str, Any]:
         return _ok(dict(self._preferences))
+
+    def listLanguages(self) -> dict[str, Any]:
+        return _ok(
+            {
+                "auto": {"code": AUTO_LANGUAGE, "label": AUTO_LANGUAGE_LABEL},
+                "languages": [{"code": code, "label": label} for code, label in LANGUAGES.items()],
+            }
+        )
 
     def setPreferences(self, prefs: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(prefs, dict):
@@ -823,6 +833,22 @@ class Api:
         return _ok(None)
 
     # ------------------------------------------------------------------ dialogs and system
+
+    def resolveModelPath(self) -> dict[str, Any]:
+        if self._window is None:
+            return _ok(None)
+        try:
+            paths = self._window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=("GGUF (*.gguf)", "Все файлы (*.*)"),
+            )
+        except Exception:
+            return _ok(None)
+        if not paths:
+            return _ok(None)
+        chosen = paths[0] if isinstance(paths, (list, tuple)) else paths
+        return _ok(str(chosen))
 
     def resolveImportPaths(self) -> dict[str, Any]:
         if self._window is None:
