@@ -76,6 +76,65 @@ def _runtime_available() -> bool:
 
 SPECTRUM_TICKS = 160
 
+HARDWARE_CACHE = "hardware.json"
+
+
+def _serialize_hardware(
+    snapshot: HardwareSnapshot, detected_at: str | None = None
+) -> dict[str, Any]:
+    return {
+        "profile": snapshot.profile,
+        "cpuThreads": snapshot.cpu_threads,
+        "ramTotalGb": snapshot.ram_total_gb,
+        "ramAvailableGb": snapshot.ram_available_gb,
+        "diskFreeGb": snapshot.disk_free_gb,
+        "gpuNames": list(snapshot.gpu_names or ()),
+        "gpuVramGb": [value if value is not None else None for value in (snapshot.gpu_vram_gb or ())],
+        "llamaRuntimeAvailable": snapshot.llama_runtime_available,
+        "llamaGpuOffloadAvailable": snapshot.llama_gpu_offload_available,
+        "detectedAt": detected_at or datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _hardware_from_cache(data: dict[str, Any]) -> HardwareSnapshot:
+    return HardwareSnapshot(
+        cpu_threads=int(data["cpuThreads"]),
+        ram_total_gb=float(data["ramTotalGb"]),
+        ram_available_gb=float(data["ramAvailableGb"]),
+        disk_free_gb=float(data["diskFreeGb"]),
+        gpu_names=tuple(data.get("gpuNames") or ()),
+        gpu_vram_gb=tuple(data.get("gpuVramGb") or ()),
+        llama_runtime_available=bool(data.get("llamaRuntimeAvailable")),
+        llama_gpu_offload_available=data.get("llamaGpuOffloadAvailable"),
+    )
+
+
+def _load_hardware_cache(root: Path) -> tuple[HardwareSnapshot | None, str | None]:
+    """Прочитать кэш последней проверки устройства; молча при любой порче."""
+    try:
+        data = json.loads((Path(root) / HARDWARE_CACHE).read_text(encoding="utf-8"))
+        snapshot = _hardware_from_cache(data)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, None
+    detected_at = data.get("detectedAt")
+    return snapshot, detected_at if isinstance(detected_at, str) else None
+
+
+def _save_hardware_cache(root: Path, snapshot: HardwareSnapshot, detected_at: str) -> None:
+    """Атомарно записать кэш проверки устройства."""
+    path = Path(root) / HARDWARE_CACHE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".tmp")
+        temp.write_text(
+            json.dumps(_serialize_hardware(snapshot, detected_at), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(temp, path)
+    except OSError:
+        # Кэш не критичен: без него проверка просто выполнится заново.
+        pass
+
 
 def _block_spectrum(blocks: list[Any], translations: dict[int, str]) -> list[float]:
     """Спектр перевода: одно значение на блок (или корзину блоков).
@@ -136,12 +195,12 @@ class Api:
         self.projects: list[ProjectStore] = list_projects(self.projects_dir)
         self.project_queues: dict[str, TaskQueue] = {}
         self.active_project_id: str | None = None
-        self.hardware: HardwareSnapshot | None = None
         self._lock = threading.RLock()
         self._window: Any = None
         self._workers: list[threading.Thread] = []
         self._download_cancel: DownloadCancellation | None = None
         self._closing = False
+        self.hardware, self._hardware_detected_at = _load_hardware_cache(self.data_dir)
         preferences = load_preferences(self.preferences_root)
         self._preferences = preferences
         last = preferences.get("last_project") or ""
@@ -681,17 +740,23 @@ class Api:
     def getHardware(self) -> dict[str, Any]:
         if self.hardware is None:
             return _ok(None)
-        return _ok(_serialize_hardware(self.hardware))
+        return _ok(_serialize_hardware(self.hardware, self._hardware_detected_at))
 
     def getLanguages(self) -> dict[str, Any]:
         """Словарь код → русское название для UI."""
         return _ok(dict(LANGUAGES))
 
     def detectHardware(self) -> dict[str, Any]:
+        """Локальная проверка устройства; результат кэшируется до явного повтора."""
+
         def work() -> None:
             snapshot = detect(self.models_dir)
-            self.hardware = snapshot
-            self._push("hardware_detected", _serialize_hardware(snapshot))
+            detected_at = datetime.now(timezone.utc).isoformat()
+            with self._lock:
+                self.hardware = snapshot
+                self._hardware_detected_at = detected_at
+            _save_hardware_cache(self.data_dir, snapshot, detected_at)
+            self._push("hardware_detected", _serialize_hardware(snapshot, detected_at))
 
         self._spawn(work, "device_check")
         return _ok({"started": True})
@@ -984,18 +1049,3 @@ class Api:
             if has_queued:
                 self._queue_for(store).start()
         return _ok(None)
-
-
-def _serialize_hardware(snapshot: HardwareSnapshot) -> dict[str, Any]:
-    return {
-        "profile": snapshot.profile,
-        "cpuThreads": snapshot.cpu_threads,
-        "ramTotalGb": snapshot.ram_total_gb,
-        "ramAvailableGb": snapshot.ram_available_gb,
-        "diskFreeGb": snapshot.disk_free_gb,
-        "gpuNames": list(snapshot.gpu_names or ()),
-        "gpuVramGb": [value if value is not None else None for value in (snapshot.gpu_vram_gb or ())],
-        "llamaRuntimeAvailable": snapshot.llama_runtime_available,
-        "llamaGpuOffloadAvailable": snapshot.llama_gpu_offload_available,
-        "detectedAt": datetime.now(timezone.utc).isoformat(),
-    }

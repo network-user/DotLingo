@@ -267,6 +267,37 @@ def test_list_models_catalog(tmp_path: Path) -> None:
     assert {item["id"] for item in models} >= {model["id"] for model in catalog()}
 
 
+# --------------------------------------------------------------------- hardware
+
+
+def test_hardware_cached_until_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dotlingo.hardware import HardwareSnapshot
+
+    api = _make_api(tmp_path, sync=True)
+    assert api.getHardware()["data"] is None
+
+    snapshot = HardwareSnapshot(
+        cpu_threads=8,
+        ram_total_gb=16.0,
+        ram_available_gb=8.0,
+        disk_free_gb=100.0,
+        gpu_names=("NVIDIA Demo",),
+        gpu_vram_gb=(4.0,),
+        llama_runtime_available=True,
+        llama_gpu_offload_available=None,
+    )
+    monkeypatch.setattr(api_module, "detect", lambda _path: snapshot)
+    assert api.detectHardware()["ok"] is True
+    assert (tmp_path / "hardware.json").is_file()
+
+    # Новый экземпляр поднимает кэш мгновенно, без повторной проверки.
+    cached = Api(tmp_path).getHardware()["data"]
+    assert cached is not None
+    assert cached["cpuThreads"] == 8
+    assert cached["gpuNames"] == ["NVIDIA Demo"]
+    assert cached["detectedAt"]
+
+
 # --------------------------------------------------------------------- close semantics
 
 

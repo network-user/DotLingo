@@ -9,6 +9,7 @@ import * as router from '../router.js';
 import {
   el,
   button,
+  badge,
   toast,
   spinner,
   formatBytes,
@@ -354,59 +355,160 @@ function infoRow(label, value) {
   ]);
 }
 
-/** Панель «Устройство» из store.hardware. */
+/** Идёт ли повторная проверка устройства. */
+let hwChecking = false;
+
+/** Форматирование даты проверки: «29 сент 2026 г., 14:05». */
+function formatDateTime(iso) {
+  if (!iso) return '';
+  try {
+    return new Intl.DateTimeFormat('ru-RU', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(iso));
+  } catch {
+    return '';
+  }
+}
+
+/** Тон бейджа по профилю устройства. */
+function profileTone(profile) {
+  if (profile && profile.startsWith('мощное')) return 'success';
+  if (profile && profile.startsWith('слабое')) return 'warning';
+  return 'muted';
+}
+
+/** Горизонтальный измеритель (доля 0..1). */
+function meter(fraction) {
+  const clamped = Math.min(1, Math.max(0, Number.isFinite(fraction) ? fraction : 0));
+  return el('div', { class: 'st-meter' }, [
+    el('div', { class: 'st-meter__track' }, [
+      el('div', { class: 'st-meter__fill', style: { width: `${Math.round(clamped * 100)}%` } }),
+    ]),
+  ]);
+}
+
+/** Запуск повторной проверки устройства. */
+async function rerunDetection() {
+  if (hwChecking) return;
+  hwChecking = true;
+  document.querySelectorAll('.st-hw-rerun').forEach((btn) => {
+    btn.disabled = true;
+  });
+  document.querySelectorAll('.st-hw-body').forEach((body) => {
+    body.replaceChildren(
+      el('div', { class: 'st-hw-checking' }, [
+        spinner(),
+        el('span', { class: 'text-secondary', text: 'Проверяем устройство… несколько секунд.' }),
+      ])
+    );
+  });
+  try {
+    await call('detectHardware');
+  } catch (e) {
+    hwChecking = false;
+    toast(e.message, 'error');
+    const host = document.getElementById('page-host');
+    if (host) void refresh(host);
+  }
+}
+
+/** Панель «Устройство»: профиль, ресурсы, runtime и повторная проверка. */
 function devicePanel() {
   const hw = store.get('hardware');
 
-  const lines = [];
-  if (!hw) {
-    lines.push(el('p', { class: 'st-muted', text: 'Устройство ещё не проверено.' }));
-  } else {
-    const vramList = (hw.gpuVramGb ?? []).filter((v) => Number.isFinite(v) && v > 0);
-    lines.push(infoRow('Профиль', hw.profile || '—'));
-    lines.push(infoRow('CPU', `${hw.cpuThreads} потоков`));
-    lines.push(
-      infoRow(
-        'RAM',
-        `${formatBytes(hw.ramTotalGb * 1024 ** 3)} всего · доступно ${formatBytes(hw.ramAvailableGb * 1024 ** 3)}`
-      )
-    );
-    lines.push(infoRow('Диск', `свободно ${formatBytes(hw.diskFreeGb * 1024 ** 3)}`));
-    lines.push(
-      infoRow(
-        'GPU',
-        hw.gpuNames?.length
-          ? `${hw.gpuNames.join(', ')} · VRAM ${formatBytes(vramList.reduce((a, b) => a + b, 0) * 1024 ** 3)}`
-          : 'не найден'
-      )
-    );
-    lines.push(
-      infoRow('Runtime llama.cpp', hw.llamaRuntimeAvailable ? 'доступен' : 'не найден')
-    );
-    lines.push(infoRow('GPU offload', 'выключен'));
-  }
+  const rerunButton = button({
+    label: hw ? 'Проверить снова' : 'Проверить устройство',
+    variant: 'ghost',
+    iconName: 'refresh',
+    disabled: hwChecking,
+    onClick: () => void rerunDetection(),
+  });
+  rerunButton.classList.add('st-hw-rerun');
 
-  return el('section', { class: 'panel' }, [
-    el('header', { class: 'panel__header' }, [
-      el('div', {}, [el('h2', { class: 'panel__title', text: 'Устройство' })]),
-      el('div', { class: 'panel__actions' }, [
-        button({
-          label: 'Проверить устройство',
-          variant: 'ghost',
-          iconName: 'refresh',
-          onClick: async () => {
-            try {
-              await call('detectHardware');
-              toast('Проверка устройства запущена', 'info');
-            } catch (e) {
-              toast(e.message, 'error');
-            }
-          },
+  const header = el('header', { class: 'panel__header' }, [
+    el('div', {}, [
+      el('h2', { class: 'panel__title', text: 'Устройство' }),
+      hw && hw.detectedAt
+        ? el('span', {
+            class: 'st-hw__stamp text-tertiary',
+            text: `проверено ${formatDateTime(hw.detectedAt)}`,
+          })
+        : null,
+    ]),
+    el('div', { class: 'panel__actions' }, [rerunButton]),
+  ]);
+
+  let body;
+  if (!hw) {
+    body = el('div', { class: 'st-hw-body st-hw-body--empty' }, [
+      el('p', {
+        class: 'st-muted',
+        text: 'Устройство ещё не проверено. Проверка локальная: RAM, диск, CPU, GPU и runtime llama.cpp.',
+      }),
+    ]);
+  } else {
+    const gpus = (hw.gpuNames ?? []).map((name, index) => {
+      const vram = (hw.gpuVramGb ?? [])[index];
+      return el('div', { class: 'st-info-row' }, [
+        el('span', {
+          class: 'st-info-row__label text-secondary',
+          text: index === 0 ? 'GPU' : '·',
+        }),
+        el('span', { class: 'st-info-row__value' }, [
+          el('span', { text: name }),
+          Number.isFinite(vram) && vram > 0
+            ? el('span', {
+                class: 'text-tertiary',
+                text: ` · VRAM ${formatBytes(vram * 1024 ** 3)}`,
+              })
+            : null,
+        ]),
+      ]);
+    });
+
+    const ramUsed = hw.ramTotalGb > 0 ? (hw.ramTotalGb - hw.ramAvailableGb) / hw.ramTotalGb : 0;
+
+    body = el('div', { class: 'st-hw-body' }, [
+      el('div', { class: 'st-hw-profile' }, [
+        badge({ label: hw.profile || 'профиль не определён', tone: profileTone(hw.profile) }),
+        el('span', {
+          class: 'text-tertiary',
+          text: hw.llamaRuntimeAvailable ? 'runtime доступен' : 'runtime не найден',
         }),
       ]),
-    ]),
-    el('div', { class: 'st-info-list' }, lines),
-  ]);
+      infoRow('CPU', `${hw.cpuThreads} логических потоков`),
+      el('div', { class: 'st-info-row st-info-row--stack' }, [
+        el('span', { class: 'st-info-row__label text-secondary', text: 'RAM' }),
+        meter(ramUsed),
+        el('span', {
+          class: 'st-info-row__value',
+          text: `занято ${Math.round(ramUsed * 100)}% · доступно ${
+            formatBytes(hw.ramAvailableGb * 1024 ** 3)
+          } из ${formatBytes(hw.ramTotalGb * 1024 ** 3)}`,
+        }),
+      ]),
+      infoRow('Диск', `свободно ${formatBytes(hw.diskFreeGb * 1024 ** 3)}`),
+      gpus.length > 0 ? el('div', { class: 'st-hw-gpus' }, gpus) : infoRow('GPU', 'не найден'),
+      infoRow('Runtime llama.cpp', hw.llamaRuntimeAvailable ? 'доступен' : 'не найден'),
+      infoRow('GPU offload', 'выключен · перевод на CPU'),
+      !hw.llamaRuntimeAvailable
+        ? el('p', {
+            class: 'st-hw__hint',
+            text: 'Для перевода установите llama-cpp-python (см. docs/LOCAL_SETUP.md) и проверьте устройство снова.',
+          })
+        : null,
+      el('p', {
+        class: 'st-hw__note text-tertiary',
+        text: 'Проверка локальная и не выходит в сеть. Повторите её после смены оборудования или установки runtime.',
+      }),
+    ]);
+  }
+
+  return el('section', { class: 'panel' }, [header, body]);
 }
 
 /* -------------------------------------------------------------------------
@@ -534,6 +636,7 @@ function destroy() {
 function wireHardwareEvents(host) {
   unsubHardware?.();
   unsubHardware = store.on('hardware_detected', () => {
+    hwChecking = false;
     if (!host.isConnected) return;
     void refresh(host);
   });

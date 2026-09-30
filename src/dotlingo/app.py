@@ -120,7 +120,9 @@ def _index_url() -> str:
 
 
 def _on_started(api: Api) -> None:
-    api.detectHardware()
+    # Проверка устройства кэшируется; автоматически запускается только один раз.
+    if api.hardware is None:
+        api.detectHardware()
     api.resumeQueuedTasks()
 
 
