@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import subprocess
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 import webview
@@ -14,22 +16,102 @@ from dotlingo.api import Api
 from dotlingo.paths import app_resource
 
 WINDOW_TITLE = "DotLingo · локальный перевод документов"
+
+# Официальный Evergreen-загрузчик WebView2 (редирект на актуальный Setup.exe).
+WEBVIEW2_BOOTSTRAPPER = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+
 WEBVIEW2_HINT = (
     "Для запуска DotLingo нужен Microsoft Edge WebView2.\n"
     "Установите его с https://developer.microsoft.com/microsoft-edge/webview2/ "
     "и запустите приложение снова."
 )
 
+# GUID Evergreen-рантайма WebView2 в EdgeUpdate.
+WEBVIEW2_REGISTRY = (
+    ("HKCU", r"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+    ("HKLM", r"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+    ("HKLM", r"Software\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+)
 
-def _show_webview2_hint() -> None:
-    print(WEBVIEW2_HINT, file=sys.stderr)
-    if sys.platform == "win32":
+
+def _message_box(text: str, title: str, kind: int) -> int:
+    """Нативный MessageBox без tkinter; возвращает код кнопки."""
+    if sys.platform != "win32":
+        print(f"{title}: {text}", file=sys.stderr)
+        return 0
+    return ctypes.windll.user32.MessageBoxW(0, text, title, kind)
+
+
+def _registry_value(root_name: str, subkey: str, value: str) -> str | None:
+    hive = {"HKCU": ctypes.c_void_p(0x80000001), "HKLM": ctypes.c_void_p(0x80000002)}[root_name]
+    try:
+        advapi32 = ctypes.windll.advapi32
+        handle = ctypes.c_void_p()
+        if advapi32.RegOpenKeyExW(
+            hive, subkey, 0, 0x20019, ctypes.byref(handle)
+        ) != 0:
+            return None
         try:
-            ctypes.windll.user32.MessageBoxW(
-                0, WEBVIEW2_HINT, "DotLingo · нужен WebView2", 0x00000010
-            )
-        except OSError:
-            pass
+            size = ctypes.c_ulong(512)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if advapi32.RegQueryValueExW(
+                handle, value, None, None, buffer, ctypes.byref(size)
+            ) != 0:
+                return None
+            return buffer.value
+        finally:
+            advapi32.RegCloseKey(handle)
+    except OSError:
+        return None
+
+
+def _webview2_installed() -> bool:
+    """True, если Evergreen-рантайм WebView2 зарегистрирован в системе."""
+    for root, subkey in WEBVIEW2_REGISTRY:
+        version = _registry_value(root, subkey, "pv")
+        if version and version.strip() not in ("", "0.0.0.0"):
+            return True
+    return False
+
+
+def _ensure_webview2() -> bool:
+    """Проверить WebView2; при отсутствии предложить авто-загрузку загрузчика."""
+    if _webview2_installed():
+        return True
+
+    answer = _message_box(
+        "Для запуска DotLingo нужен Microsoft Edge WebView2 - он не найден.\n\n"
+        "Скачать и установить его сейчас?\n"
+        "Загрузчик около 2 МБ; установку нужно будет подтвердить.",
+        "DotLingo · нужен WebView2",
+        0x00000004 | 0x00000030,  # MB_YESNO | MB_ICONWARNING
+    )
+    if answer != 6:  # IDYES
+        _message_box(WEBVIEW2_HINT, "DotLingo · нужен WebView2", 0x00000010)
+        return False
+
+    try:
+        import urllib.request
+
+        target = Path(tempfile.gettempdir()) / "MicrosoftEdgeWebview2Setup.exe"
+        print("Загружаю загрузчик WebView2…")
+        with urllib.request.urlopen(WEBVIEW2_BOOTSTRAPPER, timeout=60) as response, target.open(
+            "wb"
+        ) as stream:
+            stream.write(response.read())
+        subprocess.Popen([str(target)], close_fds=True)
+        _message_box(
+            "Загрузчик WebView2 запущен. Завершите установку и запустите DotLingo снова.",
+            "DotLingo · установка WebView2",
+            0x00000040,
+        )
+    except (OSError, ValueError) as exc:
+        _message_box(
+            f"Не удалось скачать WebView2 автоматически: {exc}\n\n{WEBVIEW2_HINT}",
+            "DotLingo · нужен WebView2",
+            0x00000010,
+        )
+    return False
 
 
 def _index_url() -> str:
@@ -73,6 +155,9 @@ def main() -> None:
     if args.smoke_test:
         sys.exit(_run_smoke_test(args.data_dir))
 
+    if not _ensure_webview2():
+        sys.exit(1)
+
     api = Api(args.data_dir)
     window = webview.create_window(
         WINDOW_TITLE,
@@ -83,12 +168,23 @@ def main() -> None:
         min_size=(1020, 680),
     )
     api.attach_window(window)
-    window.events.closed += api.closeGracefully
+
+    def _on_closed() -> None:
+        # Подписчик события closed обязан вернуть hashable; возвращаем None.
+        api.closeGracefully()
+
+    window.events.closed += _on_closed
     try:
         # http_server=True обязателен: ES-модули не грузятся с file:// (CORS).
-        webview.start(func=_on_started, func_args=(api,), http_server=True)
-    except Exception:
-        _show_webview2_hint()
+        webview.start(func=_on_started, args=(api,), http_server=True)
+    except Exception as exc:
+        # Реальная ошибка запуска - не маскируем её под WebView2.
+        traceback.print_exc()
+        _message_box(
+            f"Не удалось открыть окно DotLingo: {exc}\n\nПодробности выведены в консоль.",
+            "DotLingo · ошибка запуска",
+            0x00000010,
+        )
         sys.exit(1)
 
 
