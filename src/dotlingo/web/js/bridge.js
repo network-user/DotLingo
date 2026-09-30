@@ -88,6 +88,8 @@ function mockResponse(method) {
       return { ok: true, data: null };
     case 'listModels':
       return { ok: true, data: MOCK_MODELS };
+    case 'listMarket':
+      return { ok: true, data: { fetchedAt: null, stale: false, errors: [], offers: [] } };
     case 'getDataDirs':
       return { ok: true, data: { projectsDir: 'C:\\demo\\projects', modelsDir: 'C:\\demo\\models' } };
     case 'listTasks':

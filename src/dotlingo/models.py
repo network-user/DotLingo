@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -26,10 +27,7 @@ def catalog() -> list[dict[str, Any]]:
 
 
 def get_model(model_id: str, root: Path | None = None) -> dict[str, Any]:
-    for model in catalog():
-        if model.get("id") == model_id:
-            return model
-    for model in custom_catalog(root):
+    for model in (*catalog(), *market_catalog(root), *custom_catalog(root)):
         if model.get("id") == model_id:
             return model
     raise KeyError(model_id)
@@ -76,8 +74,79 @@ def custom_catalog(root: Path | None = None) -> list[dict[str, Any]]:
     return valid
 
 
+def market_catalog(root: Path | None = None) -> list[dict[str, Any]]:
+    """Read GGUF entries downloaded from the curated model market."""
+    base = Path(root) if root is not None else models_root()
+    try:
+        records = json.loads((base / "market_models.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(records, list):
+        return []
+    return [item for item in records if _valid_market_record(item)]
+
+
+def upsert_market_model(record: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
+    """Store one market model record. The caller must already have checked the file metadata."""
+    if not _valid_market_record(record):
+        raise ValueError("Запись рынка не проходит проверку.")
+    base = Path(root) if root is not None else models_root()
+    base.mkdir(parents=True, exist_ok=True)
+    kept = [item for item in market_catalog(base) if item["id"] != record["id"]]
+    registry = [*kept, record]
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=base, prefix="market_models.", suffix=".tmp", delete=False
+    ) as handle:
+        temp_registry = Path(handle.name)
+        json.dump(registry, handle, ensure_ascii=False, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_registry, base / "market_models.json")
+    return record
+
+
+def _valid_market_record(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    model_id = item.get("id")
+    filename = item.get("filename")
+    repo = item.get("repo")
+    revision = item.get("revision")
+    digest = item.get("sha256")
+    if not isinstance(model_id, str) or not re.fullmatch(r"market-[0-9a-f]{12}", model_id):
+        return False
+    if not isinstance(filename, str) or not _safe_filename(filename):
+        return False
+    if not isinstance(repo, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}/[A-Za-z0-9][A-Za-z0-9._-]{0,80}",
+        repo,
+    ):
+        return False
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        return False
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+        return False
+    if not isinstance(item.get("size_bytes"), int) or item["size_bytes"] < 1024 * 1024:
+        return False
+    if item.get("status") != "available" or item.get("format") != "GGUF":
+        return False
+    if not isinstance(item.get("name"), str) or not item["name"].strip():
+        return False
+    return item.get("default_context") in {2048, 4096, 8192, 16384, 32768}
+
+
+def _safe_filename(name: str) -> bool:
+    return (
+        Path(name).name == name
+        and "/" not in name
+        and "\\" not in name
+        and name.lower().endswith(".gguf")
+        and len(name) <= 180
+    )
+
+
 def all_models(root: Path | None = None) -> list[dict[str, Any]]:
-    return [*catalog(), *custom_catalog(root)]
+    return [*catalog(), *market_catalog(root), *custom_catalog(root)]
 
 
 def import_custom_model(

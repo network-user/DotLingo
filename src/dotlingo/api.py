@@ -23,6 +23,13 @@ from dotlingo.languages import (
     supported_languages,
     supports_language,
 )
+from dotlingo.market import (
+    confirm_offer,
+    find_cached_offer,
+    load_market_cache,
+    refresh_market,
+    register_offer,
+)
 from dotlingo.model_download import DownloadCancellation, download_model
 from dotlingo.models import (
     ModelIntegrityError,
@@ -56,6 +63,26 @@ def _ok(data: Any = None) -> dict[str, Any]:
 
 def _err(message: str, code: str = "error") -> dict[str, Any]:
     return {"ok": False, "error": str(message), "code": code}
+
+
+def _public_offer(offer: dict[str, Any], installed_sha: bool) -> dict[str, Any]:
+    return {
+        "id": offer["id"],
+        "name": offer.get("name") or offer["id"],
+        "repo": offer.get("repo") or "",
+        "revision": offer.get("revision") or "",
+        "filename": offer.get("filename") or "",
+        "quantization": offer.get("quantization") or "",
+        "role": offer.get("role") or "",
+        "roleLabel": offer.get("role_label") or "",
+        "sizeBytes": offer.get("size_bytes"),
+        "sizeLabel": _format_size(offer.get("size_bytes")),
+        "license": offer.get("license") or "Не указана",
+        "cardUrl": offer.get("card_url") or "",
+        "summary": offer.get("ui_description") or "",
+        "caveat": offer.get("ui_details") or "",
+        "installed": installed_sha,
+    }
 
 
 def _format_size(size: int | float | None) -> str:
@@ -200,6 +227,7 @@ class Api:
         self._window: Any = None
         self._workers: list[threading.Thread] = []
         self._download_cancel: DownloadCancellation | None = None
+        self._market_busy = False
         self._closing = False
         self.hardware, self._hardware_detected_at = _load_hardware_cache(self.data_dir)
         preferences = load_preferences(self.preferences_root)
@@ -736,6 +764,7 @@ class Api:
                     "repo": entry.get("repo") or "",
                     "revision": entry.get("revision") or "",
                     "quantization": entry.get("quantization") or "",
+                    "format": entry.get("format") or "",
                     "testedOnWindows": bool(entry.get("tested_on_windows")),
                     "languageCodes": list(supported_languages(model)),
                     "uiDescription": entry.get("ui_description") or "",
@@ -835,6 +864,89 @@ class Api:
             return _ok({"active": False})
         accepted = cancel.set()
         return _ok({"active": True, "accepted": accepted})
+
+    def listMarket(self) -> dict[str, Any]:
+        cache = load_market_cache(self.models_dir)
+        known = {
+            str(model.get("sha256") or "").lower()
+            for model in all_models(self.models_dir)
+            if model.get("sha256")
+        }
+        return _ok(
+            {
+                "fetchedAt": cache["fetched_at"],
+                "stale": cache["stale"],
+                "errors": cache["errors"],
+                "offers": [_public_offer(offer, offer.get("sha256", "").lower() in known) for offer in cache["offers"]],
+            }
+        )
+
+    def refreshMarket(self) -> dict[str, Any]:
+        with self._lock:
+            if self._market_busy:
+                return _err("Список рынка уже обновляется.", "busy")
+            self._market_busy = True
+
+        def work() -> None:
+            try:
+                payload = refresh_market(self.models_dir)
+                self._push(
+                    "market_refreshed",
+                    {
+                        "ok": not payload["errors"] or bool(payload["offers"]),
+                        "stale": payload["stale"],
+                        "error": payload["errors"][0]["error"] if payload["errors"] and not payload["offers"] else None,
+                    },
+                )
+            except Exception as exc:
+                self._push("market_refreshed", {"ok": False, "stale": False, "error": str(exc)})
+            finally:
+                with self._lock:
+                    self._market_busy = False
+
+        self._spawn(work, "market refresh")
+        return _ok({"started": True})
+
+    def downloadMarketModel(self, offer_id: str) -> dict[str, Any]:
+        if not isinstance(offer_id, str):
+            return _err("Некорректный файл рынка.", "invalid")
+        offer = find_cached_offer(self.models_dir, offer_id)
+        if offer is None:
+            return _err("Файл не найден в списке рынка. Обновите список.", "not_found")
+        with self._lock:
+            if self._download_cancel is not None:
+                return _err("Загрузка уже выполняется.", "busy")
+            self._download_cancel = DownloadCancellation()
+        cancel = self._download_cancel
+
+        def progress(value: dict[str, Any]) -> None:
+            self._push(
+                "download_progress",
+                {
+                    "modelId": offer_id,
+                    "bytes": value.get("bytes", 0),
+                    "total": value.get("total", 0),
+                    "phase": value.get("phase"),
+                    "ratio": value.get("ratio"),
+                    "speedBps": value.get("speed_bps"),
+                    "complete": bool(value.get("complete")),
+                },
+            )
+
+        def work() -> None:
+            try:
+                live = confirm_offer(offer)
+                record = register_offer(live, self.models_dir)
+                download_model(record, self.models_dir, cancel=cancel, on_progress=progress)
+                self._push("download_done", {"modelId": offer_id, "ok": True, "error": None})
+            except Exception as exc:
+                self._push("download_done", {"modelId": offer_id, "ok": False, "error": str(exc)})
+            finally:
+                with self._lock:
+                    self._download_cancel = None
+
+        self._spawn(work, "market download")
+        return _ok({"started": True})
 
     def importCustomModel(self, data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(data, dict):

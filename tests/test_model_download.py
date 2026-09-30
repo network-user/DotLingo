@@ -72,15 +72,23 @@ def _model(payload: bytes) -> dict[str, Any]:
 def test_catalog_only_allows_download_for_pinned_gguf_artifacts() -> None:
     records = catalog()
     available = [item for item in records if item["status"] == "available"]
-    assert {item["id"] for item in available} == {"qwen3-1.7b-q8", "qwen3-4b-q4km"}
+    assert {item["id"] for item in available} == {
+        "qwen3-1.7b-q8",
+        "qwen3-4b-q4km",
+        "hy-mt2-1.8b-q4km",
+        "hy-mt2-7b-q4km",
+    }
     for model in available:
         assert len(model["revision"]) == 40
         assert len(model["sha256"]) == 64
         assert model["size_bytes"] > 0
         assert model["format"] == "GGUF"
+    hy = next(item for item in records if item["id"] == "hy-mt2-1.8b-q4km")
+    assert hy["append_no_think"] is False
     translate_gemma = next(item for item in records if item["id"] == "translategemma-4b-it")
     assert translate_gemma["status"] == "unverified"
     assert translate_gemma["sha256"] is None
+    assert translate_gemma["format"] == "Safetensors"
 
 
 def test_download_resumes_partial_and_activates_only_after_integrity_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

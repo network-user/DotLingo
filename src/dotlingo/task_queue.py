@@ -193,13 +193,16 @@ class TaskQueue:
             verify_model(path, model)
             context_size = int(model.get("default_context", 4096))
             cpu_threads = max(1, (os.cpu_count() or 2) - 1)
+            qwen_style = model.get("append_no_think")
+            if qwen_style is None:
+                qwen_style = not model.get("custom")
             engine = InferenceProcess(
                 path,
                 context_size,
                 max(1, min(8, cpu_threads)),
                 use_gpu=False,
-                stop_sequences=None if model.get("custom") else ("<|im_end|>", "<|fim_suffix|>"),
-                append_no_think=not model.get("custom"),
+                stop_sequences=("<|im_end|>", "<|fim_suffix|>") if qwen_style else None,
+                append_no_think=bool(qwen_style),
             )
             with self._lock:
                 self._engine = engine

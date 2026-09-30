@@ -113,6 +113,9 @@ const pushHandlers = {
   custom_model_imported(payload) {
     store.emit('custom_model_imported', payload);
   },
+  market_refreshed(payload) {
+    store.emit('market_refreshed', payload);
+  },
 };
 
 /** Точка входа для Python (api._push): window.DL.push_event(name, payload). */

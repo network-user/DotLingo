@@ -79,9 +79,10 @@
   {
     "id": "hy-mt2-1.8b-q4km",
     "name": "Tencent Hy-MT2 1.8B · Q4_K_M",
-    "ui_description": "Английский и русский указаны в метаданных модели, но качество этого направления не измерялось. Загрузка отключена до проверки точного файла и runtime на Windows.",
-    "ui_details": "README GGUF упоминает зависимость от STQ kernel; влияние на Q4_K_M и Windows runtime нужно проверить.",
-    "status": "unverified",
+    "ui_description": "Специализированная модель перевода. Английский и русский указаны в метаданных, качество пары в DotLingo не измерялось. Файл закреплён, его можно скачать; запуск на Windows не проверен.",
+    "ui_details": "README GGUF упоминает зависимость от STQ kernel; неясно, относится ли она к Q4_K_M. Если runtime не откроет файл, перевод не стартует.",
+    "status": "available",
+    "append_no_think": false,
     "family": "Hy-MT2",
     "parameters": "1.8B",
     "language_pairs": [["en", "ru"], ["ru", "en"]],
@@ -109,14 +110,15 @@
     "estimated_vram_gb": null,
     "memory_estimate_note": "Vendor has not published minimum RAM/VRAM; exact Q4/runtime fit is untested.",
     "tested_on_windows": false,
-    "notes": "Not downloadable in this build. Official GGUF README mentions an open llama.cpp STQ kernel dependency; the documentation does not clarify whether Q4_K_M is affected. Requires smoke test of this exact pinned file and Windows runtime."
+    "notes": "Download is enabled for this pinned file. Official GGUF README mentions an open llama.cpp STQ kernel dependency; the documentation does not clarify whether Q4_K_M is affected. Windows runtime and translation quality have not been measured in DotLingo."
   },
   {
     "id": "hy-mt2-7b-q4km",
     "name": "Tencent Hy-MT2 7B · Q4_K_M",
-    "ui_description": "Английский и русский указаны в метаданных модели, но качество этого направления не измерялось. Память, скорость и запуск на Windows не проверены; загрузка отключена.",
-    "ui_details": "Память, скорость, работа с глоссарием и длинным контекстом локально не измерялись.",
-    "status": "unverified",
+    "ui_description": "Специализированная модель перевода крупнее варианта 1.8B. Английский и русский указаны в метаданных, качество пары в DotLingo не измерялось. Файл закреплён и его можно скачать.",
+    "ui_details": "Память, скорость и запуск на Windows не измерялись. Файл около 4.6 ГБ, на CPU он обычно медленнее варианта 1.8B.",
+    "status": "available",
+    "append_no_think": false,
     "family": "Hy-MT2",
     "parameters": "7B",
     "language_pairs": [["en", "ru"], ["ru", "en"]],
@@ -144,7 +146,7 @@
     "estimated_vram_gb": null,
     "memory_estimate_note": "Vendor has not published minimum RAM/VRAM; exact Q4/runtime fit is untested.",
     "tested_on_windows": false,
-    "notes": "Quality-profile candidate only; not downloadable in this build. Memory, throughput, glossary and context behavior have not been measured locally."
+    "notes": "Download is enabled for this pinned file. Memory, throughput, glossary, context and Windows runtime have not been measured locally."
   },
   {
     "id": "translategemma-4b-it",
