@@ -243,7 +243,7 @@ def test_glossary_crud(tmp_path: Path) -> None:
     assert added["ok"] is True
 
     terms = api.listGlossary("ru")["data"]
-    assert terms == [{"source": "term", "target": "термин"}]
+    assert terms == [{"id": 1, "source": "term", "target": "термин"}]
 
     assert api.updateGlossaryTerm({"id": 1, "source": "", "target": "x"})["ok"] is False
     assert api.deleteGlossaryTerm(999)["ok"] is False

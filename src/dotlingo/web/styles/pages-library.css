@@ -376,3 +376,436 @@
   flex: 1;
   min-width: 0;
 }
+
+/* --------------------------------------------------------------------------
+   Глоссарий: панель, таблица, инлайн-редактирование
+   -------------------------------------------------------------------------- */
+
+.gl-page {
+  max-width: 860px;
+}
+
+.gl-lang-select {
+  width: auto;
+  min-width: 160px;
+}
+
+.gl-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.gl-table {
+  table-layout: fixed;
+}
+
+.gl-table th:nth-child(3),
+.gl-table td:nth-child(3) {
+  width: 64px;
+}
+
+.gl-table__actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Строка добавления термина */
+.gl-add-row td {
+  padding-top: var(--sp-3);
+  background: var(--surface-hover);
+}
+
+/* Инлайн-редактируемая ячейка */
+.gl-cell {
+  cursor: default;
+}
+
+.gl-cell__text {
+  display: block;
+  min-height: 20px;
+  overflow-wrap: anywhere;
+  line-height: 20px;
+}
+
+.gl-cell__text[hidden] {
+  display: none;
+}
+
+/* Подсказка редактирования по hover для строк с id */
+.gl-row .gl-cell:hover .gl-cell__text {
+  color: var(--text);
+}
+
+.gl-cell-input {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: var(--fs-body);
+}
+
+.gl-footnote {
+  margin: 0;
+  padding: 0 var(--sp-1);
+  font-size: var(--fs-caption);
+}
+
+/* --------------------------------------------------------------------------
+   Настройки: страница, unsaved-бар, панель устройства
+   -------------------------------------------------------------------------- */
+
+.st-page {
+  max-width: 760px;
+}
+
+.st-muted {
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+}
+
+.st-info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.st-info-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  font-size: var(--fs-small);
+}
+
+.st-info-row__label {
+  flex-shrink: 0;
+}
+
+.st-info-row__value {
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* Unsaved-бар под панелью проекта */
+.st-unsaved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: 8px var(--sp-3);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--warning);
+  background: var(--warning-bg);
+  font-size: var(--fs-small);
+  color: var(--warning);
+}
+
+.st-unsaved[hidden] {
+  display: none;
+}
+
+.st-unsaved__text {
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------------------------
+   Настройки: сегмент-контрол темы, чекбокс
+   -------------------------------------------------------------------------- */
+
+.st-segment {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  gap: 2px;
+}
+
+.st-segment__btn {
+  min-height: 28px;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
+  border: none;
+  background: transparent;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.st-segment__btn:hover {
+  color: var(--text);
+}
+
+.st-segment__btn.is-selected {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.st-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.st-checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.st-check-row__label {
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+}
+
+/* --------------------------------------------------------------------------
+   Настройки: панель данных
+   -------------------------------------------------------------------------- */
+
+.st-dir-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.st-dir-row__label {
+  flex-shrink: 0;
+  width: 88px;
+  font-size: var(--fs-small);
+}
+
+.st-dir-row__path {
+  flex: 1;
+  min-width: 200px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.st-data-note {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--fs-caption);
+}
+
+/* --------------------------------------------------------------------------
+   Мастер первого запуска
+   -------------------------------------------------------------------------- */
+
+.wizard {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  background: var(--scrim);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  animation: wizard-fade var(--dur-base) var(--ease);
+}
+
+.wizard__progress-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.wizard__step-label {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.wizard__progress {
+  width: 320px;
+}
+
+.wizard__card {
+  width: min(640px, 100%);
+  max-height: min(72vh, 640px);
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-5);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
+  box-shadow: var(--shadow-lg);
+  animation: wizard-pop var(--dur-base) var(--ease);
+}
+
+.wizard__body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.wizard__title {
+  margin: 0;
+  font-size: var(--fs-title);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.wizard__text {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.wizard__muted {
+  font-size: var(--fs-small);
+  color: var(--text-tertiary);
+}
+
+.wizard__recommend strong {
+  font-weight: 600;
+}
+
+.wizard__recommend span {
+  color: var(--text-secondary);
+}
+
+.wizard__wait {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  padding: var(--sp-2) 0;
+}
+
+.wizard__hw {
+  margin-top: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wizard__hw-title {
+  margin: 0 0 4px;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
+.wizard__hw-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  font-size: var(--fs-small);
+}
+
+.wizard__hw-label {
+  color: var(--text-tertiary);
+}
+
+.wizard__models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.wizard__model {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px var(--sp-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.wizard__model:hover {
+  border-color: var(--text-tertiary);
+}
+
+.wizard__model.is-selected {
+  border-color: var(--text);
+}
+
+.wizard__model input {
+  accent-color: var(--accent);
+}
+
+.wizard__model-name {
+  flex: 1;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.wizard__model-meta {
+  color: var(--text-tertiary);
+  font-size: var(--fs-small);
+}
+
+.wizard__consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: var(--sp-2) 0 0;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.wizard__consent:empty {
+  display: none;
+}
+
+.wizard__consent input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.wizard__error {
+  margin: 0;
+  font-size: var(--fs-small);
+  color: var(--error);
+}
+
+.wizard__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: var(--sp-4);
+}
+
+@keyframes wizard-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes wizard-pop {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
