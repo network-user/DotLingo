@@ -569,88 +569,205 @@ async function runDetect() {
  * Поток загрузки модели (переиспользуется мастером первого запуска)
  * ------------------------------------------------------------------------- */
 
+/** @type {object|null} текущая загрузка, пока файл не активирован */
+let downloadJob = null;
+
+/** Следующую модалку не показывать: пользователь уже ушёл в фон. */
+let preferDock = false;
+
+/**
+ * Текст строки прогресса.
+ * @param {object} payload
+ * @returns {string}
+ */
+export function downloadStatusText(payload) {
+  if (payload?.phase === 'verifying') return 'Проверка SHA-256 · отмена ещё доступна';
+  if (payload?.phase === 'activating') return 'Активация файла · отмена больше недоступна';
+  const bytes = Number(payload?.bytes) || 0;
+  const total = Number(payload?.total) || 0;
+  if (total > 0) return `Получено ${formatBytes(bytes)} из ${formatBytes(total)}`;
+  return `Получено ${formatBytes(bytes)}`;
+}
+
+/**
+ * Свернуть модалку загрузки. Файл качается дальше, прогресс остаётся внизу окна.
+ * Мастер первого запуска слушает `download_background` и тоже отпускает экран.
+ */
+export function backgroundActiveDownload() {
+  preferDock = true;
+  if (downloadJob?.dialog) downloadJob.dialog.close();
+  else if (downloadJob) showDownloadDock();
+  store.emit('download_background');
+}
+
 /**
  * Запускает загрузку модели и открывает модалку прогресса.
  * @param {object} model - карточка модели из listModels.
+ * @param {{ deferPanel?: boolean }} [opts] - не открывать модалку, пока пользователь сам не свернёт загрузку.
  */
-export async function downloadFlow(model) {
+export async function downloadFlow(model, opts = {}) {
+  if (downloadJob && !downloadJob.settled) {
+    toast('Загрузка уже выполняется.', 'warning');
+    if (preferDock) showDownloadDock();
+    else openDownloadModal();
+    return;
+  }
   try {
     await call(model.market ? 'downloadMarketModel' : 'downloadModel', model.id);
   } catch (e) {
+    preferDock = false;
     toast(e.message, 'error');
     return;
   }
+  beginDownloadJob(model, opts);
+}
 
+/** Подписки и первая панель прогресса. */
+function beginDownloadJob(model, opts = {}) {
   const bar = progressBar(null);
   const status = el('p', { class: 'download-status', text: 'Подготовка загрузки…' });
-  const unsubs = [];
+  downloadJob = { model, settled: false, dialog: null, bar, status, cancelLocked: false };
 
-  unsubs.push(
-    store.on('download_progress', (p) => {
-      if (p?.modelId === model.id) update(p);
-    })
-  );
-
-  unsubs.push(
-    store.on('download_done', (p) => {
-      if (p?.modelId !== model.id) return;
-      dialog.close();
-      if (p.ok) toast('Модель загружена и проверена', 'success');
-      else toast(p.error || 'Загрузка не удалась', 'error');
-    })
-  );
-
-  const dialog = modal({
-    title: `Загрузка · ${model.name}`,
-    body: [
-      el('div', { class: 'stack' }, [
-        el('p', {
-          class: 'download-note',
-          text: 'Файл проверяется по размеру и SHA-256 перед активацией.',
-        }),
-        bar.root,
-        status,
-      ]),
-    ],
-    actions: [{ label: 'Отменить', onClick: () => void doCancel() }],
-    onClose: () => unsubs.forEach((unsub) => unsub()),
+  const offProgress = store.on('download_progress', (payload) => {
+    if (payload?.modelId === model.id) applyDownloadProgress(payload);
+  });
+  const offDone = store.on('download_done', (payload) => {
+    if (payload?.modelId !== model.id) return;
+    offProgress();
+    offDone();
+    const current = downloadJob;
+    downloadJob = null;
+    preferDock = false;
+    if (current) current.settled = true;
+    current?.dialog?.close();
+    hideDownloadDock();
+    if (payload.ok) toast('Модель загружена и проверена', 'success');
+    else toast(payload.error || 'Загрузка не удалась', 'error');
   });
 
-  const cancelBtn = dialog.root.querySelector('.modal__footer .btn');
+  if (preferDock) showDownloadDock();
+  else if (!opts.deferPanel) openDownloadModal();
+}
 
-  /** Обновление прогресса по фазам. */
-  function update(p) {
-    if (p.phase === 'verifying') {
-      bar.set(null);
-      status.textContent = 'Проверка SHA-256 · отмена ещё доступна';
-      return;
-    }
-    if (p.phase === 'activating') {
-      bar.set(null);
-      status.textContent = 'Активация файла · отмена больше недоступна';
-      if (cancelBtn) cancelBtn.disabled = true;
-      return;
-    }
-    if (p.total > 0) {
-      bar.set(p.bytes / p.total);
-      status.textContent = `Получено ${formatBytes(p.bytes)} из ${formatBytes(p.total)} · ETA не показывается`;
-    } else {
-      bar.set(null);
-      status.textContent = `Получено ${formatBytes(p.bytes)} · размер неизвестен · ETA не показывается`;
-    }
+/** Модалка прогресса. Закрытие и «В фон» не отменяют файл. */
+function openDownloadModal() {
+  if (!downloadJob || downloadJob.dialog) return;
+  preferDock = false;
+  hideDownloadDock();
+  const job = downloadJob;
+  const slot = el('div', { class: 'stack' }, [
+    el('p', {
+      class: 'download-note',
+      text: 'Файл проверяется по размеру и SHA-256. «В фон» оставляет загрузку внизу окна, страницы можно переключать.',
+    }),
+    job.bar.root,
+    job.status,
+  ]);
+  job.dialog = modal({
+    title: `Загрузка · ${job.model.name}`,
+    body: [slot],
+    actions: [
+      { label: 'Отменить', onClick: () => void cancelActiveDownload() },
+      { label: 'В фон', variant: 'primary', onClick: () => backgroundActiveDownload() },
+    ],
+    onClose: () => {
+      if (!downloadJob || downloadJob.settled) return;
+      downloadJob.dialog = null;
+      showDownloadDock();
+    },
+  });
+  const cancelBtn = job.dialog.root.querySelector('.modal__footer .btn');
+  const closer = job.dialog.root.querySelector('.modal__close');
+  if (cancelBtn) {
+    cancelBtn.dataset.downloadCancel = '1';
+    cancelBtn.disabled = job.cancelLocked;
   }
+  if (closer) {
+    closer.title = 'Свернуть в фон';
+    closer.setAttribute('aria-label', 'Свернуть в фон');
+  }
+}
 
-  /** Отмена загрузки, пока она доступна. */
-  async function doCancel() {
-    try {
-      const data = await call('cancelDownload');
-      if (data && data.accepted === false) {
-        status.textContent = 'Модель уже активируется. Отмена недоступна.';
-        if (cancelBtn) cancelBtn.disabled = true;
-      }
-    } catch (e) {
-      toast(e.message, 'error');
+/** Нижняя панель, которая живёт поверх страниц, пока файл качается. */
+function showDownloadDock() {
+  if (!downloadJob) return;
+  const job = downloadJob;
+  const dock = ensureDownloadDock();
+  dock.title.textContent = `Загрузка · ${job.model.name}`;
+  dock.slot.replaceChildren(job.bar.root, job.status);
+  const cancelBtn = button({
+    label: 'Отменить',
+    size: 'sm',
+    disabled: job.cancelLocked,
+    onClick: () => void cancelActiveDownload(),
+  });
+  cancelBtn.dataset.downloadCancel = '1';
+  dock.actions.replaceChildren(
+    button({ label: 'Открыть', size: 'sm', onClick: () => openDownloadModal() }),
+    cancelBtn,
+  );
+  dock.root.hidden = false;
+  document.body.classList.add('has-download-dock');
+}
+
+function hideDownloadDock() {
+  const dock = document.getElementById('download-dock');
+  if (dock) dock.hidden = true;
+  document.body.classList.remove('has-download-dock');
+}
+
+/** Один узел панели на всё окно. */
+function ensureDownloadDock() {
+  const existing = document.getElementById('download-dock');
+  if (existing?.dockParts) return existing.dockParts;
+  const title = el('div', { class: 'download-dock__title' });
+  const slot = el('div', { class: 'download-dock__slot stack' });
+  const actions = el('div', { class: 'download-dock__actions' });
+  const root = el('div', {
+    id: 'download-dock',
+    class: 'download-dock',
+    role: 'status',
+    hidden: true,
+  }, [
+    el('div', { class: 'download-dock__main' }, [title, slot]),
+    actions,
+  ]);
+  const parts = { root, title, slot, actions };
+  root.dockParts = parts;
+  document.body.appendChild(root);
+  return parts;
+}
+
+/** Обновление прогресса по фазам. */
+function applyDownloadProgress(payload) {
+  if (!downloadJob) return;
+  const job = downloadJob;
+  job.cancelLocked = payload.phase === 'activating';
+  if (payload.phase === 'verifying' || payload.phase === 'activating' || !(payload.total > 0)) {
+    job.bar.set(null);
+  } else {
+    job.bar.set(payload.bytes / payload.total);
+  }
+  job.status.textContent = downloadStatusText(payload);
+  document.querySelectorAll('[data-download-cancel]').forEach((buttonEl) => {
+    buttonEl.disabled = job.cancelLocked;
+  });
+}
+
+/** Отмена загрузки, пока файл ещё не активируется. */
+async function cancelActiveDownload() {
+  if (!downloadJob) return;
+  try {
+    const data = await call('cancelDownload');
+    if (data && data.accepted === false) {
+      downloadJob.cancelLocked = true;
+      downloadJob.status.textContent = 'Модель уже активируется. Отмена недоступна.';
+      document.querySelectorAll('[data-download-cancel]').forEach((buttonEl) => {
+        buttonEl.disabled = true;
+      });
     }
+  } catch (e) {
+    toast(e.message, 'error');
   }
 }
 

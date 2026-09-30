@@ -193,16 +193,27 @@ class TaskQueue:
             verify_model(path, model)
             context_size = int(model.get("default_context", 4096))
             cpu_threads = max(1, (os.cpu_count() or 2) - 1)
+            profile = str(model.get("prompt_profile") or "")
             qwen_style = model.get("append_no_think")
             if qwen_style is None:
                 qwen_style = not model.get("custom")
+            if profile == "gemma":
+                stop_sequences = ("<end_of_turn>",)
+                append_no_think = False
+            elif qwen_style:
+                stop_sequences = ("<|im_end|>", "<|fim_suffix|>")
+                append_no_think = True
+            else:
+                stop_sequences = None
+                append_no_think = False
             engine = InferenceProcess(
                 path,
                 context_size,
                 max(1, min(8, cpu_threads)),
                 use_gpu=False,
-                stop_sequences=("<|im_end|>", "<|fim_suffix|>") if qwen_style else None,
-                append_no_think=bool(qwen_style),
+                stop_sequences=stop_sequences,
+                append_no_think=append_no_think,
+                plain_gemma_turns=profile == "gemma",
             )
             with self._lock:
                 self._engine = engine
@@ -220,7 +231,12 @@ class TaskQueue:
                         for block in blocks
                         if block.translatable and block.text.strip()
                     )[:4000]
-                    detected = detect_source_language(engine, sample, supported_languages(model))
+                    detected = detect_source_language(
+                        engine,
+                        sample,
+                        supported_languages(model),
+                        user_only=profile == "gemma",
+                    )
                     if detected:
                         self.store.save_detected_language(
                             task["document_id"], detected, task["model_id"]
@@ -258,8 +274,11 @@ class TaskQueue:
                     task.get("rules", ""),
                     terms,
                     context_tail,
+                    profile=profile,
                 )
-                output = engine.translate(system, user)
+                limit = model.get("max_output_tokens")
+                max_tokens = int(limit) if isinstance(limit, int) and limit > 0 else 1800
+                output = engine.translate(system, user, max_tokens=max_tokens)
                 try:
                     output = restore_terms(output, replacements)
                 except ValueError as exc:
@@ -298,9 +317,21 @@ def build_translation_prompt(
     rules: str,
     glossary: list[GlossaryTerm],
     previous: list[tuple[str, str]],
+    profile: str = "",
 ) -> tuple[str, str, dict[str, str]]:
     protected, replacements = protect_terms(text, glossary)
     source_code, target_code = direction.split(" → ", 1)
+    if profile == "gemma":
+        return _gemma_prompt(
+            protected,
+            source_code,
+            target_code,
+            project_context,
+            rules,
+            glossary,
+            previous,
+            replacements,
+        )
     target_language = prompt_language_name(target_code)
     if source_code == AUTO_LANGUAGE:
         direction_instruction = (
@@ -329,7 +360,78 @@ def build_translation_prompt(
     return "\n".join(system_lines), protected, replacements
 
 
-def detect_source_language(engine: Any, sample: str, language_codes: tuple[str, ...]) -> str | None:
+def _gemma_prompt(
+    protected: str,
+    source_code: str,
+    target_code: str,
+    project_context: str,
+    rules: str,
+    glossary: list[GlossaryTerm],
+    previous: list[tuple[str, str]],
+    replacements: dict[str, str],
+) -> tuple[str, str, dict[str, str]]:
+    """Text form of the published TranslateGemma user turn.
+
+    llama.cpp chat does not forward source_lang_code fields, so the language
+    codes are written into the user message. System role is left empty.
+    """
+    target_name = prompt_language_name(target_code)
+    if source_code == AUTO_LANGUAGE:
+        translate_from = "text"
+        lines = [
+            f"You are a professional translator into {target_name} ({target_code}).",
+            "Identify the source language from the text.",
+            (
+                f"Your goal is to accurately convey the meaning and nuances of the source text "
+                f"while adhering to {target_name} grammar, vocabulary, and cultural sensitivities."
+            ),
+        ]
+    else:
+        source_name = prompt_language_name(source_code)
+        translate_from = f"{source_name} text"
+        lines = [
+            (
+                f"You are a professional {source_name} ({source_code}) to "
+                f"{target_name} ({target_code}) translator."
+            ),
+            (
+                f"Your goal is to accurately convey the meaning and nuances of the original {source_name} text "
+                f"while adhering to {target_name} grammar, vocabulary, and cultural sensitivities."
+            ),
+        ]
+    lines.append(
+        f"Produce only the {target_name} translation, without any additional explanations or commentary."
+    )
+    extras: list[str] = []
+    if replacements:
+        extras.append(
+            "Keep every ZXQTERM0000XZ style marker exactly as written; do not translate or remove markers."
+        )
+    if project_context.strip():
+        extras.append(f"Project context: {project_context.strip()[:1200]}")
+    if rules.strip():
+        extras.append(f"User translation rules: {rules.strip()[:1200]}")
+    if glossary:
+        rendered = "; ".join(f"{item.source} → {item.target}" for item in glossary[:80])
+        extras.append(f"Project glossary (mandatory forms): {rendered}")
+    if previous:
+        context = "\n".join(f"Source: {src}\nTranslation: {dst}" for src, dst in previous)
+        extras.append(f"Immediate prior context for terminology and tone only:\n{context}")
+    closing = f"Please translate the following {translate_from} into {target_name}:"
+    if extras:
+        lines.extend(extras)
+        lines.append(closing)
+    else:
+        lines[-1] = f"{lines[-1]} {closing}"
+    return "", "\n".join(lines) + "\n\n\n" + protected, replacements
+
+
+def detect_source_language(
+    engine: Any,
+    sample: str,
+    language_codes: tuple[str, ...],
+    user_only: bool = False,
+) -> str | None:
     if not sample.strip() or not language_codes:
         return None
     allowed = ", ".join(language_codes)
@@ -338,7 +440,11 @@ def detect_source_language(engine: Any, sample: str, language_codes: tuple[str, 
         f"Return exactly one ISO 639-1 code from this list: {allowed}. "
         "If the language is too short or ambiguous, return unknown. Do not explain."
     )
-    response = engine.translate(system, sample[:4000], max_tokens=12).strip().casefold()
+    user = sample[:4000]
+    if user_only:
+        user = f"{system}\n\n{user}"
+        system = ""
+    response = engine.translate(system, user, max_tokens=12).strip().casefold()
     candidate = response.strip("`'\" .\n\t")
     if candidate in language_codes:
         return candidate

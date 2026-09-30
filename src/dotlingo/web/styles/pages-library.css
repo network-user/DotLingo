@@ -362,6 +362,65 @@
   overflow-wrap: anywhere;
 }
 
+.download-dock {
+  position: fixed;
+  z-index: 150;
+  left: calc(var(--sidebar-w) + var(--sp-4));
+  bottom: var(--sp-4);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: min(560px, calc(100vw - var(--sidebar-w) - var(--sp-4) * 2));
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  background: var(--surface-raised);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow-md);
+}
+
+.download-dock[hidden] {
+  display: none;
+}
+
+.download-dock__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.download-dock__title {
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-dock__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--sp-2);
+}
+
+body.has-download-dock .toasts {
+  bottom: 108px;
+}
+
+body.has-download-dock .page-scroll {
+  padding-bottom: 108px;
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .download-dock {
+    background: var(--surface-raised-solid);
+  }
+}
+
 /* --------------------------------------------------------------------------
    Модели: модалка импорта своей модели
    -------------------------------------------------------------------------- */

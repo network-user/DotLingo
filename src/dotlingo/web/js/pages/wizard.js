@@ -7,7 +7,7 @@ import { call, tryCall } from '../bridge.js';
 import * as store from '../store.js';
 import * as router from '../router.js';
 import { el, button, badge, toast, spinner, progressBar, formatBytes } from '../components.js';
-import { downloadFlow } from './models.js';
+import { backgroundActiveDownload, downloadFlow, downloadStatusText } from './models.js';
 
 const STEP_COUNT = 5;
 
@@ -29,6 +29,10 @@ export async function setupWizard() {
   const [prefs] = await tryCall('getPreferences');
   if (!prefs || prefs.setup_seen) return;
   shownThisSession = true;
+  unsubs.push(store.on('download_background', () => {
+    if (!overlayRoot) return;
+    void releaseWizard();
+  }));
   showStep(0);
 }
 
@@ -101,6 +105,14 @@ async function postponeWizard() {
   await call('setPreferences', { setup_seen: true }).catch(() => {});
   closeWizard();
   toast('Мастер можно пройти позже на странице «Настройки».', 'info');
+}
+
+/** Убрать мастер, не останавливая уже идущую загрузку. */
+async function releaseWizard() {
+  if (!overlayRoot) return;
+  await call('setPreferences', { setup_seen: true }).catch(() => {});
+  closeWizard();
+  toast('Загрузка идёт внизу окна. Можно работать в приложении.', 'info');
 }
 
 /* -------------------------------------------------------------------------
@@ -280,27 +292,47 @@ const renderers = [
   // Шаг 4: загрузка
   (body, footer, extra) => {
     const model = extra.model;
+    const bar = progressBar(null);
+    const status = el('p', { class: 'download-status', text: 'Подготовка загрузки…' });
     body.append(
       el('h2', { class: 'wizard__title', text: `Загрузка · ${model?.name ?? ''}` }),
       el('p', {
         class: 'wizard__text',
-        text: 'Файл проверяется по размеру и SHA-256 перед активацией. Не закрывайте приложение.',
+        text: 'Файл проверяется по размеру и SHA-256. «В фон» убирает это окно: загрузка продолжится внизу, страницы можно переключать. Само приложение не закрывайте, пока файл не проверится.',
+      }),
+      bar.root,
+      status,
+    );
+    const cancelBtn = button({
+      label: 'Отменить загрузку',
+      onClick: async () => {
+        const [data] = await tryCall('cancelDownload');
+        if (data && data.accepted === false) {
+          cancelBtn.disabled = true;
+          toast('Модель уже активируется. Дождитесь завершения.', 'warning');
+        }
+      },
+    });
+    footer.append(
+      cancelBtn,
+      button({
+        label: 'В фон',
+        variant: 'primary',
+        onClick: () => backgroundActiveDownload(),
       }),
     );
-    footer.append(
-      button({
-        label: 'Отменить загрузку',
-        onClick: async () => {
-          const [data] = await tryCall('cancelDownload');
-          if (data && data.accepted === false) {
-            toast('Модель уже активируется. Дождитесь завершения.', 'warning');
-          }
-        },
-      })
-    );
     if (model) {
-      // downloadFlow рисует собственную модалку поверх мастера; по завершении
-      // (успех или ошибка) переходим дальше.
+      unsubs.push(store.on('download_progress', (payload) => {
+        if (payload?.modelId !== model.id) return;
+        if (payload.phase === 'verifying' || payload.phase === 'activating' || !(payload.total > 0)) {
+          bar.set(null);
+        } else {
+          bar.set(payload.bytes / payload.total);
+        }
+        status.textContent = downloadStatusText(payload);
+        if (payload.phase === 'activating') cancelBtn.disabled = true;
+      }));
+      // Панель прогресса на этом шаге своя. Модалка откроется, только если свернуть загрузку в фон.
       const offDone = store.on('download_done', (payload) => {
         if (payload.modelId !== model.id) return;
         offDone();
@@ -311,7 +343,7 @@ const renderers = [
         }
       });
       unsubs.push(offDone);
-      downloadFlow(model);
+      downloadFlow(model, { deferPanel: true });
     }
   },
 

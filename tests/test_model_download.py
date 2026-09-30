@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 import dotlingo.model_download as downloader
+from dotlingo.languages import LANGUAGES
 from dotlingo.model_download import (
     DownloadCancellation,
     DownloadCancelled,
@@ -77,6 +78,7 @@ def test_catalog_only_allows_download_for_pinned_gguf_artifacts() -> None:
         "qwen3-4b-q4km",
         "hy-mt2-1.8b-q4km",
         "hy-mt2-7b-q4km",
+        "translategemma-4b-it",
     }
     for model in available:
         assert len(model["revision"]) == 40
@@ -86,9 +88,15 @@ def test_catalog_only_allows_download_for_pinned_gguf_artifacts() -> None:
     hy = next(item for item in records if item["id"] == "hy-mt2-1.8b-q4km")
     assert hy["append_no_think"] is False
     translate_gemma = next(item for item in records if item["id"] == "translategemma-4b-it")
-    assert translate_gemma["status"] == "unverified"
-    assert translate_gemma["sha256"] is None
-    assert translate_gemma["format"] == "Safetensors"
+    assert translate_gemma["prompt_profile"] == "gemma"
+    assert translate_gemma["append_no_think"] is False
+    assert translate_gemma["format"] == "GGUF"
+    assert translate_gemma["repo"] == "mradermacher/translategemma-4b-it-GGUF"
+    assert translate_gemma["revision"] == "35a7486e128b19642cdc72d7b91b21ba388aaf42"
+    assert translate_gemma["size_bytes"] == 2489909760
+    assert translate_gemma["sha256"] == "81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330"
+    assert translate_gemma["default_context"] == 2048
+    assert set(translate_gemma["ui_language_codes"]) == set(LANGUAGES)
 
 
 def test_download_resumes_partial_and_activates_only_after_integrity_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
