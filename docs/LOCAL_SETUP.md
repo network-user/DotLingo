@@ -4,17 +4,16 @@
 
 - Windows 10/11 x64.
 - CPython 3.12 или 3.13. Ограничение указано в `pyproject.toml`.
-- Tcl/Tk для графического интерфейса.
+- Microsoft Edge WebView2 для графического интерфейса (pywebview). На Windows 11 и обновлённой Windows 10 он уже установлен; иначе скачайте Evergreen-установщик с сайта Microsoft: https://developer.microsoft.com/microsoft-edge/webview2/.
 - Интернет нужен только для установки Python-пакетов и явной загрузки выбранной модели. После установки runtime и модели перевод выполняется локально.
 
-Проверьте Python и Tkinter:
+Проверьте Python:
 
 ```powershell
 python --version
-python -c "import tkinter; print(tkinter.TkVersion)"
 ```
 
-Если `python` не найден, установите CPython 3.12 или 3.13 x64 с компонентом Tcl/Tk. Команда `py -3.12` может использоваться вместо `python`, если Python Launcher видит установленную версию.
+Если `python` не найден, установите CPython 3.12 или 3.13 x64. Команда `py -3.12` может использоваться вместо `python`, если Python Launcher видит установленную версию.
 
 ## Создать окружение и установить пакеты
 
@@ -26,7 +25,7 @@ python -m venv .venv
 python -m pip install -e ".[dev,pdf]"
 ```
 
-Это устанавливает приложение в editable-режиме, пакеты разработки, `pypdf` для PDF с текстовым слоем и зависимости чтения DOCX. Если политика PowerShell запрещает активацию, вызывайте интерпретатор напрямую:
+Это устанавливает приложение в editable-режиме, `pywebview` (окно и HTTP-раздача web UI), пакеты разработки, `pypdf` для PDF с текстовым слоем и зависимости чтения DOCX. Если политика PowerShell запрещает активацию, вызывайте интерпретатор напрямую:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev,pdf]"
@@ -44,6 +43,14 @@ python -m dotlingo
 ```powershell
 python -m dotlingo --data-dir "D:\DotLingoData"
 ```
+
+Для headless-проверки без окна (CI, окружение без WebView2):
+
+```powershell
+python -m dotlingo --smoke-test
+```
+
+Команда прогоняет проверки моста `api.py` и печатает JSON-результат; окно не открывается.
 
 ## Включить CPU inference
 
@@ -68,7 +75,7 @@ python -m pytest -q
 python -m ruff check src tests
 ```
 
-Для импорта PDF нужен extra `pdf`. PDF fixture-тест использует PyMuPDF (`fitz`) только для создания тестового файла и пропускается, если пакет отсутствует; приложение читает PDF через `pypdf`. UI smoke-тест требует рабочую поставку Tcl/Tk и оконную сессию. Установка проекта не запускает тесты и не загружает модели.
+Для импорта PDF нужен extra `pdf`. PDF fixture-тест использует PyMuPDF (`fitz`) только для создания тестового файла и пропускается, если пакет отсутствует; приложение читает PDF через `pypdf`. UI smoke выполняется headless через мост (`python -m dotlingo --smoke-test`) и не требует окна. Установка проекта не запускает тесты и не загружает модели.
 
 ## Данные и ограничения
 
@@ -76,5 +83,3 @@ python -m ruff check src tests
 - Веса моделей не входят в репозиторий и приложение; пользовательские данные хранятся вне `.venv`.
 - PDF импортирует только текстовый слой. Для сканов OCR не запускается; изображения, таблицы и исходная вёрстка при экспорте не сохраняются.
 - Для сборки Setup.exe нужны отдельные инструменты PyInstaller и Inno Setup 6; чистая Windows-установка пока не проверена.
-
-Если импорт `tkinter` проходит, но запуск UI сообщает `Can't find a usable init.tcl`, файлы Tcl/Tk могут отсутствовать, быть повреждены или несовместимы с Python. Установите или измените CPython, включив Tcl/Tk, затем пересоздайте `.venv`.
