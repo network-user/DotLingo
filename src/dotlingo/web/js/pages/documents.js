@@ -6,6 +6,7 @@
 import { call, tryCall } from '../bridge.js';
 import * as store from '../store.js';
 import * as router from '../router.js';
+import { barcode } from '../docmap.js';
 import {
   el,
   button,
@@ -13,7 +14,6 @@ import {
   toast,
   emptyState,
   modal,
-  progressBar,
   spinner,
 } from '../components.js';
 import { openCreateProjectModal } from './projects.js';
@@ -138,10 +138,10 @@ function documentRow(doc, host) {
 
   const progressBox = el('div', { class: 'doc-row__progress' },
     Object.entries(doc.progressByTarget || {}).map(([lang, progress]) => {
-      const bar = progressBar(progress.total ? progress.done / progress.total : 0);
+      const strip = barcode((doc.spectrumByTarget || {})[lang] || []);
       return el('div', { class: 'doc-progress' }, [
         el('span', { class: 'doc-progress__lang text-secondary', text: lang }),
-        bar.root,
+        strip,
         el('span', {
           class: 'doc-progress__nums text-tertiary',
           text: `${progress.done}/${progress.total}`,

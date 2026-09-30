@@ -162,6 +162,9 @@ def test_document_import_edit_export(tmp_path: Path) -> None:
     assert len(documents) == 1
     doc_id = documents[0]["id"]
     assert documents[0]["progressByTarget"]["ru"]["total"] > 0
+    spectrum = documents[0]["spectrumByTarget"]["ru"]
+    assert spectrum, "спектр документа не должен быть пуст"
+    assert any(value == 1.0 for value in spectrum) is False  # ещё нет переводов
 
     detail = api.getDocument(doc_id)["data"]
     assert detail["blocks"], "блоки должны быть"
@@ -170,6 +173,8 @@ def test_document_import_edit_export(tmp_path: Path) -> None:
     saved = api.saveEdit(doc_id, order, "Исправленный перевод.", "ru")
     assert saved["ok"] is True
     assert api.getDocument(doc_id)["data"]["translations"]["ru"][str(order)] == "Исправленный перевод."
+    spectrum = api.listDocuments()["data"][0]["spectrumByTarget"]["ru"]
+    assert any(value == 1.0 for value in spectrum) is True
 
     destination = tmp_path / "export" / "sample.translated-ru.txt"
     destination.parent.mkdir(exist_ok=True)

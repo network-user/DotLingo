@@ -182,6 +182,14 @@ function taskCard(task, host) {
 
   const bar = progressBar(task.total ? task.completed / task.total : 0);
 
+  const liveFeed = el('div', { class: 'task-live', hidden: task.status !== 'running' }, [
+    el('div', { class: 'task-live__label' }, [
+      el('span', { class: 'task-live__pulse', 'aria-hidden': 'true' }),
+      el('span', { class: 'text-tertiary', text: 'перевод идёт' }),
+    ]),
+    el('div', { class: 'task-live__pairs' }),
+  ]);
+
   const actionsBox = el('div', { class: 'task-card__actions row' }, [
     isRunState(task) ? button({
       label: 'Пауза',
@@ -207,7 +215,7 @@ function taskCard(task, host) {
   ]);
 
   return el('article', {
-    class: 'task-card panel',
+    class: `task-card panel${task.status === 'running' ? ' is-running' : ''}`,
     dataset: { taskId: task.taskId },
   }, [
     el('div', { class: 'row row--between' }, [
@@ -228,6 +236,7 @@ function taskCard(task, host) {
         text: `${task.completed}/${task.total}`,
       }),
     ]),
+    liveFeed,
     task.error ? el('p', { class: 'task-card__error', text: task.error }) : null,
     task.modelId
       ? el('p', { class: 'task-card__model text-tertiary ellipsis', text: task.modelId })
@@ -311,6 +320,24 @@ function onTaskEvent(payload, host) {
   }
 
   updateCard(card, event);
+  if (event.status === 'running' && event.current_source) {
+    appendLivePair(card, event.current_source, event.current_translation || '');
+  }
+}
+
+/** Добавить пару «оригинал → перевод» в живую ленту карточки. */
+function appendLivePair(card, source, translation) {
+  const pairs = card.querySelector('.task-live__pairs');
+  if (!pairs) return;
+
+  const clip = (text) => (text || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  const pair = el('div', { class: 'task-live__pair' }, [
+    el('p', { class: 'task-live__source ellipsis', text: clip(source) }),
+    el('span', { class: 'task-live__arrow', 'aria-hidden': 'true', text: '→' }),
+    el('p', { class: 'task-live__translation ellipsis', text: clip(translation) || '…' }),
+  ]);
+  pairs.prepend(pair);
+  while (pairs.children.length > 2) pairs.lastChild.remove();
 }
 
 /** Точечное обновление DOM карточки. */
@@ -333,6 +360,9 @@ function updateCard(card, event) {
       const label = statusNode.lastChild;
       if (label) label.textContent = STATUS_LABELS[event.status] ?? event.status;
     }
+    card.classList.toggle('is-running', event.status === 'running');
+    const live = card.querySelector('.task-live');
+    if (live) live.hidden = event.status !== 'running';
   }
 }
 

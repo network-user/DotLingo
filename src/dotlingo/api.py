@@ -74,6 +74,35 @@ def _runtime_available() -> bool:
     return True
 
 
+SPECTRUM_TICKS = 160
+
+
+def _block_spectrum(blocks: list[Any], translations: dict[int, str]) -> list[float]:
+    """Спектр перевода: одно значение на блок (или корзину блоков).
+
+    -1.0 - нетранслируемый блок, 0.0 - не переведён, 1.0 - переведён;
+    для длинных документоов значения усредняются в корзины (не более SPECTRUM_TICKS).
+    """
+    flags: list[float] = []
+    for block in blocks:
+        if not getattr(block, "translatable", False):
+            flags.append(-1.0)
+        else:
+            flags.append(1.0 if (translations.get(block.order) or "").strip() else 0.0)
+    if len(flags) <= SPECTRUM_TICKS:
+        return flags
+    bucket = -(-len(flags) // SPECTRUM_TICKS)
+    result: list[float] = []
+    for start in range(0, len(flags), bucket):
+        chunk = flags[start : start + bucket]
+        meaningful = [value for value in chunk if value >= 0]
+        if not meaningful:
+            result.append(-1.0)
+        else:
+            result.append(round(sum(meaningful) / len(meaningful), 2))
+    return result
+
+
 def _serialize_project(store: ProjectStore, *, with_counts: bool = False) -> dict[str, Any]:
     project = store.project
     data = {
@@ -372,6 +401,7 @@ class Api:
             blocks = store.blocks(record.id)
             total_translatable = sum(1 for block in blocks if block.translatable)
             progress_by_target: dict[str, dict[str, int]] = {}
+            spectrum_by_target: dict[str, list[float]] = {}
             for lang in targets:
                 translations = store.translations(record.id, target_lang=lang)
                 done = sum(
@@ -380,6 +410,7 @@ class Api:
                     if block.translatable and translations.get(block.order, "").strip()
                 )
                 progress_by_target[lang] = {"done": done, "total": total_translatable}
+                spectrum_by_target[lang] = _block_spectrum(blocks, translations)
             exports = store.exports(record.id)
             detected = store.detected_language(record.id)
             result.append(
@@ -389,6 +420,7 @@ class Api:
                     "format": record.format,
                     "warnings": list(record.warnings),
                     "progressByTarget": progress_by_target,
+                    "spectrumByTarget": spectrum_by_target,
                     "exportCount": len(exports),
                     "detectedLanguage": detected,
                 }

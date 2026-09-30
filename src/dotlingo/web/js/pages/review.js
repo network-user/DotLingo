@@ -6,6 +6,7 @@
 import { call, tryCall } from '../bridge.js';
 import * as store from '../store.js';
 import * as router from '../router.js';
+import { spectrum } from '../docmap.js';
 import {
   el,
   button,
@@ -34,6 +35,8 @@ let dirty = false;
 let unsubExternal = null;
 /** @type {HTMLElement|null} корень страницы текущего рендера */
 let root = null;
+/** @type {{root: HTMLElement, setCurrent: Function, update: Function}|null} карта перевода */
+let docMap = null;
 
 /* -------------------------------------------------------------------------
  * Рендер
@@ -105,6 +108,7 @@ function resetState() {
   searchFilter = '';
   dirty = false;
   unsubExternal = null;
+  docMap = null;
 }
 
 /** Пустое состояние «нет проекта». */
@@ -166,9 +170,21 @@ function buildLayout(host) {
     tree,
   ]);
 
+  docMap = spectrum({
+    blocks,
+    translations,
+    lang: reviewLang,
+    orientation: 'v',
+    onNavigate: (block) => selectBlock(String(block.order)),
+  });
+  const mapAside = el('aside', { class: 'review-map panel' }, [
+    el('div', { class: 'review-map__label', text: 'карта' }),
+    docMap.root,
+  ]);
+
   const editor = el('section', { class: 'review-editor' }, [header, body]);
 
-  host.append(el('div', { class: 'review-layout' }, [nav, editor]));
+  host.append(el('div', { class: 'review-layout' }, [nav, mapAside, editor]));
 
   renderTree();
   const first = visibleBlocks()[0];
@@ -251,6 +267,7 @@ async function selectBlock(order) {
   root?.querySelectorAll('.review-tree__row').forEach((row) => {
     row.classList.toggle('is-active', row.dataset.order === order);
   });
+  docMap?.setCurrent(order);
 
   renderEditor();
 }
@@ -291,6 +308,7 @@ function renderEditor() {
       reviewLang = e.target.value;
       store.set('reviewTargetLang', reviewLang);
       dirty = false;
+      docMap?.update({ lang: reviewLang });
       renderTree();
       renderEditor();
     },
@@ -437,6 +455,7 @@ async function saveEdit(withToast) {
     updateUnsavedBar(textarea);
     const btn = root?.querySelector('.review-save-btn');
     if (btn) btn.disabled = true;
+    docMap?.update({ translations });
     renderTree();
     updateStatusBar();
     if (withToast) toast('Правка сохранена', 'success');
