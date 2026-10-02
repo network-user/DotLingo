@@ -40,6 +40,25 @@ def test_project_source_is_immutable_and_running_task_recovers(tmp_path: Path) -
     assert reopened.task(task_id)["status"] == "complete"
 
 
+def test_confirmed_pairs_keep_human_edits_apart_from_the_machine_draft(tmp_path: Path) -> None:
+    source = tmp_path / "doc.txt"
+    source.write_text("Harbour master.\n\nRiver.", encoding="utf-8")
+    store = ProjectStore.create(tmp_path / "projects", "Test")
+    document = store.import_file(source)
+    task_id = store.create_task(document.id, "hy-mt2-7b-q4km", build_chunks(store.blocks(document.id)))
+    pending = store.pending_segments(task_id)
+    for segment in pending:
+        store.save_segment(task_id, segment["block_ord"], segment["segment_ord"], "черновик")
+    store.finish_task(task_id)
+    assert store.machine_draft(document.id, "ru")
+    assert store.confirmed_pairs("ru") == []
+    first = pending[0]["block_ord"]
+    store.save_edit(document.id, first, "Начальник гавани.", target_lang="ru")
+    pairs = store.confirmed_pairs("ru")
+    assert pairs == [("Harbour master.", "Начальник гавани.")]
+    assert store.translation_flags(document.id, "ru")[first] is True
+
+
 def test_cancel_queued_task_persists_state(tmp_path: Path) -> None:
     source = tmp_path / "doc.txt"
     source.write_text("Text", encoding="utf-8")

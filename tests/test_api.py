@@ -172,7 +172,10 @@ def test_document_import_edit_export(tmp_path: Path) -> None:
 
     saved = api.saveEdit(doc_id, order, "Исправленный перевод.", "ru")
     assert saved["ok"] is True
-    assert api.getDocument(doc_id)["data"]["translations"]["ru"][str(order)] == "Исправленный перевод."
+    edited = api.getDocument(doc_id)["data"]
+    assert edited["translations"]["ru"][str(order)] == "Исправленный перевод."
+    assert edited["editedFlags"]["ru"][str(order)] is True
+    assert edited["machineDrafts"]["ru"] == {}
     spectrum = api.listDocuments()["data"][0]["spectrumByTarget"]["ru"]
     assert any(value == 1.0 for value in spectrum) is True
 

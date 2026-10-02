@@ -453,6 +453,11 @@ function devicePanel() {
   } else {
     const gpus = (hw.gpuNames ?? []).map((name, index) => {
       const vram = (hw.gpuVramGb ?? [])[index];
+      const free = (hw.gpuVramFreeGb ?? [])[index];
+      const vramText = [
+        Number.isFinite(vram) && vram > 0 ? `VRAM ${formatBytes(vram * 1024 ** 3)}` : '',
+        Number.isFinite(free) && free >= 0 ? `свободно ${formatBytes(free * 1024 ** 3)}` : '',
+      ].filter(Boolean).join(', ');
       return el('div', { class: 'st-info-row' }, [
         el('span', {
           class: 'st-info-row__label text-secondary',
@@ -460,11 +465,8 @@ function devicePanel() {
         }),
         el('span', { class: 'st-info-row__value' }, [
           el('span', { text: name }),
-          Number.isFinite(vram) && vram > 0
-            ? el('span', {
-                class: 'text-tertiary',
-                text: ` · VRAM ${formatBytes(vram * 1024 ** 3)}`,
-              })
+          vramText
+            ? el('span', { class: 'text-tertiary', text: ` · ${vramText}` })
             : null,
         ]),
       ]);
@@ -494,7 +496,12 @@ function devicePanel() {
       infoRow('Диск', `свободно ${formatBytes(hw.diskFreeGb * 1024 ** 3)}`),
       gpus.length > 0 ? el('div', { class: 'st-hw-gpus' }, gpus) : infoRow('GPU', 'не найден'),
       infoRow('Runtime llama.cpp', hw.llamaRuntimeAvailable ? 'доступен' : 'не найден'),
-      infoRow('GPU offload', 'выключен · перевод на CPU'),
+      infoRow(
+        'GPU offload',
+        hw.llamaGpuOffloadAvailable
+          ? 'слои по свободной VRAM, иначе CPU'
+          : 'недоступен, перевод на CPU',
+      ),
       !hw.llamaRuntimeAvailable
         ? el('p', {
             class: 'st-hw__hint',

@@ -27,6 +27,14 @@ let docFormat = '';
 let blocks = [];
 /** @type {Object<string, Object<string, string>>} translations[lang][order] = text */
 let translations = {};
+/** @type {Object<string, Object<string, boolean>>} */
+let editedFlags = {};
+/** @type {Object<string, Object<string, string>>} */
+let machineDrafts = {};
+/** @type {{id?: number, source: string, target: string}[]} */
+let glossaryTerms = [];
+/** @type {'all'|'empty'|'machine'|'edited'} */
+let statusFilter = 'all';
 let reviewLang = '';
 /** @type {string|null} порядок текущего блока (как строка-ключ) */
 let currentOrder = null;
@@ -87,11 +95,15 @@ async function render(host) {
 
   blocks = doc?.blocks ?? [];
   translations = doc?.translations ?? {};
+  editedFlags = doc?.editedFlags ?? {};
+  machineDrafts = doc?.machineDrafts ?? {};
   docName = doc?.name ?? 'Документ';
   docFormat = doc?.format ?? '';
 
   const langs = project.targetLangs ?? [];
   reviewLang = langs.includes(store.get('reviewTargetLang')) ? store.get('reviewTargetLang') : langs[0] ?? '';
+  await loadGlossary(reviewLang);
+  if (!host.isConnected) return;
 
   buildLayout(host);
 }
@@ -103,6 +115,10 @@ function resetState() {
   docFormat = '';
   blocks = [];
   translations = {};
+  editedFlags = {};
+  machineDrafts = {};
+  glossaryTerms = [];
+  statusFilter = 'all';
   reviewLang = '';
   currentOrder = null;
   searchFilter = '';
@@ -166,7 +182,16 @@ function buildLayout(host) {
   const body = el('div', { class: 'review-editor__body' });
 
   const nav = el('aside', { class: 'review-nav panel' }, [
-    el('div', { class: 'review-nav__search' }, [searchInput]),
+    el('div', { class: 'review-nav__search' }, [
+      el('div', { class: 'review-filters' }),
+      button({
+        label: 'Следующий пустой',
+        size: 'sm',
+        title: 'Alt+стрелка вниз',
+        onClick: () => void goNextEmpty(),
+      }),
+      searchInput,
+    ]),
     tree,
   ]);
 
@@ -185,7 +210,14 @@ function buildLayout(host) {
   const editor = el('section', { class: 'review-editor' }, [header, body]);
 
   host.append(el('div', { class: 'review-layout' }, [nav, mapAside, editor]));
+  host.addEventListener('keydown', (event) => {
+    if (event.altKey && event.key === 'ArrowDown') {
+      event.preventDefault();
+      void goNextEmpty();
+    }
+  });
 
+  paintFilters();
   renderTree();
   const first = visibleBlocks()[0];
   selectBlock(first ? String(first.order) : null);
@@ -195,15 +227,120 @@ function buildLayout(host) {
  * Дерево блоков
  * ------------------------------------------------------------------------- */
 
-/** Блоки с учётом поискового фильтра. */
+const STATUS_FILTERS = [
+  ['all', 'Все'],
+  ['empty', 'Пустые'],
+  ['machine', 'Машина'],
+  ['edited', 'Правка'],
+];
+
+/** all | empty | machine | edited | skip */
+function blockState(block) {
+  if (!block?.translatable) return 'skip';
+  const text = (translations[reviewLang]?.[String(block.order)] || '').trim();
+  if (!text) return 'empty';
+  if (editedFlags[reviewLang]?.[String(block.order)]) return 'edited';
+  return 'machine';
+}
+
+function paintFilters() {
+  const box = root?.querySelector('.review-filters');
+  if (!box) return;
+  box.replaceChildren(
+    ...STATUS_FILTERS.map(([value, label]) => button({
+      label,
+      size: 'sm',
+      variant: statusFilter === value ? 'primary' : 'ghost',
+      onClick: () => {
+        statusFilter = value;
+        paintFilters();
+        renderTree();
+      },
+    }))
+  );
+}
+
+async function loadGlossary(lang) {
+  if (!lang) {
+    glossaryTerms = [];
+    return;
+  }
+  const [terms, err] = await tryCall('listGlossary', lang);
+  glossaryTerms = err || !Array.isArray(terms) ? [] : terms;
+}
+
+function escapeReg(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function termPattern(value) {
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeReg(value)}(?![\\p{L}\\p{N}])`, 'iu');
+}
+
+/** Подсветка терминов глоссария. Возвращает фрагмент, без innerHTML. */
+function highlightTerms(text, field) {
+  const frag = document.createDocumentFragment();
+  const keys = glossaryTerms
+    .map((term) => (field === 'source' ? term.source : term.target))
+    .filter((value) => value && String(value).trim())
+    .sort((a, b) => b.length - a.length);
+  if (!text || keys.length === 0) {
+    frag.append(text || '');
+    return frag;
+  }
+  const pattern = new RegExp(keys.map(escapeReg).join('|'), 'giu');
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (index > last) frag.append(text.slice(last, index));
+    frag.append(el('mark', { class: 'review-term', text: match[0] }));
+    last = index + match[0].length;
+  }
+  if (last < text.length) frag.append(text.slice(last));
+  return frag;
+}
+
+function missingGlossary(original, translation) {
+  return glossaryTerms.filter((term) => {
+    if (!term?.source || !term?.target) return false;
+    return termPattern(term.source).test(original) && !termPattern(term.target).test(translation);
+  });
+}
+
+/** Блоки с учётом поиска и фильтра состояния. */
 function visibleBlocks() {
-  if (!searchFilter) return blocks;
-  const needle = searchFilter;
   return blocks.filter((block) => {
+    if (statusFilter !== 'all' && blockState(block) !== statusFilter) return false;
+    if (!searchFilter) return true;
     const original = (block.text || '').toLowerCase();
     const translated = (translations[reviewLang]?.[String(block.order)] || '').toLowerCase();
-    return original.includes(needle) || translated.includes(needle);
+    return original.includes(searchFilter) || translated.includes(searchFilter);
   });
+}
+
+async function goNextEmpty() {
+  const translatable = blocks.filter((block) => block.translatable);
+  const start = translatable.findIndex((block) => String(block.order) === currentOrder);
+  const from = start < 0 ? 0 : start + 1;
+  const ordered = translatable.slice(from).concat(translatable.slice(0, from));
+  const next = ordered.find((block) => blockState(block) === 'empty');
+  if (!next) {
+    toast('Пустых блоков не осталось', 'info');
+    return;
+  }
+  if (statusFilter === 'machine' || statusFilter === 'edited') statusFilter = 'all';
+  const original = (next.text || '').toLowerCase();
+  const translated = (translations[reviewLang]?.[String(next.order)] || '').toLowerCase();
+  if (searchFilter && !original.includes(searchFilter) && !translated.includes(searchFilter)) {
+    searchFilter = '';
+    const search = root?.querySelector('.review-search');
+    if (search) search.value = '';
+  }
+  paintFilters();
+  renderTree();
+  await selectBlock(String(next.order));
+  root?.querySelector(`.review-tree__row[data-order="${CSS.escape(String(next.order))}"]`)
+    ?.scrollIntoView({ block: 'nearest' });
 }
 
 /** Группировка видимых блоков по секциям. */
@@ -239,7 +376,7 @@ function renderTree() {
 /** Строка блока в дереве. */
 function blockRow(block) {
   const key = String(block.order);
-  const translated = Boolean((translations[reviewLang]?.[key] || '').trim());
+  const state = blockState(block);
   const preview = (block.text || '').replace(/\s+/g, ' ').slice(0, 60);
 
   return el('button', {
@@ -248,7 +385,7 @@ function blockRow(block) {
     dataset: { order: key },
     onClick: () => selectBlock(key),
   }, [
-    el('span', { class: `review-tree__dot${translated ? ' is-translated' : ''}` }),
+    el('span', { class: `review-tree__dot is-${state}` }),
     el('span', { class: 'review-tree__preview ellipsis', text: preview || '(пусто)' }),
   ]);
 }
@@ -264,9 +401,7 @@ async function selectBlock(order) {
   currentOrder = order;
   dirty = false;
 
-  root?.querySelectorAll('.review-tree__row').forEach((row) => {
-    row.classList.toggle('is-active', row.dataset.order === order);
-  });
+  renderTree();
   docMap?.setCurrent(order);
 
   renderEditor();
@@ -308,6 +443,7 @@ function renderEditor() {
       reviewLang = e.target.value;
       store.set('reviewTargetLang', reviewLang);
       dirty = false;
+      await loadGlossary(reviewLang);
       docMap?.update({ lang: reviewLang });
       renderTree();
       renderEditor();
@@ -356,6 +492,7 @@ function renderEditor() {
   textarea.addEventListener('input', () => {
     dirty = true;
     updateUnsavedBar(textarea);
+    paintMissing(textarea);
     const btn = root?.querySelector('.review-save-btn');
     if (btn) btn.disabled = false;
   });
@@ -366,7 +503,20 @@ function renderEditor() {
     }
   });
 
-  const kindLabel = [block.kind, block.sectionTitle].filter(Boolean).join(' · ');
+  const kindLabel = [block.kind, block.sectionTitle, stateCaption(block)].filter(Boolean).join(' · ');
+  const original = el('div', { class: 'review-original' });
+  original.append(highlightTerms(block.text || '', 'source'));
+  const draft = machineDrafts[reviewLang]?.[String(block.order)] || '';
+  const draftBox = draft && draft !== translation
+    ? el('details', { class: 'review-draft', open: true }, [
+        el('summary', { text: 'Черновик модели' }),
+        (() => {
+          const node = el('div', { class: 'review-draft__text' });
+          node.append(highlightTerms(draft, 'target'));
+          return node;
+        })(),
+      ])
+    : null;
 
   body.replaceChildren(
     el('div', { class: 'review-block-title' }, [
@@ -376,15 +526,18 @@ function renderEditor() {
     el('div', { class: 'review-columns' }, [
       el('div', { class: 'review-col' }, [
         el('div', { class: 'review-col__label', text: 'Оригинал' }),
-        el('div', { class: 'review-original', text: block.text || '' }),
+        original,
       ]),
       el('div', { class: 'review-col' }, [
         el('div', { class: 'review-col__label', text: 'Перевод' }),
         textarea,
+        el('p', { class: 'review-missing' }),
+        draftBox,
         buildUnsavedBar(textarea),
       ]),
     ])
   );
+  paintMissing(textarea);
 
   updateStatusBar();
   updateUnsavedBar(textarea);
@@ -395,10 +548,31 @@ function updateStatusBar() {
   const status = root?.querySelector('.review-status');
   if (!status) return;
   const translatable = blocks.filter((block) => block.translatable);
-  const done = translatable.filter(
-    (block) => (translations[reviewLang]?.[String(block.order)] || '').trim()
-  ).length;
-  status.textContent = `Переведено блоков: ${done}/${translatable.length}`;
+  const counts = { empty: 0, machine: 0, edited: 0 };
+  for (const block of translatable) {
+    const state = blockState(block);
+    if (state in counts) counts[state] += 1;
+  }
+  const done = counts.machine + counts.edited;
+  status.textContent = `Переведено ${done}/${translatable.length} · пустые ${counts.empty} · машина ${counts.machine} · правка ${counts.edited}`;
+}
+
+function stateCaption(block) {
+  const state = blockState(block);
+  if (state === 'edited') return 'правка';
+  if (state === 'machine') return 'машинный';
+  if (state === 'empty') return 'пусто';
+  return '';
+}
+
+function paintMissing(textarea) {
+  const note = textarea.closest('.review-col')?.querySelector('.review-missing');
+  const block = currentOrder != null ? blockByKey(currentOrder) : null;
+  if (!note || !block) return;
+  const missing = missingGlossary(block.text || '', textarea.value || '');
+  note.textContent = missing.length
+    ? `В переводе нет: ${missing.map((term) => term.target).join(', ')}`
+    : '';
 }
 
 /** Unsaved-бар (создаётся заново при каждом рендере редактора). */
@@ -451,6 +625,8 @@ async function saveEdit(withToast) {
     await call('saveEdit', docId, block.order, textarea.value, reviewLang);
     if (!translations[reviewLang]) translations[reviewLang] = {};
     translations[reviewLang][String(block.order)] = textarea.value;
+    if (!editedFlags[reviewLang]) editedFlags[reviewLang] = {};
+    editedFlags[reviewLang][String(block.order)] = true;
     dirty = false;
     updateUnsavedBar(textarea);
     const btn = root?.querySelector('.review-save-btn');
@@ -473,6 +649,8 @@ async function autoSave() {
     await call('saveEdit', docId, block.order, textarea.value, reviewLang);
     if (!translations[reviewLang]) translations[reviewLang] = {};
     translations[reviewLang][String(block.order)] = textarea.value;
+    if (!editedFlags[reviewLang]) editedFlags[reviewLang] = {};
+    editedFlags[reviewLang][String(block.order)] = true;
     dirty = false;
     updateUnsavedBar(textarea);
   } catch {

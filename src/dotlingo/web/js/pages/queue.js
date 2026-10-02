@@ -346,7 +346,13 @@ function updateCard(card, event) {
   const total = event.total ?? 0;
 
   const nums = card.querySelector('.task-card__nums');
-  if (nums) nums.textContent = `${completed}/${total}`;
+  if (nums) {
+    const rate = Number(event.chars_per_sec);
+    const pace = Number.isFinite(rate) && rate > 0 ? ` · ${Math.round(rate)} симв/с` : '';
+    nums.textContent = `${completed}/${total}${pace}`;
+  }
+  const liveLabel = card.querySelector('.task-live .text-tertiary');
+  if (liveLabel && event.device) liveLabel.textContent = event.device;
 
   const bar = card.querySelector('.progress__bar');
   if (bar && total > 0) {
