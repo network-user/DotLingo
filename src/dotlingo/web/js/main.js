@@ -32,12 +32,14 @@ async function boot() {
   store.set('theme', 'dark');
   applyTheme('dark');
 
-  router.showPage(DEFAULT_PAGE);
+  try {
+    await import('./pages/index.js');
+  } catch (e) {
+    console.error('[pages] не удалось загрузить', e);
+  }
 
-  // Фоновая инициализация данных: не блокирует отрисовку каркаса.
-  initBridgeData().then(() =>
-    import('./pages/index.js').catch((e) => console.error('[pages] не удалось загрузить', e))
-  );
+  router.showPage(DEFAULT_PAGE);
+  initBridgeData();
 }
 
 /**
@@ -52,10 +54,11 @@ async function initBridgeData() {
   }
 
   // tryCall возвращает пару [data, error], не сам ответ.
-  const [[prefs]] = await Promise.all([tryCall('getPreferences')]);
+  const [prefs] = await tryCall('getPreferences');
   const theme = prefs?.theme === 'light' ? 'light' : 'dark';
   store.patch({ theme, reduceMotion: Boolean(prefs?.reduce_motion) });
   applyTheme(theme);
+  document.documentElement.dataset.reduceMotion = prefs?.reduce_motion ? 'true' : 'false';
 
   const [[projects], [active], [hardware], [languages], [dirs]] = await Promise.all([
     tryCall('listProjects'),
@@ -74,6 +77,7 @@ async function initBridgeData() {
   });
   await refreshCatalog();
   renderDeviceStatus(store.get('hardware'));
+  renderActiveProject();
 }
 
 /* -------------------------------------------------------------------------
@@ -117,6 +121,9 @@ const pushHandlers = {
   },
   custom_model_imported(payload) {
     store.emit('custom_model_imported', payload);
+  },
+  market_refreshed(payload) {
+    store.emit('market_refreshed', payload);
   },
 };
 
@@ -163,6 +170,21 @@ function wireShell() {
   renderDeviceStatus(null);
   const footer = document.querySelector('.sidebar__footer');
   if (footer) mountDownloadDock(footer);
+
+  document.getElementById('active-project')?.addEventListener('click', () => {
+    router.showPage('projects');
+  });
+  store.subscribe((key) => {
+    if (key === 'activeProject') renderActiveProject();
+  });
+  renderActiveProject();
+}
+
+function renderActiveProject() {
+  const label = document.getElementById('active-project-label');
+  if (!label) return;
+  const project = store.get('activeProject');
+  label.textContent = project?.title || 'Не выбран';
 }
 
 /** Применяет тему к <html data-theme> и обновляет кнопку-переключатель. */

@@ -6,6 +6,7 @@
 
 import { call, tryCall } from '../bridge.js';
 import { catalogFailure, refreshCatalog } from '../device.js';
+import { downloadFlow } from '../download-ui.js';
 import * as store from '../store.js';
 import * as router from '../router.js';
 import {
@@ -27,7 +28,7 @@ import {
 const STATE_LABELS = {
   installed: 'Установлена',
   available: 'Можно загрузить',
-  unverified: 'Требует проверки',
+  unverified: 'Нельзя скачать',
   missing: 'Файл не найден',
 };
 
@@ -62,6 +63,17 @@ let hostRef = null;
 let unsubs = [];
 /** @type {boolean} каталог хотя бы раз успешно загружен */
 let loaded = false;
+/** @type {{fetchedAt: string|null, stale: boolean, errors: Array<{repo: string, error: string}>, offers: object[]}} */
+let marketPayload = { fetchedAt: null, stale: false, errors: [], offers: [] };
+/** @type {boolean} идёт обновление рынка */
+let marketRefreshing = false;
+
+const MARKET_INTRO = [
+  'Фиксированный список переводческих и многоязычных GGUF с Hugging Face.',
+  'Кнопка только читает карточки, веса не качаются.',
+  'Для CPU оставлены Q4 как баланс скорости и Q6 как более точный и более тяжёлый квант.',
+  'Качество перевода здесь не измерялось.',
+].join(' ');
 
 /* -------------------------------------------------------------------------
  * Утилиты
@@ -137,8 +149,9 @@ function paint(host, { loading = false } = {}) {
       grid,
       el('p', {
         class: 'model-shop-note',
-        text: 'Каталог моделей можно расширить собственным GGUF. Качество перевода отдельных направлений не измеряется.',
+        text: 'Свой GGUF добавляется отдельно. Качество перевода отдельных направлений не измеряется.',
       }),
+      marketBlock(),
     ])
   );
 }
@@ -162,7 +175,131 @@ async function refresh(host) {
     return;
   }
   loaded = true;
+  const [market] = await tryCall('listMarket');
+  if (hostRef !== host || !host.isConnected) return;
+  if (market) marketPayload = market;
   paint(host);
+}
+
+/** Блок рынка: список с Hugging Face появляется только после кнопки. */
+function marketBlock() {
+  const offers = marketPayload.offers || [];
+  const groups = [];
+  for (const offer of offers) {
+    let group = groups.find((item) => item.repo === offer.repo);
+    if (!group) {
+      group = { repo: offer.repo, summary: offer.summary, items: [] };
+      groups.push(group);
+    }
+    group.items.push(offer);
+  }
+
+  const body = [];
+  if (marketPayload.stale) {
+    body.push(el('p', { class: 'model-shop-note', text: 'Показан прошлый список: Hugging Face сейчас не ответил.' }));
+  }
+  for (const error of marketPayload.errors || []) {
+    body.push(el('p', { class: 'model-shop-note', text: `${error.repo}: ${error.error}` }));
+  }
+  if (!offers.length && !marketPayload.fetchedAt) {
+    body.push(el('p', {
+      class: 'model-shop-note',
+      text: 'Список ещё не загружался. Обновление ходит на huggingface.co и не скачивает веса.',
+    }));
+  } else if (!offers.length) {
+    body.push(el('p', { class: 'model-shop-note', text: 'В этот раз Hugging Face не отдал ни одного файла.' }));
+  }
+
+  const grids = groups.map((group) => {
+    const grid = el('div', { class: 'model-grid' });
+    grid.append(...group.items.map((offer) => marketCard(offer)));
+    return el('div', { class: 'stack' }, [
+      el('h3', { class: 'hw-panel__title', text: group.repo }),
+      group.summary ? el('p', { class: 'model-shop-note', text: group.summary }) : null,
+      grid,
+    ]);
+  });
+
+  return el('section', { class: 'stack' }, [
+    el('div', { class: 'model-card__head' }, [
+      el('h2', { class: 'hw-panel__title', text: 'Рынок моделей' }),
+      button({
+        label: marketRefreshing ? 'Обновление…' : 'Обновить с Hugging Face',
+        variant: 'ghost',
+        disabled: marketRefreshing,
+        onClick: () => void refreshMarketList(),
+      }),
+    ]),
+    el('p', { class: 'model-shop-note', text: MARKET_INTRO }),
+    marketPayload.fetchedAt
+      ? el('p', { class: 'model-shop-note', text: `Список от ${marketPayload.fetchedAt}` })
+      : null,
+    ...body,
+    ...grids,
+  ]);
+}
+
+/** Карточка одного файла с рынка. */
+function marketCard(offer) {
+  const downloadBtn = button({
+    label: 'Скачать',
+    variant: 'primary',
+    size: 'sm',
+    iconName: 'download',
+    disabled: true,
+    onClick: () => void downloadFlow({ id: offer.id, name: offer.name, market: true }),
+  });
+  const consent = offer.installed
+    ? el('p', { class: 'model-card__status-note', text: 'Этот файл уже есть в каталоге.' })
+    : el('label', { class: 'consent-check' }, [
+        el('input', {
+          class: 'consent-check__input',
+          type: 'checkbox',
+          onChange: (e) => {
+            downloadBtn.disabled = !e.target.checked;
+          },
+        }),
+        el('span', { class: 'consent-check__box' }),
+        el('span', {
+          class: 'consent-check__label',
+          text: `Ознакомился с лицензией ${offer.license || 'Не указана'} и согласен скачать ${offer.sizeLabel}`,
+        }),
+      ]);
+  return el('article', { class: 'model-card panel' }, [
+    el('div', { class: 'model-card__head' }, [
+      el('h3', { class: 'model-card__name ellipsis', title: offer.name, text: offer.name }),
+      badge({
+        label: offer.installed ? 'Уже в каталоге' : (offer.roleLabel || offer.quantization),
+        tone: offer.installed ? 'success' : 'muted',
+      }),
+    ]),
+    el('p', { class: 'model-meta__row', text: [offer.quantization, offer.sizeLabel, offer.license].filter(Boolean).join(' · ') }),
+    offer.caveat ? el('p', { class: 'model-shop-note', text: offer.caveat }) : null,
+    consent,
+    offer.installed ? null : downloadBtn,
+    offer.cardUrl
+      ? el('a', { class: 'model-link', href: offer.cardUrl, target: '_blank', rel: 'noreferrer', text: 'Карточка на Hugging Face' })
+      : null,
+  ]);
+}
+
+/** Явный запрос карточек. Веса не скачиваются. */
+async function refreshMarketList() {
+  if (marketRefreshing) return;
+  marketRefreshing = true;
+  if (hostRef) paint(hostRef);
+  try {
+    const data = await call('refreshMarket');
+    if (!data?.started) {
+      marketRefreshing = false;
+      toast('Обновление рынка доступно в окне приложения', 'error');
+      if (hostRef) paint(hostRef);
+    }
+  } catch (e) {
+    marketRefreshing = false;
+    toast(e.message, 'error');
+    if (hostRef) paint(hostRef);
+  }
 }
 
 /** Ре-рендер по push-событию (только пока страница открыта). */
@@ -376,11 +513,11 @@ function cardFooter(model, activeProject) {
   }
 
   if (model.installState === 'unverified') {
+    const text = model.format === 'GGUF'
+      ? 'Скачать нельзя: файл не закреплён.'
+      : 'Скачать нельзя: нужен один файл GGUF. Этот формат приложение не запускает.';
     return el('footer', { class: 'model-card__footer' }, [
-      el('p', { class: 'model-card__status-note', text: 'Загрузка отключена до проверки.' }),
-      model.custom
-        ? el('p', { class: 'model-card__status-note', text: 'Требует проверки совместимости.' })
-        : null,
+      el('p', { class: 'model-card__status-note', text }),
     ]);
   }
 
@@ -424,7 +561,7 @@ async function runDetect() {
   }
 }
 
-export { downloadFlow } from '../download-ui.js';
+export { downloadFlow };
 
 /* -------------------------------------------------------------------------
  * Модалка импорта своей модели
@@ -615,6 +752,13 @@ function wireEvents() {
     }),
     store.on('custom_model_imported', rerender),
     store.on('download_done', rerender),
+    store.on('market_refreshed', (payload) => {
+      marketRefreshing = false;
+      if (payload && payload.ok === false) toast(payload.error || 'Рынок не обновился', 'error');
+      else if (payload?.stale) toast('Список прежний: Hugging Face не ответил');
+      else toast('Рынок обновлён');
+      rerender();
+    }),
   ];
 }
 

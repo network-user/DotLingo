@@ -85,6 +85,17 @@ def fake_queue(monkeypatch: pytest.MonkeyPatch):
 # --------------------------------------------------------------------- preferences
 
 
+def test_list_languages(tmp_path: Path) -> None:
+    data = Api(tmp_path).listLanguages()["data"]
+    assert data["auto"]["code"] == "auto"
+    codes = {item["code"] for item in data["languages"]}
+    assert {"ru", "en"} <= codes
+
+
+def test_resolve_model_path_without_window(tmp_path: Path) -> None:
+    assert Api(tmp_path).resolveModelPath()["data"] is None
+
+
 def test_preferences_roundtrip(tmp_path: Path) -> None:
     api = _make_api(tmp_path)
     assert api.getPreferences()["ok"] is True
@@ -252,9 +263,16 @@ def test_glossary_crud(tmp_path: Path) -> None:
 
     terms = api.listGlossary("ru")["data"]
     assert terms == [{"id": 1, "source": "term", "target": "термин"}]
+    term_id = terms[0]["id"]
 
-    assert api.updateGlossaryTerm({"id": 1, "source": "", "target": "x"})["ok"] is False
+    updated = api.updateGlossaryTerm({"id": term_id, "source": "term", "target": "термин 2"})
+    assert updated["ok"] is True
+    assert api.listGlossary("ru")["data"][0]["target"] == "термин 2"
+
+    assert api.updateGlossaryTerm({"id": term_id, "source": "", "target": "x"})["ok"] is False
     assert api.deleteGlossaryTerm(999)["ok"] is False
+    assert api.deleteGlossaryTerm(term_id)["ok"] is True
+    assert api.listGlossary("ru")["data"] == []
 
 
 # --------------------------------------------------------------------- models

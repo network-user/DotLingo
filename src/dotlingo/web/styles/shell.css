@@ -237,6 +237,41 @@
   color: var(--error);
 }
 
+.active-project {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  margin-bottom: var(--sp-2);
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.active-project:hover {
+  background: var(--surface-hover);
+  border-color: var(--hairline-strong);
+}
+
+.active-project__kicker {
+  font-size: var(--fs-caption);
+  color: var(--text-tertiary);
+}
+
+.active-project__label {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-small);
+  font-weight: 600;
+}
+
 .theme-toggle {
   display: flex;
   align-items: center;

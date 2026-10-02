@@ -32,7 +32,7 @@ export async function downloadFlow(model) {
   }
   remember(model, { phase: 'starting', bytes: 0, total: model.sizeBytes || 0 });
   try {
-    await call('downloadModel', model.id);
+    await call(model.market ? 'downloadMarketModel' : 'downloadModel', model.id);
   } catch (error) {
     if (error.code === 'busy') {
       openDownloadDialog(model);

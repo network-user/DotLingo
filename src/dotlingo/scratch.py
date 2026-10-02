@@ -55,6 +55,7 @@ def prepare_turn(
         [],
         previous[-2:],
         style=str(model.get("prompt_style") or "general"),
+        profile=str(model.get("prompt_profile") or ""),
     )
     return system, user
 
@@ -186,15 +187,24 @@ class ScratchTranslator:
         threads = max(1, min(8, max(1, (os.cpu_count() or 2) - 1)))
         snapshot = detect(self.model_root)
         sampling = model.get("sampling") if isinstance(model.get("sampling"), dict) else None
+        profile = str(model.get("prompt_profile") or "")
+        gemma = profile == "gemma"
+        if gemma:
+            stop_sequences: tuple[str, ...] | None = ("<end_of_turn>",)
+        elif model.get("append_no_think"):
+            stop_sequences = ("<|im_end|>", "<|fim_suffix|>")
+        else:
+            stop_sequences = None
         engine = InferenceProcess(
             path,
             int(model.get("default_context", 4096)),
             threads,
             gpu_layers=gpu_layers_for(snapshot, model),
             sampling=sampling,
-            stop_sequences=None,
-            append_no_think=bool(model.get("append_no_think")),
-            user_only=model.get("prompt_style") == "hy-mt2",
+            stop_sequences=stop_sequences,
+            append_no_think=False if gemma else bool(model.get("append_no_think")),
+            user_only=gemma or model.get("prompt_style") == "hy-mt2",
+            plain_gemma_turns=gemma,
         )
         engine.start()
         with self._lock:

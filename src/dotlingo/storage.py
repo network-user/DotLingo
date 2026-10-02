@@ -362,9 +362,8 @@ class ProjectStore:
             pair = db.execute("SELECT source_lang,target_lang FROM project LIMIT 1").fetchone()
             chosen_target = target_lang or pair["target_lang"]
             rows = db.execute(
-                "SELECT id,source,target FROM glossary"
-                " WHERE source_lang=? AND target_lang=?"
-                " ORDER BY length(source) DESC, source",
+                "SELECT id, source, target FROM glossary WHERE source_lang=? AND target_lang=? "
+                "ORDER BY length(source) DESC, source",
                 (pair["source_lang"], chosen_target),
             ).fetchall()
         return [dict(row) for row in rows]

@@ -607,6 +607,7 @@ function appearancePanel() {
     checked: Boolean(store.get('reduceMotion')),
     onChange: (e) => {
       store.set('reduceMotion', e.target.checked);
+      document.documentElement.dataset.reduceMotion = e.target.checked ? 'true' : 'false';
       call('setPreferences', { reduce_motion: e.target.checked }).catch(() => {});
     },
   });

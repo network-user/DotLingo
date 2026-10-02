@@ -32,6 +32,74 @@ def prepare_llama_env() -> None:
         os.environ.pop("CUDA_PATH", None)
 
 
+# Plain Gemma turns. TranslateGemma's embedded jinja rejects a string user message
+# unless source_lang_code is a structured field, which this chat API does not send.
+GEMMA_TURN_TEMPLATE = (
+    "{{ bos_token }}"
+    "{%- for message in messages %}"
+    "{%- if message['role'] == 'user' %}"
+    "{{ '<start_of_turn>user\\n' + message['content'] + '<end_of_turn>\\n' }}"
+    "{%- elif message['role'] == 'assistant' %}"
+    "{{ '<start_of_turn>model\\n' + message['content'] + '<end_of_turn>\\n' }}"
+    "{%- endif %}"
+    "{%- endfor %}"
+    "{%- if add_generation_prompt %}"
+    "{{ '<start_of_turn>model\\n' }}"
+    "{%- endif %}"
+)
+
+
+def render_gemma_turns(
+    messages: list[dict[str, str]],
+    *,
+    bos_token: str,
+    eos_token: str,
+) -> str:
+    from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+
+    formatter = Jinja2ChatFormatter(
+        template=GEMMA_TURN_TEMPLATE,
+        eos_token=eos_token,
+        bos_token=bos_token,
+    )
+    return str(formatter(messages=messages).prompt)
+
+
+def install_gemma_turn_handler(model: Any) -> None:
+    """Use plain Gemma turns instead of the embedded TranslateGemma template."""
+    from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+
+    eos_id = int(model.token_eos())
+    bos_id = int(model.token_bos())
+    end_id = _special_token_id(model, "<end_of_turn>")
+    stop_ids = [token_id for token_id in (eos_id, end_id) if token_id >= 0]
+    model.chat_handler = Jinja2ChatFormatter(
+        template=GEMMA_TURN_TEMPLATE,
+        eos_token=_token_piece(model, eos_id) or "<end_of_turn>",
+        bos_token=_token_piece(model, bos_id),
+        stop_token_ids=stop_ids or None,
+    ).to_chat_handler()
+
+
+def _token_piece(model: Any, token_id: int) -> str:
+    if token_id < 0:
+        return ""
+    raw = model.detokenize([token_id], special=True)
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return str(raw)
+
+
+def _special_token_id(model: Any, text: str) -> int:
+    try:
+        pieces = model.tokenize(text.encode("utf-8"), add_bos=False, special=True)
+    except Exception:
+        return -1
+    if len(pieces) == 1:
+        return int(pieces[0])
+    return -1
+
+
 def _worker_main(
     model_path: str,
     context_size: int,
@@ -45,6 +113,7 @@ def _worker_main(
     stop_sequences: tuple[str, ...] | None,
     append_no_think: bool,
     user_only: bool,
+    plain_gemma_turns: bool = False,
 ) -> None:
     """Load untrusted data weights in a child process and expose only text requests."""
     prepare_llama_env()
@@ -58,6 +127,8 @@ def _worker_main(
             n_gpu_layers=gpu_layers,
             verbose=False,
         )
+        if plain_gemma_turns:
+            install_gemma_turn_handler(model)
         responses.put({"type": "ready"})
     except Exception as exc:
         responses.put({"type": "startup_error", "message": _safe_backend_error(exc)})
@@ -75,8 +146,8 @@ def _worker_main(
         try:
             user = request["user"] + ("\n/no_think" if append_no_think else "")
             messages: list[dict[str, str]] = []
-            system = request.get("system") or ""
-            if system and not user_only:
+            system = str(request.get("system") or "")
+            if system.strip() and not user_only:
                 messages.append({"role": "system", "content": system})
             messages.append({"role": "user", "content": user})
             chunks: list[str] = []
@@ -119,7 +190,9 @@ def _strip_reasoning(text: str) -> str:
         text = text.rsplit("</think>", 1)[-1]
     if "<think>" in text and "</think>" not in text:
         return ""
-    return re.sub(r"<\|(?:im_end|fim_suffix|endoftext)\|>", "", text).strip()
+    text = re.sub(r"<\|(?:im_end|fim_suffix|endoftext)\|>", "", text)
+    text = text.replace("<end_of_turn>", "").replace("<start_of_turn>", "")
+    return text.strip()
 
 
 def _safe_backend_error(exc: Exception) -> str:
@@ -162,6 +235,7 @@ class InferenceProcess:
         stop_sequences: tuple[str, ...] | None = None,
         append_no_think: bool = False,
         user_only: bool = False,
+        plain_gemma_turns: bool = False,
         startup_timeout: float = 180,
         idle_timeout: float = 240,
     ) -> None:
@@ -178,6 +252,7 @@ class InferenceProcess:
         self.stop_sequences = stop_sequences
         self.append_no_think = append_no_think
         self.user_only = user_only
+        self.plain_gemma_turns = plain_gemma_turns
         self.fell_back_to_cpu = False
         self.startup_timeout = startup_timeout
         self.idle_timeout = idle_timeout
@@ -207,6 +282,7 @@ class InferenceProcess:
                 self.stop_sequences,
                 self.append_no_think,
                 self.user_only,
+                self.plain_gemma_turns,
             ),
             name="DotLingo inference",
             daemon=True,
