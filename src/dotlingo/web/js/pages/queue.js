@@ -215,7 +215,7 @@ function taskCard(task, host) {
   ]);
 
   return el('article', {
-    class: `task-card panel${task.status === 'running' ? ' is-running' : ''}`,
+    class: `task-card panel panel--flat${task.status === 'running' ? ' is-running' : ''}`,
     dataset: { taskId: task.taskId },
   }, [
     el('div', { class: 'row row--between' }, [

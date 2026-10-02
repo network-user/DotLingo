@@ -63,9 +63,15 @@ async function refresh(host) {
   const grid = host.querySelector('.project-grid');
   if (!grid) return;
 
-  grid.replaceChildren(el('div', { class: 'page-loading' }, [spinner('lg')]));
+  // Спиннер только если мост не ответил сразу. Иначе первый кадр - чёрное поле.
+  const spinnerTimer = setTimeout(() => {
+    if (grid.isConnected) {
+      grid.replaceChildren(el('div', { class: 'page-loading' }, [spinner('lg')]));
+    }
+  }, 160);
 
   const [projects, err] = await tryCall('listProjects');
+  clearTimeout(spinnerTimer);
   if (!grid.isConnected) return;
   if (err) {
     grid.replaceChildren(

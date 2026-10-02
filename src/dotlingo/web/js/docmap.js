@@ -82,6 +82,7 @@ export function spectrum(opts = {}) {
       } else {
         segment.classList.add('spectrum__seg--gap');
       }
+      if (block._ratio != null) segment.dataset.shared = 'true';
       if (orientation === 'v') {
         segment.style.height = `${segHeight(block)}px`;
         if (prevSection != null && block.section !== prevSection) {
@@ -115,6 +116,24 @@ export function spectrum(opts = {}) {
       currentOrder = order == null ? null : String(order);
       markCurrent();
     },
+    /**
+     * Обновить один блок, не пересобирая карту.
+     * Корзина из нескольких блоков перерисовывается целиком.
+     * @param {number|string} order
+     * @param {boolean} translated
+     */
+    touch(order, translated) {
+      const segment = root.querySelector(
+        `.spectrum__seg[data-order="${CSS.escape(String(order))}"]`,
+      );
+      if (!segment || segment.dataset.shared === 'true') {
+        render();
+        return;
+      }
+      if (!segment.classList.contains('spectrum__seg--text')) return;
+      segment.style.setProperty('--lit', translated ? '1' : '0');
+      segment.classList.toggle('is-translated', Boolean(translated));
+    },
     /** @param {object} patch - { blocks?, translations?, lang? } */
     update(patch = {}) {
       if (patch.blocks) blocks = patch.blocks;
@@ -131,19 +150,26 @@ export function spectrum(opts = {}) {
  * @param {number[]} values
  * @returns {HTMLElement}
  */
+/** Цвет одного деления штрих-кода. Совпадает с opacity текстовых сегментов. */
+function tickColor(value) {
+  if (value < 0) return 'var(--hairline)';
+  const opacity = value > 0 ? 0.32 + Math.min(1, value) * 0.68 : 0.1;
+  const percent = Math.round(opacity * 100);
+  return `color-mix(in srgb, var(--text) ${percent}%, transparent)`;
+}
+
 export function barcode(values) {
   const root = el('div', { class: 'spectrum spectrum--h', 'aria-hidden': 'true' });
   const list = Array.isArray(values) ? values : [];
-  for (const value of list) {
-    const segment = el('div', { class: 'spectrum__seg' });
-    if (value < 0) {
-      segment.classList.add('spectrum__seg--gap');
-    } else {
-      segment.classList.add('spectrum__seg--text');
-      segment.style.setProperty('--lit', String(value));
-      if (value > 0) segment.classList.add('is-translated');
-    }
-    root.append(segment);
+  if (list.length === 0) return root;
+  const stops = [];
+  const step = 100 / list.length;
+  for (let index = 0; index < list.length; index += 1) {
+    const start = (index * step).toFixed(4);
+    const end = ((index + 1) * step).toFixed(4);
+    const color = tickColor(Number(list[index]));
+    stops.push(`${color} ${start}%`, `${color} ${end}%`);
   }
+  root.style.backgroundImage = `linear-gradient(90deg, ${stops.join(', ')})`;
   return root;
 }

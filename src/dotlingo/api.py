@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import threading
 import webbrowser
@@ -116,9 +117,16 @@ def _scratch_pairs(value: Any) -> list[tuple[str, str]]:
 
 
 def _runtime_available() -> bool:
+    # Импорт llama_cpp сам лезет в CUDA_PATH\\bin. Пустой каталог v12.6 даёт WinError 3.
+    from dotlingo.engine import prepare_llama_env
+
+    prepare_llama_env()
     try:
         import llama_cpp  # noqa: F401
     except ImportError:
+        return False
+    except OSError:
+        sys.modules.pop("llama_cpp", None)
         return False
     return True
 
@@ -307,8 +315,8 @@ class Api:
             task = store.task(event.get("task_id", ""))
         except KeyError:
             pass
-        document_name = ""
-        if task is not None:
+        document_name = str(event.get("document_name") or "")
+        if not document_name and task is not None:
             try:
                 document_name = store.document(task["document_id"]).name
             except KeyError:
@@ -321,6 +329,30 @@ class Api:
                 "task": event,
             },
         )
+
+    def _sync_projects(self) -> None:
+        """Подхватить новые каталоги, не переоткрывая уже загруженные базы."""
+        base = self.projects_dir
+        if not base.is_dir():
+            self.projects = []
+            return
+        found: dict[str, Path] = {}
+        for child in base.iterdir():
+            if child.is_dir() and (child / "project.sqlite").is_file():
+                found[child.name] = child
+        current = {store.root.name: store for store in self.projects}
+        if set(found) == set(current):
+            return
+        stores: list[ProjectStore] = []
+        for name, path in found.items():
+            store = current.get(name)
+            if store is None:
+                try:
+                    store = ProjectStore(path)
+                except (OSError, sqlite3.DatabaseError):
+                    continue
+            stores.append(store)
+        self.projects = stores
 
     def _active_store(self) -> ProjectStore | None:
         for project in self.projects:
@@ -362,8 +394,10 @@ class Api:
     # ------------------------------------------------------------------ projects
 
     def listProjects(self) -> dict[str, Any]:
-        self.projects = list_projects(self.projects_dir)
-        return _ok([_serialize_project(store, with_counts=True) for store in self.projects])
+        self._sync_projects()
+        items = [_serialize_project(store, with_counts=True) for store in self.projects]
+        items.sort(key=lambda item: item.get("updatedAt") or "", reverse=True)
+        return _ok(items)
 
     def createProject(self, data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(data, dict):
@@ -524,32 +558,31 @@ class Api:
             return _err("Сначала выберите проект.", "no_project")
         targets = store.target_languages()
         result: list[dict[str, Any]] = []
-        for record in store.documents():
-            blocks = store.blocks(record.id)
-            total_translatable = sum(1 for block in blocks if block.translatable)
+        for item in store.document_listing():
             progress_by_target: dict[str, dict[str, int]] = {}
             spectrum_by_target: dict[str, list[float]] = {}
+            done_by_lang = item["doneByLang"]
+            blocks = item["blocks"]
+            total_translatable = sum(1 for block in blocks if block.translatable)
             for lang in targets:
-                translations = store.translations(record.id, target_lang=lang)
+                done_orders = done_by_lang.get(lang, set())
                 done = sum(
-                    1
-                    for block in blocks
-                    if block.translatable and translations.get(block.order, "").strip()
+                    1 for block in blocks if block.translatable and block.order in done_orders
                 )
                 progress_by_target[lang] = {"done": done, "total": total_translatable}
-                spectrum_by_target[lang] = _block_spectrum(blocks, translations)
-            exports = store.exports(record.id)
-            detected = store.detected_language(record.id)
+                spectrum_by_target[lang] = _block_spectrum(
+                    blocks, {order: "1" for order in done_orders}
+                )
             result.append(
                 {
-                    "id": record.id,
-                    "name": record.name,
-                    "format": record.format,
-                    "warnings": list(record.warnings),
+                    "id": item["id"],
+                    "name": item["name"],
+                    "format": item["format"],
+                    "warnings": item["warnings"],
                     "progressByTarget": progress_by_target,
                     "spectrumByTarget": spectrum_by_target,
-                    "exportCount": len(exports),
-                    "detectedLanguage": detected,
+                    "exportCount": item["exportCount"],
+                    "detectedLanguage": item["detectedLanguage"],
                 }
             )
         return _ok(result)
@@ -720,7 +753,8 @@ class Api:
 
     def listTasks(self) -> dict[str, Any]:
         result: list[dict[str, Any]] = []
-        for store in list_projects(self.projects_dir):
+        self._sync_projects()
+        for store in self.projects:
             title = store.project.get("title") or "Проект"
             documents = {record.id: record.name for record in store.documents()}
             for task in store.tasks():

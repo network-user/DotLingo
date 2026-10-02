@@ -151,7 +151,7 @@ function documentRow(doc, host) {
   );
 
   const row = el('article', {
-    class: `doc-row panel${isSelected ? ' is-selected' : ''}`,
+    class: `doc-row panel panel--flat${isSelected ? ' is-selected' : ''}`,
     dataset: { id: doc.id, exports: String(doc.exportCount ?? 0) },
     onClick: (e) => {
       if (e.ctrlKey || e.metaKey) {

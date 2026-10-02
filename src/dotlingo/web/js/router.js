@@ -59,10 +59,12 @@ export function currentPage() {
  * @param {string} name
  */
 export function showPage(name) {
-  if (name === current) return;
-
   const host = document.getElementById('page-host');
   if (!host) return;
+  // Повторный заход на ту же страницу ничего не делает, кроме заглушки:
+  // её нужно заменить, когда модуль страницы догрузился.
+  if (name === current && !host.querySelector('[data-stub]')) return;
+  if (name === current) current = '';
 
   const prev = pages.get(current);
   if (prev?.destroy) {
@@ -111,12 +113,6 @@ export function showPage(name) {
   host.appendChild(page);
   host.scrollTop = 0;
 
-  // Появление: класс вешаем через двойной rAF, чтобы transition сработал
-  // от исходного состояния (opacity 0 + translateY(10px)).
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => page.classList.add('is-in'));
-  });
-
   document.querySelectorAll('.nav-item[data-page]').forEach((btn) => {
     btn.classList.toggle('is-active', btn.dataset.page === name);
   });
@@ -126,6 +122,7 @@ export function showPage(name) {
 function stubMessage(text, iconName = 'globe') {
   const wrap = document.createElement('div');
   wrap.className = 'empty';
+  wrap.dataset.stub = 'true';
   const iconBox = document.createElement('div');
   iconBox.className = 'empty__icon';
   iconBox.append(icon(iconName));

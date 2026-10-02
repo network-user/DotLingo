@@ -26,10 +26,24 @@ class InferenceTimeout(InferenceError):
 
 
 def prepare_llama_env() -> None:
-    """Drop a CUDA_PATH that points at a missing toolkit so the CPU wheel can load."""
+    """Drop a CUDA_PATH that points at a missing toolkit so the CPU wheel can load.
+
+    llama-cpp-python calls os.add_dll_directory(CUDA_PATH/bin) on import.
+    A stale CUDA_PATH raises WinError 3 before the CPU wheel can load.
+    """
     cuda = os.environ.get("CUDA_PATH")
-    if cuda and not os.path.isdir(os.path.join(cuda, "bin")):
-        os.environ.pop("CUDA_PATH", None)
+    if not cuda:
+        return
+    root = Path(cuda)
+    bin_dir = root if root.name.lower() == "bin" else root / "bin"
+    if bin_dir.is_dir():
+        return
+    os.environ.pop("CUDA_PATH", None)
+    stale = {os.path.normcase(str(bin_dir)), os.path.normcase(str(root))}
+    path = os.environ.get("PATH", "")
+    os.environ["PATH"] = os.pathsep.join(
+        item for item in path.split(os.pathsep) if item and os.path.normcase(item) not in stale
+    )
 
 
 # Plain Gemma turns. TranslateGemma's embedded jinja rejects a string user message

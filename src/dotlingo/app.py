@@ -7,6 +7,7 @@ import ctypes
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -185,7 +186,22 @@ def _enable_text_menu(window) -> None:
         time.sleep(0.1)
 
 
-def _on_started(api: Api) -> None:
+def _reveal_once(window) -> None:
+    """Показать окно один раз. Повторный вызов безопасен."""
+    if getattr(_reveal_once, "done", False):
+        return
+    _reveal_once.done = True
+    try:
+        window.show()
+    except Exception:
+        traceback.print_exc()
+
+
+def _on_started(api: Api, window) -> None:
+    # Если страница не сообщила о загрузке, не оставлять процесс без окна.
+    timer = threading.Timer(2.0, _reveal_once, args=(window,))
+    timer.daemon = True
+    timer.start()
     # Проверка устройства кэшируется; автоматически запускается только один раз.
     if api.hardware is None:
         api.detectHardware()
@@ -235,6 +251,10 @@ def main() -> None:
         width=1280,
         height=820,
         min_size=(1020, 680),
+        # Пока CSS не нарисован, окно не должно вспыхивать белым.
+        background_color="#0B0B0E",
+        # Не показывать голый чёрный кадр, пока страница ещё не загрузилась.
+        hidden=True,
         # pywebview по умолчанию ставит user-select: none на всю страницу.
         text_select=True,
     )
@@ -249,10 +269,11 @@ def main() -> None:
         _enable_text_menu(window)
 
     window.events.shown += _on_shown
+    window.events.loaded += lambda: _reveal_once(window)
     window.events.closed += _on_closed
     try:
         # http_server=True обязателен: ES-модули не грузятся с file:// (CORS).
-        webview.start(func=_on_started, args=(api,), http_server=True)
+        webview.start(func=_on_started, args=(api, window), http_server=True)
     except Exception as exc:
         # Реальная ошибка запуска - не маскируем её под WebView2.
         traceback.print_exc()

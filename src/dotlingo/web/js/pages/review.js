@@ -33,6 +33,8 @@ let editedFlags = {};
 let machineDrafts = {};
 /** @type {{id?: number, source: string, target: string}[]} */
 let glossaryTerms = [];
+/** @type {{ terms: Array<object>, entries: Array<object>, sourceRe: RegExp|null, targetRe: RegExp|null }|null} */
+let glossaryCache = null;
 /** @type {'all'|'empty'|'machine'|'edited'} */
 let statusFilter = 'all';
 let reviewLang = '';
@@ -118,6 +120,7 @@ function resetState() {
   editedFlags = {};
   machineDrafts = {};
   glossaryTerms = [];
+  glossaryCache = null;
   statusFilter = 'all';
   reviewLang = '';
   currentOrder = null;
@@ -267,6 +270,7 @@ async function loadGlossary(lang) {
   }
   const [terms, err] = await tryCall('listGlossary', lang);
   glossaryTerms = err || !Array.isArray(terms) ? [] : terms;
+  glossaryCache = null;
 }
 
 function escapeReg(value) {
@@ -277,18 +281,40 @@ function termPattern(value) {
   return new RegExp(`(?<![\\p{L}\\p{N}])${escapeReg(value)}(?![\\p{L}\\p{N}])`, 'iu');
 }
 
+/** Скомпилировать шаблоны один раз на текущий список терминов. */
+function glossaryPatterns() {
+  if (glossaryCache?.terms === glossaryTerms) return glossaryCache;
+  const entries = [];
+  const sourceKeys = [];
+  const targetKeys = [];
+  for (const term of glossaryTerms) {
+    const source = String(term?.source || '').trim();
+    const target = String(term?.target || '').trim();
+    if (!source || !target) continue;
+    entries.push({ term, source: termPattern(source), target: termPattern(target) });
+    sourceKeys.push(source);
+    targetKeys.push(target);
+  }
+  sourceKeys.sort((a, b) => b.length - a.length);
+  targetKeys.sort((a, b) => b.length - a.length);
+  glossaryCache = {
+    terms: glossaryTerms,
+    entries,
+    sourceRe: sourceKeys.length ? new RegExp(sourceKeys.map(escapeReg).join('|'), 'giu') : null,
+    targetRe: targetKeys.length ? new RegExp(targetKeys.map(escapeReg).join('|'), 'giu') : null,
+  };
+  return glossaryCache;
+}
+
 /** Подсветка терминов глоссария. Возвращает фрагмент, без innerHTML. */
 function highlightTerms(text, field) {
   const frag = document.createDocumentFragment();
-  const keys = glossaryTerms
-    .map((term) => (field === 'source' ? term.source : term.target))
-    .filter((value) => value && String(value).trim())
-    .sort((a, b) => b.length - a.length);
-  if (!text || keys.length === 0) {
+  const pattern = field === 'source' ? glossaryPatterns().sourceRe : glossaryPatterns().targetRe;
+  if (!text || !pattern) {
     frag.append(text || '');
     return frag;
   }
-  const pattern = new RegExp(keys.map(escapeReg).join('|'), 'giu');
+  pattern.lastIndex = 0;
   let last = 0;
   for (const match of text.matchAll(pattern)) {
     const index = match.index ?? 0;
@@ -301,10 +327,9 @@ function highlightTerms(text, field) {
 }
 
 function missingGlossary(original, translation) {
-  return glossaryTerms.filter((term) => {
-    if (!term?.source || !term?.target) return false;
-    return termPattern(term.source).test(original) && !termPattern(term.target).test(translation);
-  });
+  return glossaryPatterns().entries.filter((entry) => (
+    entry.source.test(original) && !entry.target.test(translation)
+  )).map((entry) => entry.term);
 }
 
 /** Блоки с учётом поиска и фильтра состояния. */
@@ -401,10 +426,36 @@ async function selectBlock(order) {
   currentOrder = order;
   dirty = false;
 
-  renderTree();
+  markActiveRow();
   docMap?.setCurrent(order);
 
   renderEditor();
+}
+
+/** Подсветить выбранную строку, не пересобирая дерево. */
+function markActiveRow() {
+  const tree = root?.querySelector('.review-tree');
+  if (!tree) return;
+  tree.querySelectorAll('.review-tree__row.is-active').forEach((row) => {
+    row.classList.remove('is-active');
+  });
+  if (currentOrder == null) return;
+  const next = tree.querySelector(
+    `.review-tree__row[data-order="${CSS.escape(String(currentOrder))}"]`,
+  );
+  if (next) next.classList.add('is-active');
+}
+
+/** Обновить точку состояния одной строки после сохранения. */
+function paintRowState(order) {
+  const row = root?.querySelector(
+    `.review-tree__row[data-order="${CSS.escape(String(order))}"]`,
+  );
+  const block = blockByKey(String(order));
+  const dot = row?.querySelector('.review-tree__dot');
+  if (!dot || !block) return false;
+  dot.className = `review-tree__dot is-${blockState(block)}`;
+  return true;
 }
 
 /** Найти блок по строковому ключу порядка. */
@@ -641,8 +692,13 @@ async function saveEdit(withToast) {
     updateUnsavedBar(textarea);
     const btn = root?.querySelector('.review-save-btn');
     if (btn) btn.disabled = true;
-    docMap?.update({ translations });
-    renderTree();
+    const stillVisible = visibleBlocks().some((item) => String(item.order) === String(block.order));
+    if (stillVisible && paintRowState(block.order)) {
+      docMap?.touch(block.order, Boolean((textarea.value || '').trim()));
+    } else {
+      docMap?.update({ translations });
+      renderTree();
+    }
     updateStatusBar();
     refreshBlockChrome();
     if (withToast) toast('Правка сохранена', 'success');

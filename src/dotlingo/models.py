@@ -269,21 +269,30 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+# Успешная сверка на время процесса: путь, размер, mtime и ожидаемый SHA.
+_verified_models: set[tuple[str, int, int, str]] = set()
+
+
 def verify_model(path: Path, model: dict[str, Any]) -> None:
     path = Path(path)
     try:
-        size = path.stat().st_size
+        stat = path.stat()
         with path.open("rb") as file:
             magic = file.read(4)
     except OSError as exc:
         raise ModelIntegrityError("Файл модели не найден или недоступен.") from exc
-    if size != int(model["size_bytes"]):
+    expected = str(model["sha256"]).lower()
+    key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns, expected)
+    if key in _verified_models:
+        return
+    if stat.st_size != int(model["size_bytes"]):
         raise ModelIntegrityError("Размер модели не совпадает с реестром. Файл не активирован.")
     if magic != b"GGUF":
         raise ModelIntegrityError("Файл не является GGUF. Он не будет загружен в runtime.")
     digest = sha256_file(path)
-    if digest.lower() != str(model["sha256"]).lower():
+    if digest.lower() != expected:
         raise ModelIntegrityError("SHA-256 модели не совпадает с закреплённым значением.")
+    _verified_models.add(key)
 
 
 def installed(model: dict[str, Any], root: Path | None = None) -> bool:

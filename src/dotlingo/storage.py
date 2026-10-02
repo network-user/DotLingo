@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from dotlingo.formats import (
@@ -168,17 +169,24 @@ class ProjectStore:
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
         self.db_path = self.root / "project.sqlite"
+        self._project_row: dict[str, Any] | None = None
         if not self.db_path.is_file():
             raise FileNotFoundError(f"Нет базы проекта: {self.db_path}")
         with _connect(self.db_path) as db:
             db.executescript(SCHEMA)
             self._migrate(db)
-            db.execute("UPDATE tasks SET status='interrupted', updated_at=? WHERE status='running'", (_now(),))
-            rows = db.execute("SELECT id FROM tasks WHERE status='interrupted'").fetchall()
-            for row in rows:
+            # Только задачи, которые реально оборвались. Повторное открытие
+            # не должно дописывать событие каждому старому interrupted.
+            now = _now()
+            stopped = db.execute(
+                "UPDATE tasks SET status='interrupted', updated_at=? "
+                "WHERE status='running' RETURNING id",
+                (now,),
+            ).fetchall()
+            for row in stopped:
                 db.execute(
                     "INSERT INTO task_events(task_id,status,message,created_at) VALUES(?,?,?,?)",
-                    (row["id"], "interrupted", "Приложение закрылось до завершения задачи.", _now()),
+                    (row["id"], "interrupted", "Приложение закрылось до завершения задачи.", now),
                 )
 
     @staticmethod
@@ -281,9 +289,12 @@ class ProjectStore:
 
     @property
     def project(self) -> dict[str, Any]:
+        if self._project_row is not None:
+            return self._project_row
         with _connect(self.db_path) as db:
             row = db.execute("SELECT * FROM project LIMIT 1").fetchone()
-        return dict(row)
+        self._project_row = dict(row)
+        return self._project_row
 
     def target_languages(self) -> list[str]:
         project = self.project
@@ -339,6 +350,7 @@ class ProjectStore:
                 f"UPDATE project SET {assignments}, updated_at=?",
                 (*values.values(), _now()),
             )
+        self._project_row = None
 
     def add_glossary_term(
         self, source: str, target: str, *, target_lang: str | None = None
@@ -431,6 +443,61 @@ class ProjectStore:
                 ],
             )
         return DocumentRecord(doc_id, path.name, parsed.format, destination, source_hash, parsed.warnings)
+
+    def document_listing(self) -> list[dict[str, Any]]:
+        """Карточки документов для списка: блоки и прогресс из SQLite, без JSON."""
+        with _connect(self.db_path) as db:
+            docs = db.execute(
+                "SELECT id, name, format, warnings_json, "
+                "(SELECT count(*) FROM exports WHERE document_id=documents.id) AS export_count, "
+                "(SELECT language_code FROM document_languages WHERE document_id=documents.id) "
+                "AS detected "
+                "FROM documents ORDER BY created_at"
+            ).fetchall()
+            block_rows = db.execute(
+                'SELECT document_id, "ord" AS block_ord, translatable FROM blocks '
+                "ORDER BY document_id, block_ord"
+            ).fetchall()
+            done_rows = db.execute(
+                "SELECT document_id, target_lang, block_ord FROM translations "
+                "WHERE length(trim(text)) > 0"
+            ).fetchall()
+        blocks_by_doc: dict[str, list[Any]] = {}
+        for row in block_rows:
+            blocks_by_doc.setdefault(str(row["document_id"]), []).append(
+                SimpleNamespace(order=int(row["block_ord"]), translatable=bool(row["translatable"]))
+            )
+        done_by_doc: dict[str, dict[str, set[int]]] = {}
+        for row in done_rows:
+            done_by_doc.setdefault(str(row["document_id"]), {}).setdefault(
+                str(row["target_lang"]), set()
+            ).add(int(row["block_ord"]))
+        listing: list[dict[str, Any]] = []
+        for doc in docs:
+            doc_id = str(doc["id"])
+            try:
+                warnings = json.loads(doc["warnings_json"] or "[]")
+            except json.JSONDecodeError:
+                warnings = []
+            blocks = blocks_by_doc.get(doc_id)
+            if not blocks:
+                blocks = [
+                    SimpleNamespace(order=block.order, translatable=bool(block.translatable))
+                    for block in self.blocks(doc_id)
+                ]
+            listing.append(
+                {
+                    "id": doc_id,
+                    "name": doc["name"],
+                    "format": doc["format"],
+                    "warnings": list(warnings) if isinstance(warnings, list) else [],
+                    "exportCount": int(doc["export_count"] or 0),
+                    "detectedLanguage": doc["detected"] or None,
+                    "blocks": blocks,
+                    "doneByLang": done_by_doc.get(doc_id, {}),
+                }
+            )
+        return listing
 
     def documents(self) -> list[DocumentRecord]:
         with _connect(self.db_path) as db:
@@ -589,14 +656,22 @@ class ProjectStore:
 
     def save_segment(self, task_id: str, block_ord: int, segment_ord: int, translation: str) -> None:
         with _connect(self.db_path) as db:
-            db.execute(
-                "UPDATE segments SET translation=?,status='complete' WHERE task_id=? AND block_ord=? AND segment_ord=?",
+            cursor = db.execute(
+                "UPDATE segments SET translation=?, status='complete' "
+                "WHERE task_id=? AND block_ord=? AND segment_ord=? AND status!='complete'",
                 (translation, task_id, block_ord, segment_ord),
             )
-            count = db.execute(
-                "SELECT count(*) FROM segments WHERE task_id=? AND status='complete'", (task_id,)
-            ).fetchone()[0]
-            db.execute("UPDATE tasks SET completed=?,updated_at=? WHERE id=?", (count, _now(), task_id))
+            if cursor.rowcount > 0:
+                db.execute(
+                    "UPDATE tasks SET completed=completed+1, updated_at=? WHERE id=?",
+                    (_now(), task_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE segments SET translation=? "
+                    "WHERE task_id=? AND block_ord=? AND segment_ord=?",
+                    (translation, task_id, block_ord, segment_ord),
+                )
 
     def task(self, task_id: str) -> dict[str, Any]:
         with _connect(self.db_path) as db:

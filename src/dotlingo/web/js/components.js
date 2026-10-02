@@ -405,3 +405,183 @@ export function badge(opts = {}) {
 }
 
 export { icon };
+
+/* -------------------------------------------------------------------------
+ * Выпадающий список
+ * Системное меню select в WebView2 белое, а текст темы светлый.
+ * Поэтому список рисуется своим слоем и пишет значение обратно в select.
+ * ------------------------------------------------------------------------- */
+
+/** @type {HTMLElement|null} */
+let selectMenu = null;
+/** @type {HTMLSelectElement|null} */
+let selectOwner = null;
+
+/** Подменить системный popup у всех select.select. Вызывать один раз при старте. */
+export function installSelectMenus() {
+  if (document.documentElement.dataset.selectMenus === 'on') return;
+  document.documentElement.dataset.selectMenus = 'on';
+
+  document.addEventListener('mousedown', onSelectPointerDown, true);
+  document.addEventListener('keydown', onSelectKeyDown, true);
+  window.addEventListener('resize', closeSelectMenu);
+  window.addEventListener('scroll', onSelectScroll, true);
+}
+
+function onSelectPointerDown(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  if (selectMenu?.contains(target)) return;
+  const select = target.closest('select.select');
+  if (select instanceof HTMLSelectElement && !select.disabled && !select.multiple) {
+    event.preventDefault();
+    select.focus();
+    if (selectOwner === select) closeSelectMenu();
+    else openSelectMenu(select);
+    return;
+  }
+  if (selectMenu) closeSelectMenu();
+}
+
+function onSelectKeyDown(event) {
+  if (selectMenu && event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    const owner = selectOwner;
+    closeSelectMenu();
+    owner?.focus();
+    return;
+  }
+  const select = event.target;
+  if (!(select instanceof HTMLSelectElement) || !select.classList.contains('select')) return;
+  if (select.disabled || select.multiple) return;
+  const opens = event.key === 'ArrowDown'
+    || event.key === 'ArrowUp'
+    || event.key === 'Enter'
+    || event.key === ' '
+    || event.key === 'F4'
+    || (event.altKey && event.key === 'ArrowDown');
+  if (!opens) return;
+  event.preventDefault();
+  openSelectMenu(select);
+}
+
+function onSelectScroll(event) {
+  if (!selectMenu || selectMenu.contains(event.target)) return;
+  closeSelectMenu();
+}
+
+function closeSelectMenu() {
+  selectOwner?.setAttribute('aria-expanded', 'false');
+  selectMenu?.remove();
+  selectMenu = null;
+  selectOwner = null;
+}
+
+/**
+ * @param {HTMLSelectElement} select
+ */
+function openSelectMenu(select) {
+  closeSelectMenu();
+  const options = [...select.options];
+  if (options.length === 0) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'select-menu';
+  menu.setAttribute('role', 'listbox');
+  const label = select.getAttribute('aria-label') || select.labels?.[0]?.textContent || '';
+  if (label) menu.setAttribute('aria-label', label);
+
+  for (const option of options) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'select-menu__item';
+    item.setAttribute('role', 'option');
+    item.textContent = option.text;
+    item.dataset.value = option.value;
+    item.disabled = option.disabled;
+    const selected = option.value === select.value;
+    item.setAttribute('aria-selected', selected ? 'true' : 'false');
+    if (selected) item.classList.add('is-selected');
+    menu.append(item);
+  }
+
+  menu.addEventListener('click', (event) => {
+    const item = event.target instanceof Element
+      ? event.target.closest('.select-menu__item')
+      : null;
+    if (!(item instanceof HTMLButtonElement) || item.disabled || selectOwner !== select) return;
+    select.value = item.dataset.value || '';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    closeSelectMenu();
+    select.focus();
+  });
+
+  menu.addEventListener('keydown', (event) => moveSelectMenu(menu, event));
+  document.body.append(menu);
+  selectMenu = menu;
+  selectOwner = select;
+  select.setAttribute('aria-expanded', 'true');
+  placeSelectMenu(select, menu);
+  const current = menu.querySelector('.is-selected') || menu.querySelector('.select-menu__item:not(:disabled)');
+  if (current instanceof HTMLElement) {
+    current.focus();
+    current.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+/**
+ * @param {HTMLElement} menu
+ * @param {KeyboardEvent} event
+ */
+function moveSelectMenu(menu, event) {
+  const items = [...menu.querySelectorAll('.select-menu__item:not(:disabled)')];
+  const index = items.indexOf(document.activeElement);
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    const next = items[(index + step + items.length) % items.length];
+    next?.focus();
+    return;
+  }
+  if (event.key === 'Home' || event.key === 'End') {
+    event.preventDefault();
+    (event.key === 'Home' ? items[0] : items[items.length - 1])?.focus();
+    return;
+  }
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    if (document.activeElement instanceof HTMLElement) document.activeElement.click();
+    return;
+  }
+  if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    const query = event.key.toLocaleLowerCase();
+    const found = items.find((item) => (item.textContent || '').toLocaleLowerCase().startsWith(query));
+    found?.focus();
+  }
+}
+
+/**
+ * @param {HTMLSelectElement} select
+ * @param {HTMLElement} menu
+ */
+function placeSelectMenu(select, menu) {
+  const rect = select.getBoundingClientRect();
+  const gap = 6;
+  const spaceBelow = window.innerHeight - rect.bottom - gap - 8;
+  const spaceAbove = rect.top - gap - 8;
+  const openAbove = spaceBelow < 160 && spaceAbove > spaceBelow;
+  const maxHeight = Math.max(120, Math.min(280, openAbove ? spaceAbove : spaceBelow));
+  menu.style.maxHeight = `${maxHeight}px`;
+  menu.style.minWidth = `${Math.round(rect.width)}px`;
+  const width = menu.offsetWidth;
+  const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
+  menu.style.left = `${Math.round(left)}px`;
+  if (openAbove) {
+    menu.style.top = 'auto';
+    menu.style.bottom = `${Math.round(window.innerHeight - rect.top + gap)}px`;
+  } else {
+    menu.style.bottom = 'auto';
+    menu.style.top = `${Math.round(rect.bottom + gap)}px`;
+  }
+}

@@ -59,7 +59,17 @@ def test_memory_picks_overlapping_confirmed_pairs_and_skips_the_same_source() ->
 def test_missing_cuda_toolkit_path_is_ignored(monkeypatch, tmp_path) -> None:
     missing = tmp_path / "cuda-missing"
     monkeypatch.setenv("CUDA_PATH", str(missing))
+    monkeypatch.setenv("PATH", os.pathsep.join([str(missing / "bin"), os.environ.get("PATH", "")]))
     prepare_llama_env()
+    assert "CUDA_PATH" not in os.environ
+    assert str(missing / "bin") not in os.environ.get("PATH", "")
+
+
+def test_chat_runtime_check_ignores_missing_cuda_toolkit(monkeypatch) -> None:
+    monkeypatch.setenv("CUDA_PATH", r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6")
+    from dotlingo.api import _runtime_available
+
+    assert _runtime_available() is True
     assert "CUDA_PATH" not in os.environ
 
 

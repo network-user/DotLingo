@@ -151,6 +151,13 @@
   gap: var(--sp-2);
 }
 
+/* Списки: под ними плоский фон, размытие каждой строки только грузит композитор. */
+.panel--flat {
+  background: var(--surface-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 /* Fallback без backdrop-filter */
 @supports not (backdrop-filter: blur(1px)) {
   .panel {
@@ -296,6 +303,56 @@
   background-repeat: no-repeat;
   background-position: right 10px center;
   background-size: 16px;
+}
+
+/* Системный список Windows рисуется белым и не берёт цвет темы.
+   Свой список ниже читает те же токены, что и закрытое поле. */
+.select option {
+  background-color: var(--surface-solid);
+  color: var(--text);
+}
+
+.select-menu {
+  position: fixed;
+  z-index: var(--z-popover);
+  margin: 0;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-solid);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+}
+
+.select-menu__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+}
+
+.select-menu__item:hover,
+.select-menu__item:focus-visible {
+  background: var(--surface-hover);
+  outline: none;
+}
+
+.select-menu__item.is-selected {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.select-menu__item:disabled {
+  color: var(--text-tertiary);
 }
 
 .select:invalid,

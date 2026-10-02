@@ -114,22 +114,28 @@ export function waitReady() {
   if (readyPromise) return readyPromise;
 
   readyPromise = new Promise((resolve) => {
+    const succeed = () => {
+      clearInterval(timer);
+      apiReady = true;
+      resolve(true);
+    };
     if (window.pywebview?.api) {
       apiReady = true;
       resolve(true);
       return;
     }
-    const timeout = window.pywebview ? READY_TIMEOUT_MS : NO_BRIDGE_TIMEOUT_MS;
-    const timer = setTimeout(() => resolve(Boolean(window.pywebview?.api)), timeout);
-    window.addEventListener(
-      'pywebviewready',
-      () => {
-        clearTimeout(timer);
-        apiReady = true;
-        resolve(true);
-      },
-      { once: true }
-    );
+    // Событие pywebviewready часто приходит раньше подписки модуля.
+    // Один длинный таймер тогда держит экран на спиннере до 10 секунд.
+    const limit = window.pywebview ? READY_TIMEOUT_MS : NO_BRIDGE_TIMEOUT_MS;
+    const started = performance.now();
+    const timer = setInterval(() => {
+      if (window.pywebview?.api) succeed();
+      else if (performance.now() - started >= limit) {
+        clearInterval(timer);
+        resolve(false);
+      }
+    }, 40);
+    window.addEventListener('pywebviewready', succeed, { once: true });
   });
   return readyPromise;
 }

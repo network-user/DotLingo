@@ -27,19 +27,51 @@ async function boot() {
   wireShell();
   wireKeyboard();
   wirePushEvents();
+  components.installSelectMenus();
 
   // Стартуем с тёмной темой до прихода prefs, чтобы не мигало.
   store.set('theme', 'dark');
   applyTheme('dark');
 
+  // Сначала только «Проекты», чтобы первый кадр не ждал весь граф страниц.
   try {
-    await import('./pages/index.js');
+    await import('./pages/projects.js');
   } catch (e) {
-    console.error('[pages] не удалось загрузить', e);
+    console.error('[pages] не удалось открыть проекты', e);
   }
-
   router.showPage(DEFAULT_PAGE);
+  void loadExtraPages().then(() => {
+    if (document.querySelector('#page-host [data-stub]')) {
+      router.showPage(router.currentPage() || DEFAULT_PAGE);
+    }
+  });
   initBridgeData();
+}
+
+/** Остальные страницы и мастер первого запуска. Один запрос на сессию. */
+let extraPages = null;
+
+function loadExtraPages() {
+  if (!extraPages) {
+    extraPages = import('./pages/index.js').catch((error) => {
+      extraPages = null;
+      console.error('[pages] не удалось загрузить', error);
+      throw error;
+    });
+  }
+  return extraPages;
+}
+
+/** Открыть страницу, дождавшись её модуля, если оболочка кликнула раньше загрузки. */
+async function openPage(name) {
+  if (!router.pageNames().includes(name)) {
+    try {
+      await loadExtraPages();
+    } catch {
+      // showPage покажет заглушку.
+    }
+  }
+  router.showPage(name);
 }
 
 /**
@@ -60,8 +92,7 @@ async function initBridgeData() {
   applyTheme(theme);
   document.documentElement.dataset.reduceMotion = prefs?.reduce_motion ? 'true' : 'false';
 
-  const [[projects], [active], [hardware], [languages], [dirs]] = await Promise.all([
-    tryCall('listProjects'),
+  const [[active], [hardware], [languages], [dirs]] = await Promise.all([
     tryCall('getActiveProject'),
     tryCall('getHardware'),
     tryCall('getLanguages'),
@@ -69,15 +100,14 @@ async function initBridgeData() {
   ]);
 
   store.patch({
-    projects: projects ?? [],
     activeProject: active ?? null,
     hardware: hardware ?? null,
     languages: languages ?? {},
     dataDirs: dirs ?? null,
   });
-  await refreshCatalog();
-  renderDeviceStatus(store.get('hardware'));
+  renderDeviceStatus(hardware ?? null);
   renderActiveProject();
+  await refreshCatalog();
 }
 
 /* -------------------------------------------------------------------------
@@ -155,7 +185,7 @@ function wireShell() {
 
   // Навигация.
   document.querySelectorAll('.nav-item[data-page]').forEach((btn) => {
-    btn.addEventListener('click', () => router.showPage(btn.dataset.page));
+    btn.addEventListener('click', () => void openPage(btn.dataset.page));
   });
 
   // Переключатель темы.
@@ -241,7 +271,7 @@ function wireKeyboard() {
     const index = Number(e.key) - 1;
     if (!Number.isInteger(index) || index < 0 || index >= PAGE_ORDER.length) return;
     e.preventDefault();
-    router.showPage(PAGE_ORDER[index]);
+    void openPage(PAGE_ORDER[index]);
   });
 }
 

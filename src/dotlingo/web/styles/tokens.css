@@ -49,6 +49,7 @@
 
   /* Слои */
   --z-modal: 100;
+  --z-popover: 400;
   --z-toast: 200;
   --z-banner: 300;
 

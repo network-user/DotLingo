@@ -21,6 +21,19 @@ from dotlingo.storage import ProjectStore, SourceIntegrityError
 
 EventSink = Callable[[dict[str, Any]], None]
 
+# nvidia-smi и импорт llama.cpp не нужны перед каждым фрагментом.
+_placement_cache: tuple[float, Any] | None = None
+
+
+def _placement_snapshot(model_root: Path) -> Any:
+    global _placement_cache
+    now = time.monotonic()
+    if _placement_cache is not None and now - _placement_cache[0] < 60:
+        return _placement_cache[1]
+    snapshot = detect(model_root)
+    _placement_cache = (now, snapshot)
+    return snapshot
+
 
 def build_chunks(blocks: list[Block], max_chars: int = 1_100) -> dict[int, list[str]]:
     from dotlingo.segmentation import split_text
@@ -60,6 +73,7 @@ class TaskQueue:
         self._closing = False
         self._lock = threading.RLock()
         self._cancelled: set[str] = set()
+        self._document_names: dict[str, str] = {}
 
     @property
     def busy(self) -> bool:
@@ -136,19 +150,34 @@ class TaskQueue:
             except Exception:
                 pass
 
+    def _document_name(self, document_id: str) -> str:
+        cached = self._document_names.get(document_id)
+        if cached is not None:
+            return cached
+        try:
+            name = self.store.document(document_id).name
+        except KeyError:
+            name = ""
+        self._document_names[document_id] = name
+        return name
+
     def _emit(self, task_id: str, status: str, message: str = "", **details: Any) -> None:
         try:
             task = self.store.task(task_id)
-            self.on_event(
-                {
-                    "task_id": task_id,
-                    "status": status,
-                    "message": message,
-                    "completed": task["completed"],
-                    "total": task["total"],
-                    **details,
-                }
-            )
+            payload = {
+                "task_id": task_id,
+                "status": status,
+                "message": message,
+                "completed": task["completed"],
+                "total": task["total"],
+                "document_name": self._document_name(str(task["document_id"])),
+                **details,
+            }
+            for key in ("current_source", "current_translation"):
+                text = payload.get(key)
+                if isinstance(text, str) and len(text) > 160:
+                    payload[key] = text[:160]
+            self.on_event(payload)
         except Exception:
             return
 
@@ -200,7 +229,7 @@ class TaskQueue:
             verify_model(path, model)
             context_size = int(model.get("default_context", 4096))
             cpu_threads = max(1, (os.cpu_count() or 2) - 1)
-            snapshot = detect(self.model_root)
+            snapshot = _placement_snapshot(self.model_root)
             gpu_layers = gpu_layers_for(snapshot, model)
             sampling = model.get("sampling") if isinstance(model.get("sampling"), dict) else None
             profile = str(model.get("prompt_profile") or "")
