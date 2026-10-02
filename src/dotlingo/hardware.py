@@ -82,10 +82,13 @@ def _llama_gpu_support() -> tuple[bool, bool | None]:
     if importlib.util.find_spec("llama_cpp") is None:
         return False, None
     try:
+        from dotlingo.engine import prepare_llama_env
+
+        prepare_llama_env()
         from llama_cpp import llama_supports_gpu_offload
 
         return True, bool(llama_supports_gpu_offload())
-    except (ImportError, AttributeError, OSError):
+    except (ImportError, AttributeError, OSError, RuntimeError):
         return True, None
 
 

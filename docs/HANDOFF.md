@@ -12,11 +12,11 @@
 
 ## Проверки этого снимка
 
-В `.venv` проекта: `45 passed, 1 skipped`. Пропущен PDF fixture, потому что нет PyMuPDF (`fitz`). `pypdf` и `pywebview` в этом окружении есть. `python -m ruff check src tests` проходит.
+В `.venv` проекта: `49 passed, 1 skipped`. Пропущен PDF fixture, потому что нет PyMuPDF (`fitz`). `pypdf` и `pywebview` в этом окружении есть. `python -m ruff check src tests` проходит.
 
-Нет `llama_cpp`, PyInstaller и Inno Setup 6 (`ISCC.exe` не найден ни в PATH, ни в `Program Files (x86)\Inno Setup 6`). Из-за отсутствия ISCC `deploy/windows/build.ps1` не запускался: скрипт сначала ставит тяжёлый CPU wheel и PyInstaller, а установщик всё равно не соберёт. Чистая VM, подпись и размер Setup.exe не проверены.
+Inno Setup 6 по-прежнему не установлен (`ISCC.exe` нет ни в PATH, ни в `Program Files (x86)\Inno Setup 6`), PyInstaller в `.venv` нет. `deploy/windows/build.ps1` не запускался: без ISCC установщик не соберётся. Чистая VM и подпись не проверены.
 
-Ни один вес Hy-MT2 не загружался. Качество EN↔RU, скорость, RAM и VRAM не измерялись. Windows inference остаётся непроверенным.
+Вес Hy-MT2 1.8B Q4_K_M уже был в `%LOCALAPPDATA%\DotLingo\models`, SHA-256 совпал с реестром. 2026-10-02 на CPU-сборке `llama-cpp-python==0.3.35` одна фраза прошла за 7.8 с вместе с загрузкой модели. `The harbour is quiet tonight.` с маркером глоссария модель вернула `Сегодня вечером ZXQTERM0000XZ очень тихий.` Приложение после этого подставляет целевую форму. Это не рубрика качества и не замер книги. Слои на GPU не ушли: у CPU-сборки `llama_supports_gpu_offload` равен false, свободной VRAM было около 2.3 ГБ из 6. Колесо cu125 искало отсутствующий CUDA Toolkit 12.6, колесо cu130 не загрузило `llama.dll` (WinError 127). На машине стоит Toolkit 13.2, а `CUDA_PATH` указывал на 12.6. Если этот путь отсутствует, приложение его больше не подставляет в загрузку DLL.
 
 ## Перед релизом
 

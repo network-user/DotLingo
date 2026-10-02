@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import os
 import queue
 import re
 import time
@@ -24,6 +25,13 @@ class InferenceTimeout(InferenceError):
     pass
 
 
+def prepare_llama_env() -> None:
+    """Drop a CUDA_PATH that points at a missing toolkit so the CPU wheel can load."""
+    cuda = os.environ.get("CUDA_PATH")
+    if cuda and not os.path.isdir(os.path.join(cuda, "bin")):
+        os.environ.pop("CUDA_PATH", None)
+
+
 def _worker_main(
     model_path: str,
     context_size: int,
@@ -39,6 +47,7 @@ def _worker_main(
     user_only: bool,
 ) -> None:
     """Load untrusted data weights in a child process and expose only text requests."""
+    prepare_llama_env()
     try:
         from llama_cpp import Llama
 
@@ -117,6 +126,16 @@ def _safe_backend_error(exc: Exception) -> str:
     text = str(exc).lower()
     if any(word in text for word in ("out of memory", "bad_alloc", "cuda_error_out_of_memory", "not enough memory")):
         return "Недостаточно RAM или VRAM для выбранного контекста. Уменьшите контекст или выберите меньшую модель."
+    if "failed to load shared library" in text or "winerror 127" in text or "не найдена указанная процедура" in text:
+        return (
+            "llama-cpp-python установлен, но его DLL не совпала с библиотеками на компьютере. "
+            "Для этого приложения подходит CPU-сборка llama-cpp-python==0.3.35."
+        )
+    if "cuda" in text and any(word in text for word in ("winerror", "not find", "no such file", "не удается найти", "dll")):
+        return (
+            "Сборка llama-cpp-python ищет CUDA Toolkit, а этот путь на компьютере не найден. "
+            "Нужна CPU-сборка runtime или установленный CUDA той же версии."
+        )
     if any(word in text for word in ("failed to load", "invalid gguf", "unknown model", "unsupported model")):
         return "Backend не смог открыть проверенный вес GGUF. Проверьте версию runtime и модель."
     if "llama_cpp" in str(exc) or "no module named" in text:

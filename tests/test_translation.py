@@ -1,3 +1,6 @@
+import os
+
+from dotlingo.engine import prepare_llama_env
 from dotlingo.glossary import GlossaryTerm
 from dotlingo.hardware import HardwareSnapshot, gpu_layers_for
 from dotlingo.task_queue import build_translation_prompt, select_memory_examples
@@ -51,6 +54,13 @@ def test_memory_picks_overlapping_confirmed_pairs_and_skips_the_same_source() ->
     assert chosen[0][0].casefold().startswith("the harbour")
     assert all("река" not in item[1].casefold() for item in chosen)
     assert select_memory_examples("The river is wide.", pairs) == []
+
+
+def test_missing_cuda_toolkit_path_is_ignored(monkeypatch, tmp_path) -> None:
+    missing = tmp_path / "cuda-missing"
+    monkeypatch.setenv("CUDA_PATH", str(missing))
+    prepare_llama_env()
+    assert "CUDA_PATH" not in os.environ
 
 
 def test_gpu_layers_follow_free_vram_estimate() -> None:
