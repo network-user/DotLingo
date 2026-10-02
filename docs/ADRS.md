@@ -24,7 +24,9 @@
 
 **Причина:** один backend не работает со всеми форматами. Официальный upstream `llama-cpp-python` указывает, что pip install может компилировать C/C++/llama.cpp; также upstream публикует отдельные CPU/GPU wheel indexes и backend-specific requirements. Build script использует отдельный CPU wheel index и включает runtime в пакет. Никакой CUDA runtime не скачивается на клиент.
 
-**Ограничение:** exact binding, interpreter, GGUF, CPU/GPU и PyInstaller DLL combination пока не запускались здесь. Windows model adapter остаётся experimental до smoke test. Код текущего inference worker отключает GPU offload; автоматический CPU fallback не называется проверенным.
+**Ограничение:** exact binding, interpreter, GGUF, CPU/GPU и PyInstaller DLL combination пока не запускались здесь. Windows model adapter остаётся experimental до smoke test.
+
+Решение о каталоге Qwen3 заменено ADR-009. GPU offload больше не выключен жёстко: число слоёв считается по свободной VRAM, а нехватка памяти при старте возвращает задачу на CPU. Этот путь не измерен.
 
 ## ADR-004 · Проектный документ как normalized tree + отдельный writer
 
@@ -67,3 +69,13 @@
 **Решение:** pywebview 5 (на Windows - Edge WebView2 через pythonnet) и статический vanilla JS на ES-модулях без сборочного шага (`src/dotlingo/web/`). Локальный HTTP-сервер pywebview раздаёт `web/`; `http_server=True` обязателен, потому что ES-модули не загружаются с `file://` (CORS). Мост `js_api` в `api.py`: camelCase-методы, единый конверт `{ok, data}` / `{ok: false, error, code}`; результаты фоновых действий приходят push-событиями через `evaluate_js`. Дизайн - Apple-glass монохром с чёрным приоритетом; темы переключаются атрибутом CSS `[data-theme]`, `theme.py` удалён.
 
 **Последствия:** добавлены зависимость `pywebview` и требование WebView2 runtime на чистых Windows 10 (Win11 и обновлённые Win10 уже содержат его; установщик проверяет реестр и показывает подсказку). UI-тесты выполняются через мост без окна: `python -m dotlingo --smoke-test`. PyInstaller собирает webview/pythonnet/clr_loader через `collect_all`; `tkinter` исключён из бандла.
+
+## ADR-009 · Каталог по умолчанию - переводческие Hy-MT2
+
+**Статус:** принято 2026-10-02. Заменяет модельную часть ADR-003.
+
+**Контекст:** Qwen3 в каталоге были общими многоязычными моделями. Для переводчика документов нужен специализированный GGUF, который открывается тем же `llama-cpp-python`.
+
+**Решение:** скачиваются только официальные GGUF Tencent Hy-MT2: 1.8B Q4_K_M, 1.8B Q8_0 и 7B Q4_K_M. Ревизия, размер и SHA-256 закреплены. Промпт и сэмплинг берутся из карточки: одна user-реплика, только перевод, temperature 0.7, top_p 0.6, top_k 20, repetition penalty 1.05, контекст приложения 8192. Правленые пары проекта подмешиваются как короткие примеры. GPU-слои считаются по свободной VRAM; при нехватке памяти старт повторяется на CPU.
+
+**Не входит:** STQ 1.25/2-bit (нужен отдельный кернел), Hy-MT2-30B-A3B (`hy_v3`), TranslateGemma (safetensors и условия Gemma). Качество EN↔RU и Windows inference этим решением не объявляются проверенными.
