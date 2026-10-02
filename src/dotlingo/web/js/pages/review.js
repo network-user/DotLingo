@@ -557,6 +557,16 @@ function updateStatusBar() {
   status.textContent = `Переведено ${done}/${translatable.length} · пустые ${counts.empty} · машина ${counts.machine} · правка ${counts.edited}`;
 }
 
+function refreshBlockChrome() {
+  const block = currentOrder != null ? blockByKey(currentOrder) : null;
+  const kind = root?.querySelector('.review-block-title__kind');
+  const textarea = root?.querySelector('.review-translation');
+  if (!block || !kind) return;
+  const kindLabel = [block.kind, block.sectionTitle, stateCaption(block)].filter(Boolean).join(' · ');
+  kind.textContent = kindLabel || 'Блок';
+  if (textarea) paintMissing(textarea);
+}
+
 function stateCaption(block) {
   const state = blockState(block);
   if (state === 'edited') return 'правка';
@@ -634,6 +644,7 @@ async function saveEdit(withToast) {
     docMap?.update({ translations });
     renderTree();
     updateStatusBar();
+    refreshBlockChrome();
     if (withToast) toast('Правка сохранена', 'success');
   } catch (e) {
     toast(e.message, 'error');
