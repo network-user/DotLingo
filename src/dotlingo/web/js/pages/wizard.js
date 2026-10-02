@@ -1,367 +1,586 @@
 /**
- * Мастер первого запуска: проверка устройства → рекомендация → выбор модели →
- * загрузка → готово. Показывается один раз (preferences.setup_seen).
+ * Первый запуск: один экран вместо мастера из нескольких шагов.
+ * Устройство определяется само, модель уже подобрана.
+ * Скачивание начинается с кнопки, на которой написаны объём и лицензия:
+ * это и есть согласие. Отдельная галочка не нужна.
+ * Показывается один раз (preferences.setup_seen). Если вес уже стоит, экран пропускается.
  */
 
-import { call, tryCall } from '../bridge.js';
+import { call } from '../bridge.js';
 import * as store from '../store.js';
 import * as router from '../router.js';
-import { el, button, badge, toast, spinner, progressBar, formatBytes } from '../components.js';
-import { downloadFlow } from './models.js';
+import { el, button, toast, progressBar, formatBytes } from '../components.js';
+import {
+  catalogModels,
+  formatEta,
+  formatGb,
+  formatSpeed,
+  gpuSummary,
+  hasInstalledModel,
+  placementBlocked,
+  ramUsedFraction,
+  recommendedChoice,
+  refreshCatalog,
+  threadNote,
+} from '../device.js';
 
-const STEP_COUNT = 5;
+/** @type {HTMLElement|null} */
+let root = null;
 
-/** @type {HTMLElement|null} корень оверлея */
-let overlayRoot = null;
-
-/** @type {Array<() => void>} отписки событий */
+/** @type {Array<() => void>} */
 let unsubs = [];
 
-/** Показывал ли мастер в этой сессии (защита от повторного запуска). */
+/** @type {{ root: HTMLElement, set: (value: number|null) => void }|null} */
+let barApi = null;
+
+/** plan | pick | working | error */
+let phase = 'plan';
+
+/** @type {object|null} модель текущей загрузки */
+let activeModel = null;
+
+/** @type {object|null} */
+let progress = null;
+
+let errorText = '';
+let selectedId = '';
 let shownThisSession = false;
+let closing = false;
 
-/* -------------------------------------------------------------------------
- * Публичная точка входа (вызывается из index.js)
- * ------------------------------------------------------------------------- */
-
+/**
+ * Точка входа. Импорт из pages/index.js происходит после первой загрузки данных.
+ */
 export async function setupWizard() {
   if (shownThisSession) return;
-  const [prefs] = await Promise.all([tryCall('getPreferences')]);
+  const [prefs] = await call('getPreferences')
+    .then((data) => [data])
+    .catch(() => [null]);
   if (!prefs || prefs.setup_seen) return;
   shownThisSession = true;
-  showStep(0);
+
+  if (hasInstalledModel()) {
+    await call('setPreferences', { setup_seen: true }).catch(() => {});
+    return;
+  }
+
+  phase = 'plan';
+  open();
+  if (!store.get('hardware')) {
+    call('detectHardware').catch(() => {});
+  } else if (store.get('recommendation') == null) {
+    refreshCatalog().catch(() => {});
+  }
 }
 
-/* -------------------------------------------------------------------------
- * Рендер оверлея и шагов
- * ------------------------------------------------------------------------- */
+function open() {
+  closeWizard();
+  closing = false;
+  root = el('div', {
+    class: 'setup',
+    role: 'dialog',
+    ariaModal: 'true',
+    ariaLabelledBy: 'setup-title',
+  });
+  document.body.appendChild(root);
+  document.addEventListener('keydown', onKeydown, true);
+  unsubs.push(
+    store.on('hardware_detected', () => {
+      if (phase === 'working' || closing) return;
+      render();
+    }),
+    store.on('models_refreshed', () => {
+      if (phase === 'working' || closing) return;
+      if (phase === 'plan') selectedId = recommendedChoice().model?.id || '';
+      else if (!catalogModels().some((model) => model.id === selectedId)) {
+        selectedId = recommendedChoice().model?.id || catalogModels()[0]?.id || '';
+      }
+      render();
+    }),
+  );
+  render();
+}
 
-/** Закрыть оверлей и снять подписки. */
 function closeWizard() {
   unsubs.forEach((off) => off());
   unsubs = [];
-  overlayRoot?.remove();
-  overlayRoot = null;
-  document.removeEventListener('keydown', blockEscape, true);
+  barApi = null;
+  root?.remove();
+  root = null;
+  document.removeEventListener('keydown', onKeydown, true);
 }
 
-/** Esc не должен закрывать мастер (шаг загрузки блокирует закрытие). */
-function blockEscape(e) {
-  if (e.key === 'Escape' && overlayRoot) {
-    e.stopPropagation();
-    e.preventDefault();
+function onKeydown(event) {
+  if (!root) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    if (phase === 'working') return;
+    if (phase === 'pick') {
+      phase = 'plan';
+      selectedId = recommendedChoice().model?.id || '';
+      render();
+      return;
+    }
+    void postpone();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const nodes = [...root.querySelectorAll('button, a, input, select, textarea')].filter(
+    (node) => !node.disabled && node.offsetParent !== null,
+  );
+  if (!nodes.length) return;
+  const first = nodes[0];
+  const last = nodes[nodes.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
   }
 }
 
-/**
- * Показать шаг мастера.
- * @param {number} step - 0..4
- * @param {object} [extra] - контекст между шагами (выбранная модель и т.п.).
- */
-function showStep(step, extra = {}) {
-  if (overlayRoot) {
-    overlayRoot.remove();
-    document.removeEventListener('keydown', blockEscape, true);
+function stillDetecting() {
+  if (phase !== 'plan') return false;
+  if (!store.get('hardware')) return true;
+  return store.get('recommendation') == null;
+}
+
+function chosenModel() {
+  if (phase === 'pick') {
+    return catalogModels().find((model) => model.id === selectedId) ?? null;
   }
+  return recommendedChoice().model;
+}
 
-  const card = el('div', { class: 'wizard__card', role: 'dialog', 'aria-modal': 'true' });
-  const body = el('div', { class: 'wizard__body' });
-  const footer = el('footer', { class: 'wizard__footer' });
-
-  overlayRoot = el('div', { class: 'wizard' }, [
-    el('div', { class: 'wizard__progress-wrap' }, [
-      el('span', { class: 'wizard__step-label', text: `Шаг ${step + 1} из ${STEP_COUNT}` }),
-      stepProgress(step),
+function render() {
+  if (!root || closing) return;
+  const previous = document.activeElement;
+  barApi = null;
+  const frame = el('div', { class: 'setup__frame' }, [
+    el('header', { class: 'setup__brand' }, [
+      el('div', { class: 'brand__mark', ariaHidden: 'true', text: 'D' }),
+      el('div', {}, [
+        el('p', { class: 'setup__kicker', text: 'Первый запуск' }),
+        el('p', { class: 'setup__product', text: 'Локальный перевод на этом компьютере' }),
+      ]),
     ]),
-    card,
+    el('div', { class: 'setup__grid' }, [deviceColumn(), choiceColumn()]),
   ]);
-  card.append(body, footer);
-  document.body.appendChild(overlayRoot);
-  document.addEventListener('keydown', blockEscape, true);
-
-  renderers[step]?.(body, footer, extra);
+  root.replaceChildren(frame);
+  root.setAttribute('aria-busy', phase === 'working' ? 'true' : 'false');
+  if (phase === 'working' && progress) paintProgress(progress);
+  if (previous && root.contains(previous)) return;
+  if (phase === 'pick' && previous?.classList?.contains('setup__option')) {
+    root.querySelector('.setup__option.is-selected')?.focus();
+    return;
+  }
+  const target = [...root.querySelectorAll('button')].find((node) => !node.disabled);
+  target?.focus();
 }
 
-/** Тонкий индикатор прогресса шагов. */
-function stepProgress(step) {
-  const api = progressBar(step / STEP_COUNT);
-  api.root.classList.add('wizard__progress');
-  return api.root;
+function deviceColumn() {
+  const hw = store.get('hardware');
+  const used = ramUsedFraction(hw);
+  const metrics = el('div', { class: 'setup__metrics' }, [
+    metric(
+      'RAM свободно',
+      hw ? formatGb(hw.ramAvailableGb) : '…',
+      hw && Number.isFinite(hw.ramTotalGb) ? `из ${formatGb(hw.ramTotalGb)}` : '',
+      used,
+    ),
+    metric('Диск свободен', hw ? formatGb(hw.diskFreeGb) : '…', 'каталог моделей'),
+    metric(
+      'CPU',
+      hw && hw.cpuThreads ? String(hw.cpuThreads) : '…',
+      hw ? 'логических процессоров' : '',
+    ),
+  ]);
+
+  const lines = [];
+  if (hw) {
+    lines.push(fact('GPU', gpuSummary(hw)));
+    if (!(hw.gpuNames ?? []).length) {
+      lines.push(el('p', { class: 'setup__note', text: 'Проверка смотрит только NVIDIA.' }));
+    }
+    lines.push(
+      fact(
+        'Runtime',
+        hw.llamaRuntimeAvailable ? 'llama.cpp доступен' : 'llama.cpp не установлен',
+      ),
+    );
+    lines.push(el('p', { class: 'setup__note', text: threadNote() }));
+  } else {
+    lines.push(el('p', { class: 'setup__note', text: 'Считываем память, диск и runtime. Сеть для этого не нужна.' }));
+  }
+
+  return el('section', { class: 'setup__device', ariaLabel: 'Устройство' }, [
+    el('h2', { class: 'setup__device-title', text: 'Устройство' }),
+    metrics,
+    ...lines,
+  ]);
 }
 
-/** Завершение мастера. */
-async function finishWizard() {
-  await call('setPreferences', { setup_seen: true }).catch(() => {});
+function metric(label, value, sub, fraction) {
+  return el('div', { class: 'setup__metric' }, [
+    el('span', { class: 'setup__metric-label', text: label }),
+    el('span', { class: 'setup__metric-value', text: value }),
+    sub ? el('span', { class: 'setup__metric-sub', text: sub }) : null,
+    fraction == null
+      ? null
+      : el('div', { class: 'setup__meter', ariaHidden: 'true' }, [
+          el('div', {
+            class: 'setup__meter-fill',
+            style: { width: `${Math.round(fraction * 100)}%` },
+          }),
+        ]),
+    fraction == null
+      ? null
+      : el('span', { class: 'setup__metric-sub', text: `занято ${Math.round(fraction * 100)}%` }),
+  ]);
+}
+
+function fact(label, value) {
+  return el('div', { class: 'setup__fact' }, [
+    el('span', { class: 'setup__fact-label', text: label }),
+    el('span', { class: 'setup__fact-value', text: value }),
+  ]);
+}
+
+function choiceColumn() {
+  if (phase === 'working') return workingColumn();
+  if (phase === 'error') return errorColumn();
+  if (phase === 'pick') return pickColumn();
+  return planColumn();
+}
+
+function planColumn() {
+  if (stillDetecting()) {
+    return column(
+      'Смотрим устройство',
+      'Память, диск и runtime считываются сами. Модель появится здесь, отдельный шаг для этого не нужен.',
+      [],
+      [
+        button({ label: 'Подбираем модель', variant: 'primary', disabled: true }),
+        laterButton(),
+      ],
+    );
+  }
+
+  const { model, reason } = recommendedChoice();
+  if (!model) {
+    const go = button({
+      label: 'Перейти к проектам',
+      variant: 'primary',
+      onClick: () => void postpone(),
+    });
+    go.classList.add('setup__primary');
+    return column(
+      'Модель не подобрана',
+      reason || 'В каталоге нет модели с известным размером и оценкой памяти.',
+      [],
+      [go],
+    );
+  }
+
+  const blocked = placementBlocked(model);
+  const lead = blocked
+    ? model.compatibility?.reason || reason
+    : 'Оценка памяти и места на диске позволяет поставить эту модель. Качество перевода эта оценка не измеряет.';
+  const primary = button({
+    label: blocked ? 'Не помещается' : `Скачать ${model.sizeLabel}`,
+    variant: 'primary',
+    disabled: blocked,
+    title: blocked ? model.compatibility?.reason || '' : '',
+    onClick: () => begin(model),
+  });
+  primary.classList.add('setup__primary');
+
+  return column(model.name, lead, modelMeta(model, reason), [
+    primary,
+    button({ label: 'Другая модель', onClick: openPicker }),
+    laterButton(),
+  ]);
+}
+
+function pickColumn() {
+  const models = catalogModels();
+  const selected = models.find((model) => model.id === selectedId) ?? null;
+  const blocked = selected ? placementBlocked(selected) && !selected.installed : false;
+  const list = el('div', { class: 'setup__options', role: 'group', ariaLabel: 'Модели' });
+  const recommendedId = recommendedChoice().model?.id;
+
+  for (const model of models) {
+    const on = model.id === selectedId;
+    const bits = [model.sizeLabel];
+    if (Number.isFinite(model.estimatedRamGb)) bits.push(`ориентир ${model.estimatedRamGb} ГБ RAM`);
+    if (model.installed) bits.push('уже на диске');
+    else if (placementBlocked(model)) bits.push('не помещается');
+    if (model.id === recommendedId) bits.push('подходит по памяти');
+    list.append(
+      el('button', {
+        type: 'button',
+        class: `setup__option${on ? ' is-selected' : ''}`,
+        ariaPressed: on ? 'true' : 'false',
+        onClick: () => {
+          selectedId = model.id;
+          render();
+        },
+      }, [
+        el('span', { class: 'setup__option-name', text: model.name }),
+        el('span', { class: 'setup__option-meta', text: bits.join(' · ') }),
+      ]),
+    );
+  }
+
+  let primaryLabel = 'Перейти к проектам';
+  if (selected?.installed) primaryLabel = 'Продолжить';
+  else if (selected && !blocked) primaryLabel = `Скачать ${selected.sizeLabel}`;
+  else if (blocked) primaryLabel = 'Не помещается';
+
+  const primary = button({
+    label: primaryLabel,
+    variant: 'primary',
+    disabled: blocked,
+    onClick: () => {
+      if (!selected || blocked) {
+        void postpone();
+        return;
+      }
+      begin(selected);
+    },
+  });
+  primary.classList.add('setup__primary');
+
+  return column(
+    'Другая модель',
+    'Список ограничен моделями, которые можно скачать или которые уже стоят на диске.',
+    [list],
+    [
+      primary,
+      button({
+        label: 'К рекомендации',
+        onClick: () => {
+          phase = 'plan';
+          selectedId = recommendedChoice().model?.id || '';
+          render();
+        },
+      }),
+      laterButton(),
+    ],
+  );
+}
+
+function workingColumn() {
+  const model = activeModel;
+  barApi = progressBar(null);
+  barApi.root.setAttribute('role', 'progressbar');
+  barApi.root.setAttribute('aria-valuemin', '0');
+  barApi.root.setAttribute('aria-valuemax', '100');
+  barApi.root.setAttribute('aria-label', 'Загрузка модели');
+  const status = el('p', {
+    class: 'setup__status',
+    role: 'status',
+    ariaLive: 'polite',
+    text: 'Подготовка загрузки…',
+  });
+  const cancel = button({
+    label: 'Отменить загрузку',
+    onClick: () => void cancelDownload(),
+  });
+  cancel.classList.add('setup__cancel');
+  return column(
+    model?.name || 'Загрузка',
+    'Файл сверяется по размеру и SHA-256 до того, как станет рабочей моделью.',
+    [barApi.root, status],
+    [cancel],
+  );
+}
+
+function errorColumn() {
+  const cancelled = /отмен/i.test(errorText);
+  const retry = button({
+    label: 'Повторить',
+    variant: 'primary',
+    disabled: !activeModel,
+    onClick: () => {
+      if (activeModel) begin(activeModel);
+    },
+  });
+  retry.classList.add('setup__primary');
+  return column(
+    cancelled ? 'Загрузка остановлена' : 'Не удалось скачать модель',
+    errorText || 'Загрузка не удалась.',
+    [],
+    [retry, laterButton()],
+  );
+}
+
+function column(title, lead, extra, actions) {
+  const actionRow = el('div', { class: 'setup__actions' }, actions);
+  const primary = actionRow.querySelector('.btn--primary');
+  primary?.classList.add('setup__primary');
+  return el('section', { class: 'setup__choice' }, [
+    el('h1', { class: 'setup__title', id: 'setup-title', text: title }),
+    el('p', { class: 'setup__lead', text: lead }),
+    ...extra,
+    actionRow,
+  ]);
+}
+
+function modelMeta(model, reason) {
+  const hw = store.get('hardware');
+  const nodes = [
+    el('p', { class: 'setup__meta', text: metaLine(model) }),
+    el('p', {
+      class: 'setup__consent',
+      id: 'setup-consent',
+      text: `Лицензия: ${model.license}. Кнопка скачивает закреплённую ревизию. Перед включением сверяются размер и SHA-256.`,
+    }),
+  ];
+  if (reason && !placementBlocked(model)) {
+    nodes.push(el('p', { class: 'setup__reason', text: reason }));
+  }
+  if (hw && !hw.llamaRuntimeAvailable && !model.installed) {
+    nodes.push(
+      el('p', {
+        class: 'setup__note',
+        text: 'Вес можно скачать сейчас. Перевод запустится после установки runtime llama.cpp.',
+      }),
+    );
+  }
+  return nodes;
+}
+
+function metaLine(model) {
+  const bits = [model.sizeLabel];
+  if (Number.isFinite(model.estimatedRamGb)) bits.push(`ориентир ${model.estimatedRamGb} ГБ RAM`);
+  if (model.quantization) bits.push(model.quantization);
+  return bits.join(' · ');
+}
+
+function laterButton(label = 'Позже') {
+  return button({ label, onClick: () => void postpone() });
+}
+
+function openPicker() {
+  const { model, models } = recommendedChoice();
+  selectedId = model?.id || models[0]?.id || '';
+  phase = 'pick';
+  render();
+}
+
+function begin(model) {
+  if (model.installed) {
+    void finish(model.name, true);
+    return;
+  }
+  if (placementBlocked(model)) return;
+  void startDownload(model);
+}
+
+async function startDownload(model) {
+  phase = 'working';
+  activeModel = model;
+  progress = null;
+  errorText = '';
+  render();
+
+  const offProgress = store.on('download_progress', (payload) => {
+    if (payload?.modelId !== model.id) return;
+    progress = payload;
+    paintProgress(payload);
+  });
+  const offDone = store.on('download_done', (payload) => {
+    if (payload?.modelId !== model.id) return;
+    offProgress();
+    offDone();
+    if (payload.ok) {
+      void finish(model.name);
+      return;
+    }
+    phase = 'error';
+    errorText = payload.error || 'Загрузка не удалась.';
+    render();
+  });
+  unsubs.push(offProgress, offDone);
+
+  try {
+    await call('downloadModel', model.id);
+  } catch (error) {
+    offProgress();
+    offDone();
+    phase = 'error';
+    errorText = error.message || 'Загрузка не удалась.';
+    render();
+  }
+}
+
+function paintProgress(payload) {
+  if (!barApi || !root) return;
+  const status = root.querySelector('.setup__status');
+  const cancel = root.querySelector('.setup__cancel');
+  const indeterminate = payload.phase === 'verifying'
+    || payload.phase === 'activating'
+    || !(payload.total > 0);
+  if (indeterminate) {
+    barApi.set(null);
+    barApi.root.removeAttribute('aria-valuenow');
+  } else {
+    const ratio = payload.bytes / payload.total;
+    barApi.set(ratio);
+    barApi.root.setAttribute('aria-valuenow', String(Math.round(ratio * 100)));
+  }
+  if (cancel) cancel.disabled = payload.phase === 'activating';
+  if (status) status.textContent = progressText(payload);
+}
+
+function progressText(payload) {
+  if (payload.phase === 'verifying') return 'Проверяем размер и SHA-256. Отмена ещё доступна.';
+  if (payload.phase === 'activating') return 'Активируем проверенный файл. Отмена уже недоступна.';
+  const got = formatBytes(payload.bytes || 0);
+  const speed = formatSpeed(payload.speedBps);
+  const eta = formatEta(payload.bytes || 0, payload.total || 0, payload.speedBps);
+  if (payload.total > 0) {
+    const parts = [`Получено ${got} из ${formatBytes(payload.total)}`];
+    if (speed) parts.push(speed);
+    if (eta) parts.push(`ещё около ${eta}`);
+    return parts.join(' · ');
+  }
+  return [got === '—' ? 'Получаем файл' : `Получено ${got}`, speed].filter(Boolean).join(' · ');
+}
+
+async function cancelDownload() {
+  try {
+    const data = await call('cancelDownload');
+    if (data && data.accepted === false) {
+      toast('Модель уже активируется. Дождитесь завершения.', 'warning');
+      const cancel = root?.querySelector('.setup__cancel');
+      if (cancel) cancel.disabled = true;
+    }
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function finish(modelName, alreadyInstalled = false) {
+  if (closing) return;
+  closing = true;
   closeWizard();
+  await call('setPreferences', { setup_seen: true }).catch(() => {});
+  await refreshCatalog().catch(() => {});
+  if (modelName && alreadyInstalled) toast(`Модель «${modelName}» уже на диске.`, 'success');
+  else if (modelName) toast(`Модель «${modelName}» проверена и готова.`, 'success');
   router.showPage('projects');
 }
 
-/** Отложить мастер (кроме шага загрузки). */
-async function postponeWizard() {
-  await call('setPreferences', { setup_seen: true }).catch(() => {});
+async function postpone() {
+  if (closing || phase === 'working') return;
+  closing = true;
   closeWizard();
-  toast('Мастер можно пройти позже на странице «Настройки».', 'info');
+  await call('setPreferences', { setup_seen: true }).catch(() => {});
+  toast('Модель можно скачать позже в настройках.', 'info');
+  router.showPage('projects');
 }
 
-/* -------------------------------------------------------------------------
- * Тексты шагов
- * ------------------------------------------------------------------------- */
-
-const renderers = [
-  // Шаг 1: проверка устройства
-  (body, footer) => {
-    body.append(
-      el('h2', { class: 'wizard__title', text: 'Проверка устройства' }),
-      el('p', {
-        class: 'wizard__text',
-        text: 'DotLingo проверит RAM, диск и локальный runtime. Модель подбирается по ресурсам устройства.',
-      }),
-      el('div', { class: 'wizard__wait', id: 'wizard-hw-wait' }, [
-        spinner(),
-        el('span', { text: 'Проверяем устройство…' }),
-      ]),
-    );
-    const next = button({ label: 'Продолжить', variant: 'primary', disabled: true });
-    const postpone = button({ label: 'Отложить', onClick: () => postponeWizard() });
-    footer.append(postpone, next);
-
-    // Устройство могло быть проверено ещё до мастера.
-    if (store.get('hardware')) {
-      next.disabled = false;
-      document.getElementById('wizard-hw-wait')?.remove();
-      next.addEventListener('click', () => showStep(1));
-      return;
-    }
-    call('detectHardware').catch(() => {});
-    unsubs.push(
-      store.on('hardware_detected', () => {
-        document.getElementById('wizard-hw-wait')?.remove();
-        next.disabled = false;
-      })
-    );
-    next.addEventListener('click', () => showStep(1));
-  },
-
-  // Шаг 2: рекомендация
-  (body, footer) => {
-    const hw = store.get('hardware');
-    const recommendation = store.get('recommendation');
-    const model = recommendation?.id
-      ? store.get('models').find((m) => m.id === recommendation.id)
-      : null;
-
-    body.append(
-      el('h2', { class: 'wizard__title', text: 'Рекомендация для этого устройства' }),
-      model
-        ? el('div', { class: 'wizard__recommend' }, [
-            el('strong', { text: model.name }),
-            el('span', { class: 'wizard__muted', text: ` · ${model.sizeLabel}` }),
-            el('p', { class: 'wizard__text', text: recommendation?.reason || '' }),
-          ])
-        : el('p', {
-            class: 'wizard__text',
-            text: 'Подходящая модель не найдена. Можно продолжить без установки и добавить модель позже.',
-          }),
-      el('p', {
-        class: 'wizard__text wizard__muted',
-        text: 'Установка модели необязательна: документы и проекты доступны сразу. Подбор оценивает размещение по ресурсам, не качество перевода.',
-      }),
-    );
-    if (hw) body.append(hardwareSummary(hw));
-
-    footer.append(
-      button({ label: 'Назад', onClick: () => showStep(0) }),
-      model
-        ? button({ label: 'Выбрать модель', variant: 'primary', onClick: () => showStep(2) })
-        : button({ label: 'Пропустить', variant: 'primary', onClick: () => showStep(4) })
-    );
-  },
-
-  // Шаг 3: выбор модели и лицензии
-  (body, footer) => {
-    const models = store
-      .get('models')
-      .filter((m) => m.installState === 'available' || m.installState === 'installed');
-    let selected =
-      store.get('recommendation')?.id && models.some((m) => m.id === store.get('recommendation').id)
-        ? store.get('recommendation').id
-        : models[0]?.id;
-    let consent = false;
-
-    body.append(
-      el('h2', { class: 'wizard__title', text: 'Выбор модели' }),
-      el('p', {
-        class: 'wizard__text',
-        text: 'Загружается закреплённая ревизия; размер и SHA-256 проверяются после скачивания.',
-      }),
-    );
-
-    const list = el('div', { class: 'wizard__models' });
-    const consentRow = el('label', { class: 'wizard__consent' });
-    const error = el('p', { class: 'wizard__error', hidden: true });
-
-    /** Перерисовать список и согласие. */
-    const render = () => {
-      list.replaceChildren();
-      for (const model of models) {
-        const row = el('label', { class: `wizard__model${model.id === selected ? ' is-selected' : ''}` }, [
-          el('input', {
-            type: 'radio',
-            name: 'wizard-model',
-            checked: model.id === selected,
-            onChange: () => {
-              selected = model.id;
-              consent = false;
-              error.hidden = true;
-              render();
-            },
-          }),
-          el('span', { class: 'wizard__model-name', text: model.name }),
-          el('span', { class: 'wizard__model-meta', text: model.sizeLabel }),
-          badge({
-            label:
-              model.installState === 'installed'
-                ? 'Установлена'
-                : model.estimatedRamGb
-                  ? `≈ ${model.estimatedRamGb} ГБ RAM`
-                  : '',
-            tone: model.installState === 'installed' ? 'success' : 'muted',
-          }),
-        ]);
-        list.append(row);
-      }
-
-      const chosen = models.find((m) => m.id === selected);
-      consentRow.replaceChildren();
-      if (chosen && chosen.installState !== 'installed') {
-        consentRow.append(
-          el('input', {
-            type: 'checkbox',
-            checked: consent,
-            onChange: (e) => {
-              consent = e.target.checked;
-              error.hidden = true;
-            },
-          }),
-          el('span', {
-            text: `Ознакомился с лицензией «${chosen.license}» и согласен скачать ${chosen.sizeLabel}.`,
-          }),
-        );
-      }
-    };
-    render();
-    body.append(list, consentRow, error);
-
-    footer.append(
-      button({ label: 'Назад', onClick: () => showStep(1) }),
-      button({ label: 'Отложить установку', onClick: () => showStep(4) }),
-      button({
-        label: 'Скачать выбранную',
-        variant: 'primary',
-        onClick: async () => {
-          const chosen = models.find((m) => m.id === selected);
-          if (!chosen) return;
-          if (chosen.installState === 'installed') {
-            toast('Модель уже установлена.', 'success');
-            showStep(4);
-            return;
-          }
-          if (!consent) {
-            error.textContent = 'Отметьте согласие с лицензией, чтобы продолжить.';
-            error.hidden = false;
-            return;
-          }
-          showStep(3, { model: chosen });
-        },
-      })
-    );
-  },
-
-  // Шаг 4: загрузка
-  (body, footer, extra) => {
-    const model = extra.model;
-    body.append(
-      el('h2', { class: 'wizard__title', text: `Загрузка · ${model?.name ?? ''}` }),
-      el('p', {
-        class: 'wizard__text',
-        text: 'Файл проверяется по размеру и SHA-256 перед активацией. Не закрывайте приложение.',
-      }),
-    );
-    footer.append(
-      button({
-        label: 'Отменить загрузку',
-        onClick: async () => {
-          const [data] = await tryCall('cancelDownload');
-          if (data && data.accepted === false) {
-            toast('Модель уже активируется. Дождитесь завершения.', 'warning');
-          }
-        },
-      })
-    );
-    if (model) {
-      // downloadFlow рисует собственную модалку поверх мастера; по завершении
-      // (успех или ошибка) переходим дальше.
-      const offDone = store.on('download_done', (payload) => {
-        if (payload.modelId !== model.id) return;
-        offDone();
-        if (payload.ok) showStep(4);
-        else {
-          toast(payload.error || 'Загрузка не удалась.', 'error');
-          showStep(2);
-        }
-      });
-      unsubs.push(offDone);
-      downloadFlow(model);
-    }
-  },
-
-  // Шаг 5: готово
-  (body, footer) => {
-    const hw = store.get('hardware');
-    const runtime = hw?.llamaRuntimeAvailable;
-    body.append(
-      el('h2', { class: 'wizard__title', text: 'DotLingo готов' }),
-      el('p', {
-        class: 'wizard__text',
-        text: 'Исходники, проекты и веса моделей хранятся отдельно. Перевод выполняется локально.',
-      }),
-      el('p', {
-        class: 'wizard__text wizard__muted',
-        text: runtime
-          ? 'Runtime llama.cpp найден.'
-          : 'Runtime llama.cpp не найден в текущем окружении. Для перевода нужен установленный runtime и проверенная модель.',
-      }),
-      el('p', {
-        class: 'wizard__text wizard__muted',
-        text: 'OCR для сканированных PDF не устанавливается автоматически.',
-      }),
-    );
-    footer.append(
-      button({ label: 'Готово', variant: 'primary', onClick: () => finishWizard() })
-    );
-  },
-];
-
-/** Краткая сводка устройства для шага 2. */
-function hardwareSummary(hw) {
-  const rows = [
-    ['Устройство', hw.profile],
-    ['CPU', `${hw.cpuThreads} потоков`],
-    ['RAM', `${formatBytes(hw.ramTotalGb * 1024 ** 3)} всего · доступно ${formatBytes(hw.ramAvailableGb * 1024 ** 3)}`],
-    ['Диск', `свободно ${formatBytes(hw.diskFreeGb * 1024 ** 3)}`],
-    ['GPU', hw.gpuNames?.length ? hw.gpuNames.join(', ') : 'не найден'],
-    ['Runtime', hw.llamaRuntimeAvailable ? 'llama.cpp доступен' : 'llama.cpp не найден'],
-  ];
-  return el('div', { class: 'wizard__hw' }, [
-    el('h3', { class: 'wizard__hw-title', text: 'Устройство' }),
-    ...rows.map(([label, value]) =>
-      el('div', { class: 'wizard__hw-row' }, [
-        el('span', { class: 'wizard__hw-label', text: label }),
-        el('span', { text: value }),
-      ])
-    ),
-  ]);
-}
-
-// Мастер запускается самостоятельно (первый импорт из index.js).
-setupWizard().catch((e) => console.error('[wizard]', e));
+setupWizard().catch((error) => console.error('[setup]', error));

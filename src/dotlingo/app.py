@@ -7,6 +7,7 @@ import ctypes
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -16,6 +17,9 @@ from dotlingo.api import Api
 from dotlingo.paths import app_resource
 
 WINDOW_TITLE = "DotLingo · локальный перевод документов"
+
+# Без своего AppUserModelID панель задач группирует окно с python.exe и рисует его значок.
+APP_USER_MODEL_ID = "DotLingo.Desktop"
 
 # Официальный Evergreen-загрузчик WebView2 (редирект на актуальный Setup.exe).
 WEBVIEW2_BOOTSTRAPPER = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
@@ -119,6 +123,68 @@ def _index_url() -> str:
     return str(app_resource("web/index.html"))
 
 
+def _set_windows_app_id() -> None:
+    """Отвязать процесс от иконки интерпретатора до создания окна."""
+    if sys.platform != "win32":
+        return
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+
+
+def _on_ui_thread(native, action) -> None:
+    """Выполнить действие на потоке окна WinForms."""
+    from System.Windows.Forms import MethodInvoker
+
+    if bool(native.InvokeRequired):
+        native.Invoke(MethodInvoker(action))
+    else:
+        action()
+
+
+def _apply_window_icon(window) -> None:
+    """Поставить значок DotLingo. На Windows pywebview иначе берёт иконку python.exe."""
+    if sys.platform != "win32":
+        return
+    icon_path = app_resource("assets/app_icon.ico")
+    native = getattr(window, "native", None)
+    if native is None or not icon_path.is_file():
+        return
+
+    def assign() -> None:
+        from System.Drawing import Icon
+
+        native.Icon = Icon(str(icon_path))
+
+    try:
+        _on_ui_thread(native, assign)
+    except Exception:
+        traceback.print_exc()
+
+
+def _enable_text_menu(window) -> None:
+    """Правый клик: Копировать, Вставить, Выделить всё. pywebview включает меню только в debug."""
+    if sys.platform != "win32":
+        return
+    for _ in range(50):
+        native = getattr(window, "native", None)
+        webview_control = getattr(native, "webview", None)
+        core = None
+        if webview_control is not None:
+            try:
+                core = webview_control.CoreWebView2
+            except Exception:
+                core = None
+        if native is not None and core is not None:
+            def assign(settings=core.Settings) -> None:
+                settings.AreDefaultContextMenusEnabled = True
+
+            try:
+                _on_ui_thread(native, assign)
+            except Exception:
+                traceback.print_exc()
+            return
+        time.sleep(0.1)
+
+
 def _on_started(api: Api) -> None:
     # Проверка устройства кэшируется; автоматически запускается только один раз.
     if api.hardware is None:
@@ -160,6 +226,7 @@ def main() -> None:
     if not _ensure_webview2():
         sys.exit(1)
 
+    _set_windows_app_id()
     api = Api(args.data_dir)
     window = webview.create_window(
         WINDOW_TITLE,
@@ -168,6 +235,8 @@ def main() -> None:
         width=1280,
         height=820,
         min_size=(1020, 680),
+        # pywebview по умолчанию ставит user-select: none на всю страницу.
+        text_select=True,
     )
     api.attach_window(window)
 
@@ -175,6 +244,11 @@ def main() -> None:
         # Подписчик события closed обязан вернуть hashable; возвращаем None.
         api.closeGracefully()
 
+    def _on_shown() -> None:
+        _apply_window_icon(window)
+        _enable_text_menu(window)
+
+    window.events.shown += _on_shown
     window.events.closed += _on_closed
     try:
         # http_server=True обязателен: ES-модули не грузятся с file:// (CORS).

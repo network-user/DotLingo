@@ -110,6 +110,7 @@ export function modal(opts = {}) {
     body,
     actions = [],
     dismissable = true,
+    closeTitle = 'Закрыть',
     onClose,
   } = opts;
 
@@ -138,8 +139,8 @@ export function modal(opts = {}) {
     el('button', {
       class: 'modal__close',
       type: 'button',
-      title: 'Закрыть',
-      'aria-label': 'Закрыть',
+      title: closeTitle,
+      'aria-label': closeTitle,
       onClick: requestClose,
     }, [icon('close')]),
   ]);

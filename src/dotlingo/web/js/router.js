@@ -10,6 +10,7 @@ const pages = new Map();
 /** Заголовки по умолчанию для известных имён страниц (волна 2 может
  * задать свои через def.title). */
 const PAGE_TITLES = {
+  chat: 'Диалог',
   projects: 'Проекты',
   documents: 'Документы',
   review: 'Проверка',

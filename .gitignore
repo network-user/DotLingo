@@ -1,12 +1,46 @@
+# Python
 __pycache__/
-.venv/
-*.egg-info/
 *.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Проверки и кэши инструментов
 .pytest_cache/
 .pytest-work-*/
 .pytest-tmp-*/
 .ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Сборка
 build/
 dist/
 *.spec-generated
+
+# Локальные данные приложения и прогоны
 _smoke-data/
+*.gguf
+
+# PyCharm и прочие IDE
+.idea/
+.vscode/
+*.iml
+
+# ОС
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Секреты
+.env
+.env.*
+!.env.example

@@ -5,6 +5,7 @@
  */
 
 import { call, tryCall } from '../bridge.js';
+import { catalogFailure, refreshCatalog } from '../device.js';
 import * as store from '../store.js';
 import * as router from '../router.js';
 import {
@@ -14,9 +15,7 @@ import {
   toast,
   emptyState,
   modal,
-  progressBar,
   spinner,
-  formatBytes,
   icon,
 } from '../components.js';
 
@@ -146,15 +145,15 @@ function paint(host, { loading = false } = {}) {
 
 /** Загружает каталог и перерисовывает страницу. */
 async function refresh(host) {
-  const [data, err] = await tryCall('listModels');
+  const ok = await refreshCatalog();
   if (hostRef !== host || !host.isConnected) return;
-  if (err) {
+  if (!ok) {
     if (!(store.get('models') || []).length) {
       host.replaceChildren(
         emptyState({
           iconName: 'error',
           title: 'Не удалось загрузить каталог моделей',
-          text: err.message,
+          text: catalogFailure() || 'Не удалось прочитать каталог.',
         })
       );
       return;
@@ -163,10 +162,6 @@ async function refresh(host) {
     return;
   }
   loaded = true;
-  store.patch({
-    models: data?.models ?? [],
-    recommendation: data?.recommendation ?? null,
-  });
   paint(host);
 }
 
@@ -429,94 +424,7 @@ async function runDetect() {
   }
 }
 
-/* -------------------------------------------------------------------------
- * Поток загрузки модели (переиспользуется мастером первого запуска)
- * ------------------------------------------------------------------------- */
-
-/**
- * Запускает загрузку модели и открывает модалку прогресса.
- * @param {object} model - карточка модели из listModels.
- */
-export async function downloadFlow(model) {
-  try {
-    await call('downloadModel', model.id);
-  } catch (e) {
-    toast(e.message, 'error');
-    return;
-  }
-
-  const bar = progressBar(null);
-  const status = el('p', { class: 'download-status', text: 'Подготовка загрузки…' });
-  const unsubs = [];
-
-  unsubs.push(
-    store.on('download_progress', (p) => {
-      if (p?.modelId === model.id) update(p);
-    })
-  );
-
-  unsubs.push(
-    store.on('download_done', (p) => {
-      if (p?.modelId !== model.id) return;
-      dialog.close();
-      if (p.ok) toast('Модель загружена и проверена', 'success');
-      else toast(p.error || 'Загрузка не удалась', 'error');
-    })
-  );
-
-  const dialog = modal({
-    title: `Загрузка · ${model.name}`,
-    body: [
-      el('div', { class: 'stack' }, [
-        el('p', {
-          class: 'download-note',
-          text: 'Файл проверяется по размеру и SHA-256 перед активацией.',
-        }),
-        bar.root,
-        status,
-      ]),
-    ],
-    actions: [{ label: 'Отменить', onClick: () => void doCancel() }],
-    onClose: () => unsubs.forEach((unsub) => unsub()),
-  });
-
-  const cancelBtn = dialog.root.querySelector('.modal__footer .btn');
-
-  /** Обновление прогресса по фазам. */
-  function update(p) {
-    if (p.phase === 'verifying') {
-      bar.set(null);
-      status.textContent = 'Проверка SHA-256 · отмена ещё доступна';
-      return;
-    }
-    if (p.phase === 'activating') {
-      bar.set(null);
-      status.textContent = 'Активация файла · отмена больше недоступна';
-      if (cancelBtn) cancelBtn.disabled = true;
-      return;
-    }
-    if (p.total > 0) {
-      bar.set(p.bytes / p.total);
-      status.textContent = `Получено ${formatBytes(p.bytes)} из ${formatBytes(p.total)} · ETA не показывается`;
-    } else {
-      bar.set(null);
-      status.textContent = `Получено ${formatBytes(p.bytes)} · размер неизвестен · ETA не показывается`;
-    }
-  }
-
-  /** Отмена загрузки, пока она доступна. */
-  async function doCancel() {
-    try {
-      const data = await call('cancelDownload');
-      if (data && data.accepted === false) {
-        status.textContent = 'Модель уже активируется. Отмена недоступна.';
-        if (cancelBtn) cancelBtn.disabled = true;
-      }
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-  }
-}
+export { downloadFlow } from '../download-ui.js';
 
 /* -------------------------------------------------------------------------
  * Модалка импорта своей модели

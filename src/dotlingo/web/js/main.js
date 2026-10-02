@@ -7,9 +7,11 @@ import * as store from './store.js';
 import * as router from './router.js';
 import * as components from './components.js';
 import { icon } from './icons.js';
+import { refreshCatalog } from './device.js';
+import { mountDownloadDock } from './download-ui.js';
 
-/** Порядок страниц для Ctrl+1..7 (совпадает с навигацией в index.html). */
-const PAGE_ORDER = ['projects', 'documents', 'review', 'queue', 'models', 'glossary', 'settings'];
+/** Порядок страниц для Ctrl+1..8 (совпадает с навигацией в index.html). */
+const PAGE_ORDER = ['chat', 'projects', 'documents', 'review', 'queue', 'models', 'glossary', 'settings'];
 
 const DEFAULT_PAGE = 'projects';
 const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая' };
@@ -49,16 +51,16 @@ async function initBridgeData() {
     store.set('demo', true);
   }
 
-  const [prefs] = await Promise.all([tryCall('getPreferences')]);
+  // tryCall возвращает пару [data, error], не сам ответ.
+  const [[prefs]] = await Promise.all([tryCall('getPreferences')]);
   const theme = prefs?.theme === 'light' ? 'light' : 'dark';
   store.patch({ theme, reduceMotion: Boolean(prefs?.reduce_motion) });
   applyTheme(theme);
 
-  const [projects, active, hardware, models, languages, dirs] = await Promise.all([
+  const [[projects], [active], [hardware], [languages], [dirs]] = await Promise.all([
     tryCall('listProjects'),
     tryCall('getActiveProject'),
     tryCall('getHardware'),
-    tryCall('listModels'),
     tryCall('getLanguages'),
     tryCall('getDataDirs'),
   ]);
@@ -66,13 +68,11 @@ async function initBridgeData() {
   store.patch({
     projects: projects ?? [],
     activeProject: active ?? null,
-    hardware,
-    models: models?.models ?? [],
-    recommendation: models?.recommendation ?? null,
+    hardware: hardware ?? null,
     languages: languages ?? {},
     dataDirs: dirs ?? null,
   });
-
+  await refreshCatalog();
   renderDeviceStatus(store.get('hardware'));
 }
 
@@ -90,6 +90,9 @@ const pushHandlers = {
     store.set('hardware', payload);
     renderDeviceStatus(payload);
     store.emit('hardware_detected', payload);
+    // listModels на старте часто уходит раньше, чем проверка устройства.
+    // Без повторного запроса рекомендация так и остаётся пустой.
+    void refreshCatalog();
   },
   documents_imported(payload) {
     store.emit('documents_imported', payload);
@@ -102,6 +105,12 @@ const pushHandlers = {
   },
   download_done(payload) {
     store.emit('download_done', payload);
+  },
+  chat_token(payload) {
+    store.emit('chat_token', payload);
+  },
+  chat_done(payload) {
+    store.emit('chat_done', payload);
   },
   model_verified(payload) {
     store.emit('model_verified', payload);
@@ -152,6 +161,8 @@ function wireShell() {
 
   // Первичное состояние индикатора устройства.
   renderDeviceStatus(null);
+  const footer = document.querySelector('.sidebar__footer');
+  if (footer) mountDownloadDock(footer);
 }
 
 /** Применяет тему к <html data-theme> и обновляет кнопку-переключатель. */
@@ -203,7 +214,7 @@ function wireKeyboard() {
       components.handleEscape();
       return;
     }
-    // Ctrl+1..7 - быстрый переход по страницам.
+    // Ctrl+1..8 - быстрый переход по страницам.
     if (!e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
     const index = Number(e.key) - 1;
     if (!Number.isInteger(index) || index < 0 || index >= PAGE_ORDER.length) return;

@@ -65,6 +65,8 @@ const PATHS = {
     '<circle cx="12" cy="12" r="8.5"/>' +
     '<path d="M12 11v5M12 8h.01"/>',
   'arrow-right': '<path d="M4.5 12h15M13.5 6l6 6-6 6"/>',
+  message:
+    '<path d="M5 6.5h14a1.5 1.5 0 0 1 1.5 1.5v7.2a1.5 1.5 0 0 1-1.5 1.5H9.2L5 20.2v-3.5A1.5 1.5 0 0 1 3.5 15.2V8A1.5 1.5 0 0 1 5 6.5z"/>',
   globe:
     '<circle cx="12" cy="12" r="8.5"/>' +
     '<path d="M3.5 12h17"/>' +

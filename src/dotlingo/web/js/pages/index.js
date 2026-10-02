@@ -3,6 +3,7 @@
  * router.registerPage(...).
  */
 
+import './chat.js';
 import './projects.js';
 import './documents.js';
 import './queue.js';

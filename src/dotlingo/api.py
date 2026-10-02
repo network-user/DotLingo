@@ -34,6 +34,12 @@ from dotlingo.models import (
 )
 from dotlingo.paths import user_data_root
 from dotlingo.preferences import load_preferences, save_preferences
+from dotlingo.scratch import (
+    SCRATCH_LIMIT,
+    ScratchRejected,
+    ScratchTranslator,
+    load_model_for_scratch,
+)
 from dotlingo.storage import ProjectStore, delete_project, list_projects
 from dotlingo.task_queue import TaskQueue, build_chunks
 
@@ -64,6 +70,21 @@ def _format_size(size: int | float | None) -> str:
     if size >= 1024**3:
         return f"{size / 1024**3:.2f} ГБ"
     return f"{size / 1024**2:.0f} МБ"
+
+
+def _scratch_pairs(value: Any) -> list[tuple[str, str]]:
+    """Последние две пары диалога как контекст тона, не как инструкция."""
+    if not isinstance(value, list):
+        return []
+    pairs: list[tuple[str, str]] = []
+    for item in value[-2:]:
+        if not isinstance(item, dict):
+            continue
+        source = " ".join(str(item.get("source") or "").split())[:220]
+        translation = " ".join(str(item.get("translation") or "").split())[:220]
+        if source and translation:
+            pairs.append((source, translation))
+    return pairs
 
 
 def _runtime_available() -> bool:
@@ -207,6 +228,7 @@ class Api:
         self._download_cancel: DownloadCancellation | None = None
         self._closing = False
         self.hardware, self._hardware_detected_at = _load_hardware_cache(self.data_dir)
+        self._scratch = ScratchTranslator(self.models_dir, self._push, self._document_busy)
         preferences = load_preferences(self.preferences_root)
         self._preferences = preferences
         last = preferences.get("last_project") or ""
@@ -246,6 +268,9 @@ class Api:
             )
             self.project_queues[key] = queue
         return queue
+
+    def _document_busy(self) -> bool:
+        return any(queue.busy for queue in self.project_queues.values())
 
     def _on_task_event(self, store: ProjectStore, event: dict[str, Any]) -> None:
         task = None
@@ -632,6 +657,8 @@ class Api:
                 return _err("Документ не найден.", "not_found")
         task_ids: list[str] = []
         warnings: list[dict[str, Any]] = []
+        # Диалог держит ту же модель в памяти. Перед документом её нужно отпустить.
+        self._scratch.close()
         try:
             queue = self._queue_for(store)
             for document in documents:
@@ -747,6 +774,7 @@ class Api:
                     "quantization": entry.get("quantization") or "",
                     "testedOnWindows": bool(entry.get("tested_on_windows")),
                     "languageCodes": list(supported_languages(model)),
+                    "promptStyle": entry.get("prompt_style") or "general",
                     "uiDescription": entry.get("ui_description") or "",
                     "tier": entry.get("tier") or "",
                     "uiDetails": entry.get("ui_details") or "",
@@ -1044,6 +1072,64 @@ class Api:
             }
         )
 
+    # ------------------------------------------------------------------ scratch dialog
+
+    def askScratch(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Один ход диалога без проекта. Ответ приходит событиями chat_token и chat_done."""
+        if not isinstance(data, dict):
+            return _err("Некорректные данные диалога.")
+        text = str(data.get("text") or "").strip()
+        if not text:
+            return _err("Введите текст.", "empty")
+        if len(text) > SCRATCH_LIMIT:
+            return _err(
+                f"Фрагмент длиннее {SCRATCH_LIMIT} знаков. Для большого текста создайте проект.",
+                "too_long",
+            )
+        model_id = str(data.get("modelId") or "").strip()
+        source = str(data.get("sourceLang") or "auto").strip() or "auto"
+        target = str(data.get("targetLang") or "").strip()
+        mode = str(data.get("mode") or "translate").strip() or "translate"
+        if mode not in ("translate", "ask"):
+            return _err("Неизвестный режим диалога.", "mode")
+        if mode == "translate" and not target:
+            return _err("Выберите язык перевода.", "no_target")
+        if mode == "translate" and source != "auto" and source == target:
+            return _err("Язык оригинала и перевода должны различаться.", "same_language")
+        try:
+            model = load_model_for_scratch(model_id, self.models_dir)
+        except ScratchRejected as exc:
+            return _err(str(exc), exc.code)
+        if mode == "ask" and model.get("prompt_style") == "hy-mt2":
+            return _err(
+                "Эта модель переводит фрагменты и не ведёт свободный разговор.",
+                "mode",
+            )
+        if not installed(model, self.models_dir):
+            return _err("Сначала скачайте модель.", "model_missing")
+        if not _runtime_available():
+            return _err(
+                "В этой сборке не найден llama-cpp-python. "
+                "Вес модели уже можно хранить, перевод без runtime не запустится.",
+                "runtime_missing",
+            )
+        if mode == "translate":
+            if source != "auto" and not supports_language(model, source):
+                return _err("Модель не перечисляет исходный язык.", "language_unsupported")
+            if not supports_language(model, target):
+                return _err("Модель не перечисляет язык перевода.", "language_unsupported")
+        previous = _scratch_pairs(data.get("previous"))
+        context = str(data.get("context") or "").strip()[:800]
+        try:
+            request_id = self._scratch.submit(model, text, source, target, previous, context, mode)
+        except ScratchRejected as exc:
+            return _err(str(exc), exc.code)
+        return _ok({"requestId": request_id})
+
+    def cancelScratch(self) -> dict[str, Any]:
+        self._scratch.cancel()
+        return _ok({"accepted": True})
+
     # ------------------------------------------------------------------ shutdown
 
     def closeGracefully(self) -> dict[str, Any]:
@@ -1057,6 +1143,7 @@ class Api:
         for worker in workers:
             if worker.is_alive():
                 worker.join(timeout=3)
+        self._scratch.close()
         for queue in self.project_queues.values():
             queue.close(timeout=1)
         return _ok(None)

@@ -185,6 +185,58 @@
   border-top: 1px solid var(--hairline);
 }
 
+.download-dock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  text-align: left;
+  color: var(--text);
+  background: var(--surface-hover);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.download-dock__icon {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.download-dock__icon .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.download-dock__copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.download-dock__name,
+.download-dock__meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.download-dock__name {
+  font-size: var(--fs-small);
+  font-weight: 600;
+}
+
+.download-dock__meta {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.download-dock.is-error .download-dock__meta {
+  color: var(--error);
+}
+
 .theme-toggle {
   display: flex;
   align-items: center;
@@ -316,6 +368,12 @@
   overflow-x: hidden;
   padding: 6px var(--sp-5) var(--sp-5);
   scrollbar-gutter: stable;
+}
+
+.page-scroll:has(.chat) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .page {

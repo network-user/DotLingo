@@ -9,14 +9,25 @@ import * as router from '../router.js';
 import {
   el,
   button,
-  badge,
   toast,
   spinner,
-  formatBytes,
 } from '../components.js';
+import { downloadFlow } from './models.js';
+import {
+  formatGb,
+  gpuSummary,
+  placementBlocked,
+  ramUsedFraction,
+  recommendedChoice,
+  refreshCatalog,
+  threadNote,
+} from '../device.js';
 
-/** @type {(() => void)|null} отписка от hardware_detected */
-let unsubHardware = null;
+/** @type {HTMLElement|null} */
+let pageHost = null;
+
+/** @type {Array<() => void>} */
+let unsubs = [];
 
 /* -------------------------------------------------------------------------
  * Хелперы
@@ -107,7 +118,7 @@ function saveButton(size) {
  * ------------------------------------------------------------------------- */
 
 function render(host) {
-  unsubHardware?.();
+  pageHost = host;
   host.append(
     el('div', { class: 'st-page stack' }, [
       el('div', { class: 'page-loading' }, [spinner('lg')]),
@@ -347,12 +358,19 @@ function projectPanel(project) {
  * Панель устройства
  * ------------------------------------------------------------------------- */
 
-/** Строка «метка — значение» в панели устройства. */
+/** Строка «метка / значение» в панели устройства. */
 function infoRow(label, value) {
   return el('div', { class: 'st-info-row' }, [
     el('span', { class: 'st-info-row__label text-secondary', text: label }),
     el('span', { class: 'st-info-row__value', text: value }),
   ]);
+}
+
+/** Перерисовать только блок устройства, не сбрасывая форму проекта. */
+function repaintDevice() {
+  const current = pageHost?.querySelector('.st-device');
+  if (!current || !pageHost.isConnected) return;
+  current.replaceWith(devicePanel());
 }
 
 /** Идёт ли повторная проверка устройства. */
@@ -374,13 +392,6 @@ function formatDateTime(iso) {
   }
 }
 
-/** Тон бейджа по профилю устройства. */
-function profileTone(profile) {
-  if (profile && profile.startsWith('мощное')) return 'success';
-  if (profile && profile.startsWith('слабое')) return 'warning';
-  return 'muted';
-}
-
 /** Горизонтальный измеритель (доля 0..1). */
 function meter(fraction) {
   const clamped = Math.min(1, Math.max(0, Number.isFinite(fraction) ? fraction : 0));
@@ -395,44 +406,110 @@ function meter(fraction) {
 async function rerunDetection() {
   if (hwChecking) return;
   hwChecking = true;
-  document.querySelectorAll('.st-hw-rerun').forEach((btn) => {
-    btn.disabled = true;
-  });
-  document.querySelectorAll('.st-hw-body').forEach((body) => {
-    body.replaceChildren(
-      el('div', { class: 'st-hw-checking' }, [
-        spinner(),
-        el('span', { class: 'text-secondary', text: 'Проверяем устройство… несколько секунд.' }),
-      ])
-    );
-  });
+  repaintDevice();
   try {
     await call('detectHardware');
   } catch (e) {
     hwChecking = false;
     toast(e.message, 'error');
-    const host = document.getElementById('page-host');
-    if (host) void refresh(host);
+    repaintDevice();
   }
 }
 
-/** Панель «Устройство»: профиль, ресурсы, runtime и повторная проверка. */
+/** Одна цифра замера: подпись, значение, пояснение, необязательный измеритель. */
+function metric(label, value, sub, fraction) {
+  return el('div', { class: 'st-metric' }, [
+    el('span', { class: 'st-metric__label', text: label }),
+    el('span', { class: 'st-metric__value', text: value }),
+    sub ? el('span', { class: 'st-metric__sub', text: sub }) : null,
+    fraction == null ? null : meter(fraction),
+  ]);
+}
+
+/** Рекомендованная модель и действие: скачать, открыть каталог или отметить, что вес уже стоит. */
+function fitBlock() {
+  const { model, reason } = recommendedChoice();
+  const title = el('h3', { class: 'st-fit__title', text: 'Модель для этого устройства' });
+  if (!store.get('hardware')) {
+    return el('div', { class: 'st-fit' }, [
+      title,
+      el('p', { class: 'st-fit__reason', text: 'Сначала нужна проверка устройства.' }),
+    ]);
+  }
+  if (store.get('recommendation') == null) {
+    return el('div', { class: 'st-fit' }, [
+      title,
+      el('p', { class: 'st-fit__reason', text: 'Сопоставляем каталог с памятью и диском.' }),
+    ]);
+  }
+  if (!model) {
+    return el('div', { class: 'st-fit' }, [
+      title,
+      el('p', {
+        class: 'st-fit__reason',
+        text: reason || 'В каталоге нет модели с известным размером и оценкой памяти.',
+      }),
+      button({
+        label: 'Открыть каталог',
+        variant: 'ghost',
+        onClick: () => router.showPage('models'),
+      }),
+    ]);
+  }
+
+  const blocked = placementBlocked(model) && !model.installed;
+  const nodes = [
+    title,
+    el('p', { class: 'st-fit__name', text: model.name }),
+    el('p', {
+      class: 'st-fit__reason',
+      text: blocked
+        ? model.compatibility?.reason || reason
+        : reason || `Лицензия: ${model.license}.`,
+    }),
+  ];
+  if (model.installed) {
+    nodes.push(el('p', { class: 'st-fit__status', text: 'Уже на диске.' }));
+  } else if (blocked) {
+    nodes.push(
+      button({
+        label: 'Открыть каталог',
+        variant: 'ghost',
+        onClick: () => router.showPage('models'),
+      }),
+    );
+  } else {
+    const download = button({
+      label: `Скачать ${model.sizeLabel}`,
+      variant: 'primary',
+      onClick: () => void downloadFlow(model),
+    });
+    nodes.push(download);
+    nodes.push(
+      el('p', {
+        class: 'st-fit__status',
+        text: `Лицензия: ${model.license}. Файл проверяется по размеру и SHA-256.`,
+      }),
+    );
+  }
+  return el('div', { class: 'st-fit' }, nodes);
+}
+
+/** Панель «Устройство»: замеры, runtime и модель, которую можно поставить. */
 function devicePanel() {
   const hw = store.get('hardware');
-
   const rerunButton = button({
-    label: hw ? 'Проверить снова' : 'Проверить устройство',
+    label: hwChecking ? 'Проверяем…' : hw ? 'Проверить снова' : 'Проверить устройство',
     variant: 'ghost',
     iconName: 'refresh',
     disabled: hwChecking,
     onClick: () => void rerunDetection(),
   });
-  rerunButton.classList.add('st-hw-rerun');
 
   const header = el('header', { class: 'panel__header' }, [
     el('div', {}, [
       el('h2', { class: 'panel__title', text: 'Устройство' }),
-      hw && hw.detectedAt
+      hw?.detectedAt
         ? el('span', {
             class: 'st-hw__stamp text-tertiary',
             text: `проверено ${formatDateTime(hw.detectedAt)}`,
@@ -443,79 +520,57 @@ function devicePanel() {
   ]);
 
   let body;
-  if (!hw) {
+  if (hwChecking) {
+    body = el('div', { class: 'st-hw-checking' }, [
+      spinner(),
+      el('span', { class: 'text-secondary', text: 'Считываем память, диск и runtime.' }),
+    ]);
+  } else if (!hw) {
     body = el('div', { class: 'st-hw-body st-hw-body--empty' }, [
       el('p', {
         class: 'st-muted',
-        text: 'Устройство ещё не проверено. Проверка локальная: RAM, диск, CPU, GPU и runtime llama.cpp.',
+        text: 'Проверка локальная: RAM, диск, процессор, NVIDIA и runtime llama.cpp.',
       }),
     ]);
   } else {
-    const gpus = (hw.gpuNames ?? []).map((name, index) => {
-      const vram = (hw.gpuVramGb ?? [])[index];
-      const free = (hw.gpuVramFreeGb ?? [])[index];
-      const vramText = [
-        Number.isFinite(vram) && vram > 0 ? `VRAM ${formatBytes(vram * 1024 ** 3)}` : '',
-        Number.isFinite(free) && free >= 0 ? `свободно ${formatBytes(free * 1024 ** 3)}` : '',
-      ].filter(Boolean).join(', ');
-      return el('div', { class: 'st-info-row' }, [
-        el('span', {
-          class: 'st-info-row__label text-secondary',
-          text: index === 0 ? 'GPU' : '·',
-        }),
-        el('span', { class: 'st-info-row__value' }, [
-          el('span', { text: name }),
-          vramText
-            ? el('span', { class: 'text-tertiary', text: ` · ${vramText}` })
-            : null,
-        ]),
-      ]);
-    });
-
-    const ramUsed = hw.ramTotalGb > 0 ? (hw.ramTotalGb - hw.ramAvailableGb) / hw.ramTotalGb : 0;
-
+    const used = ramUsedFraction(hw);
     body = el('div', { class: 'st-hw-body' }, [
-      el('div', { class: 'st-hw-profile' }, [
-        badge({ label: hw.profile || 'профиль не определён', tone: profileTone(hw.profile) }),
-        el('span', {
-          class: 'text-tertiary',
-          text: hw.llamaRuntimeAvailable ? 'runtime доступен' : 'runtime не найден',
-        }),
+      el('div', { class: 'st-metrics' }, [
+        metric(
+          'RAM свободно',
+          formatGb(hw.ramAvailableGb),
+          Number.isFinite(hw.ramTotalGb)
+            ? `из ${formatGb(hw.ramTotalGb)}${used == null ? '' : `, занято ${Math.round(used * 100)}%`}`
+            : '',
+          used,
+        ),
+        metric('Диск свободен', formatGb(hw.diskFreeGb), 'каталог моделей'),
+        metric(
+          'CPU',
+          hw.cpuThreads ? String(hw.cpuThreads) : '—',
+          'логических процессоров',
+        ),
       ]),
-      infoRow('CPU', `${hw.cpuThreads} логических потоков`),
-      el('div', { class: 'st-info-row st-info-row--stack' }, [
-        el('span', { class: 'st-info-row__label text-secondary', text: 'RAM' }),
-        meter(ramUsed),
-        el('span', {
-          class: 'st-info-row__value',
-          text: `занято ${Math.round(ramUsed * 100)}% · доступно ${
-            formatBytes(hw.ramAvailableGb * 1024 ** 3)
-          } из ${formatBytes(hw.ramTotalGb * 1024 ** 3)}`,
-        }),
-      ]),
-      infoRow('Диск', `свободно ${formatBytes(hw.diskFreeGb * 1024 ** 3)}`),
-      gpus.length > 0 ? el('div', { class: 'st-hw-gpus' }, gpus) : infoRow('GPU', 'не найден'),
-      infoRow('Runtime llama.cpp', hw.llamaRuntimeAvailable ? 'доступен' : 'не найден'),
+      infoRow('GPU', gpuSummary(hw)),
+      !(hw.gpuNames ?? []).length
+        ? el('p', { class: 'st-hw__note text-tertiary', text: 'Проверка смотрит только NVIDIA.' })
+        : null,
       infoRow(
-        'GPU offload',
-        hw.llamaGpuOffloadAvailable
-          ? 'слои по свободной VRAM, иначе CPU'
-          : 'недоступен, перевод на CPU',
+        'Runtime',
+        hw.llamaRuntimeAvailable ? 'llama.cpp доступен' : 'llama.cpp не установлен',
       ),
       !hw.llamaRuntimeAvailable
         ? el('p', {
             class: 'st-hw__hint',
-            text: 'Для перевода установите llama-cpp-python (см. docs/LOCAL_SETUP.md) и проверьте устройство снова.',
+            text: 'Перевод запустится после установки runtime llama.cpp. Вес модели можно хранить и без него.',
           })
         : null,
-      el('p', {
-        class: 'st-hw__note text-tertiary',
-        text: 'Проверка локальная и не выходит в сеть. Повторите её после смены оборудования или установки runtime.',
-      }),
+      el('p', { class: 'st-hw__note text-tertiary', text: threadNote() }),
+      fitBlock(),
     ]);
   }
 
-  return el('section', { class: 'panel' }, [header, body]);
+  return el('section', { class: 'panel st-device' }, [header, body]);
 }
 
 /* -------------------------------------------------------------------------
@@ -635,18 +690,30 @@ function actions() {
  * ------------------------------------------------------------------------- */
 
 function destroy() {
-  unsubHardware?.();
-  unsubHardware = null;
+  unsubs.forEach((off) => off());
+  unsubs = [];
+  pageHost = null;
+  hwChecking = false;
 }
 
-/** Подписка на завершение проверки устройства; навешивается после render. */
+/** Подписки на устройство и каталог. Форму проекта не перерисовывают. */
 function wireHardwareEvents(host) {
-  unsubHardware?.();
-  unsubHardware = store.on('hardware_detected', () => {
-    hwChecking = false;
-    if (!host.isConnected) return;
-    void refresh(host);
-  });
+  unsubs.forEach((off) => off());
+  unsubs = [
+    store.on('hardware_detected', () => {
+      hwChecking = false;
+      if (!host.isConnected) return;
+      repaintDevice();
+    }),
+    store.on('models_refreshed', () => {
+      if (!host.isConnected || hwChecking) return;
+      repaintDevice();
+    }),
+    store.on('download_done', () => {
+      if (!host.isConnected) return;
+      void refreshCatalog();
+    }),
+  ];
 }
 
 router.registerPage('settings', {

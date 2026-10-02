@@ -61,6 +61,12 @@ class TaskQueue:
         self._lock = threading.RLock()
         self._cancelled: set[str] = set()
 
+    @property
+    def busy(self) -> bool:
+        """Идёт перевод документа. Тёплый процесс между задачами сюда не входит."""
+        with self._lock:
+            return self._current_task is not None
+
     def start(self) -> None:
         with self._lock:
             if self._worker and self._worker.is_alive():
