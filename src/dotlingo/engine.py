@@ -29,12 +29,14 @@ def _worker_main(
     context_size: int,
     threads: int,
     gpu_layers: int,
+    sampling: dict[str, Any],
     requests: Any,
     responses: Any,
     paused: Any,
     cancelled: Any,
     stop_sequences: tuple[str, ...] | None,
     append_no_think: bool,
+    user_only: bool,
 ) -> None:
     """Load untrusted data weights in a child process and expose only text requests."""
     try:
@@ -52,24 +54,30 @@ def _worker_main(
         responses.put({"type": "startup_error", "message": _safe_backend_error(exc)})
         return
 
+    temperature = float(sampling.get("temperature", 0.15))
+    top_p = float(sampling.get("top_p", 0.85))
+    top_k = int(sampling.get("top_k", 40))
+    repeat_penalty = float(sampling.get("repeat_penalty", 1.05))
+
     while True:
         request = requests.get()
         if request is None:
             return
         try:
-            messages = [
-                {"role": "system", "content": request["system"]},
-                {
-                    "role": "user",
-                    "content": request["user"] + ("\n/no_think" if append_no_think else ""),
-                },
-            ]
+            user = request["user"] + ("\n/no_think" if append_no_think else "")
+            messages: list[dict[str, str]] = []
+            system = request.get("system") or ""
+            if system and not user_only:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": user})
             chunks: list[str] = []
             stream = model.create_chat_completion(
                 messages=messages,
                 stream=True,
-                temperature=0.15,
-                top_p=0.85,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                repeat_penalty=repeat_penalty,
                 max_tokens=request["max_tokens"],
                 stop=list(stop_sequences) if stop_sequences else None,
             )
@@ -116,6 +124,11 @@ def _safe_backend_error(exc: Exception) -> str:
     return "Ошибка локальной модели. Повторите фрагмент; предыдущие завершённые фрагменты сохранены."
 
 
+def _memory_failure(message: str) -> bool:
+    text = message.lower()
+    return any(word in text for word in ("памят", "memory", "vram", "cuda", "bad_alloc"))
+
+
 class InferenceProcess:
     """Persistent child process for one document; controls never touch UI objects."""
 
@@ -125,16 +138,28 @@ class InferenceProcess:
         context_size: int,
         threads: int,
         *,
-        use_gpu: bool = False,
-        stop_sequences: tuple[str, ...] | None = ("<|im_end|>", "<|fim_suffix|>"),
-        append_no_think: bool = True,
+        gpu_layers: int = 0,
+        sampling: dict[str, Any] | None = None,
+        stop_sequences: tuple[str, ...] | None = None,
+        append_no_think: bool = False,
+        user_only: bool = False,
         startup_timeout: float = 180,
         idle_timeout: float = 240,
     ) -> None:
         self.model_path = Path(model_path)
         self.context_size = context_size
         self.threads = threads
-        self.gpu_layers = -1 if use_gpu else 0
+        self.gpu_layers = int(gpu_layers)
+        self.sampling = sampling or {
+            "temperature": 0.15,
+            "top_p": 0.85,
+            "top_k": 40,
+            "repeat_penalty": 1.05,
+        }
+        self.stop_sequences = stop_sequences
+        self.append_no_think = append_no_think
+        self.user_only = user_only
+        self.fell_back_to_cpu = False
         self.startup_timeout = startup_timeout
         self.idle_timeout = idle_timeout
         self._ctx = mp.get_context("spawn")
@@ -143,21 +168,41 @@ class InferenceProcess:
         self._paused = self._ctx.Event()
         self._paused.set()
         self._cancelled = self._ctx.Event()
+        self._process: Any = None
+        self._started = False
+        self._request_id = 0
+
+    def _launch(self) -> dict[str, Any]:
         self._process = self._ctx.Process(
             target=_worker_main,
             args=(
-                str(self.model_path), context_size, threads, self.gpu_layers,
-                self._requests, self._responses, self._paused, self._cancelled,
-                stop_sequences, append_no_think,
+                str(self.model_path),
+                self.context_size,
+                self.threads,
+                self.gpu_layers,
+                self.sampling,
+                self._requests,
+                self._responses,
+                self._paused,
+                self._cancelled,
+                self.stop_sequences,
+                self.append_no_think,
+                self.user_only,
             ),
             name="DotLingo inference",
             daemon=True,
         )
-        self._started = False
-        self._request_id = 0
+        self._process.start()
+        self._started = True
+        try:
+            event = self._responses.get(timeout=self.startup_timeout)
+        except queue.Empty:
+            self.terminate()
+            return {"type": "startup_error", "message": "Backend не сообщил о готовности за 3 минуты."}
+        return event if isinstance(event, dict) else {"type": "startup_error", "message": "Пустой ответ backend."}
 
     def start(self) -> None:
-        if self._started:
+        if self._started and self._process is not None and self._process.is_alive():
             return
         if not self.model_path.is_file():
             raise InferenceUnavailable("Файл модели не найден. Установите выбранную модель на странице «Модели».")
@@ -167,16 +212,20 @@ class InferenceProcess:
                     raise InferenceUnavailable("Файл не прошёл проверку формата GGUF.")
         except OSError as exc:
             raise InferenceUnavailable("Не удалось прочитать файл модели.") from exc
-        self._process.start()
-        self._started = True
-        try:
-            event = self._responses.get(timeout=self.startup_timeout)
-        except queue.Empty as exc:
+        event = self._launch()
+        if event.get("type") != "ready" and self.gpu_layers != 0 and _memory_failure(str(event.get("message", ""))):
             self.terminate()
-            raise InferenceTimeout("Backend не сообщил о готовности за 3 минуты.") from exc
+            self._cancelled.clear()
+            self._paused.set()
+            self.gpu_layers = 0
+            self.fell_back_to_cpu = True
+            event = self._launch()
         if event.get("type") != "ready":
+            message = str(event.get("message", "Не удалось запустить inference backend."))
             self.terminate()
-            raise InferenceUnavailable(event.get("message", "Не удалось запустить inference backend."))
+            if "3 минуты" in message:
+                raise InferenceTimeout(message)
+            raise InferenceUnavailable(message)
 
     def pause(self) -> None:
         self._paused.clear()
@@ -209,7 +258,7 @@ class InferenceProcess:
             try:
                 event = self._responses.get(timeout=0.2)
             except queue.Empty:
-                if not self._process.is_alive():
+                if self._process is None or not self._process.is_alive():
                     raise InferenceError("Процесс inference завершился без результата.")
                 if time.monotonic() - last_event > self.idle_timeout:
                     self.terminate()
@@ -232,19 +281,21 @@ class InferenceProcess:
                 raise InferenceError(event.get("message", "Ошибка локальной модели."))
 
     def terminate(self) -> None:
-        if self._started and self._process.is_alive():
+        process = self._process
+        if self._started and process is not None and process.is_alive():
             self._cancelled.set()
-            self._process.terminate()
-            self._process.join(timeout=4)
-            if self._process.is_alive():
-                self._process.kill()
-                self._process.join(timeout=2)
+            process.terminate()
+            process.join(timeout=4)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=2)
         self._started = False
 
     def close(self) -> None:
-        if self._process.is_alive() and not self._cancelled.is_set():
+        process = self._process
+        if process is not None and process.is_alive() and not self._cancelled.is_set():
             self._requests.put(None)
-            self._process.join(timeout=3)
+            process.join(timeout=3)
         self.terminate()
         for channel in (self._requests, self._responses):
             try:

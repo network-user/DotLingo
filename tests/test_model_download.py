@@ -72,15 +72,23 @@ def _model(payload: bytes) -> dict[str, Any]:
 def test_catalog_only_allows_download_for_pinned_gguf_artifacts() -> None:
     records = catalog()
     available = [item for item in records if item["status"] == "available"]
-    assert {item["id"] for item in available} == {"qwen3-1.7b-q8", "qwen3-4b-q4km"}
+    assert {item["id"] for item in available} == {
+        "hy-mt2-1.8b-q4km",
+        "hy-mt2-1.8b-q8",
+        "hy-mt2-7b-q4km",
+    }
     for model in available:
         assert len(model["revision"]) == 40
         assert len(model["sha256"]) == 64
         assert model["size_bytes"] > 0
         assert model["format"] == "GGUF"
-    translate_gemma = next(item for item in records if item["id"] == "translategemma-4b-it")
-    assert translate_gemma["status"] == "unverified"
-    assert translate_gemma["sha256"] is None
+        assert model["prompt_style"] == "hy-mt2"
+        assert model["sampling"]["temperature"] == 0.7
+        assert model["append_no_think"] is False
+    codes = [tuple(model["ui_language_codes"]) for model in available]
+    assert codes[0] == codes[1] == codes[2]
+    assert "ru" in codes[0] and "en" in codes[0] and "zh-Hant" in codes[0]
+    assert len(codes[0]) == 38
 
 
 def test_download_resumes_partial_and_activates_only_after_integrity_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

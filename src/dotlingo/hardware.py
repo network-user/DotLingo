@@ -20,6 +20,7 @@ class HardwareSnapshot:
     gpu_vram_gb: tuple[float | None, ...] | None
     llama_runtime_available: bool
     llama_gpu_offload_available: bool | None
+    gpu_vram_free_gb: tuple[float | None, ...] | None = None
 
     @property
     def profile(self) -> str:
@@ -32,13 +33,28 @@ class HardwareSnapshot:
         return "мощное устройство"
 
 
-def _gpus() -> tuple[tuple[str, ...] | None, tuple[float | None, ...] | None]:
+def _mib_to_gb(value: str) -> float | None:
+    try:
+        return round(float(value.strip()) / 1024, 1)
+    except ValueError:
+        return None
+
+
+def _gpus() -> tuple[
+    tuple[str, ...] | None,
+    tuple[float | None, ...] | None,
+    tuple[float | None, ...] | None,
+]:
     command = shutil.which("nvidia-smi")
     if not command:
-        return None, None
+        return None, None, None
     try:
         result = subprocess.run(
-            [command, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+            [
+                command,
+                "--query-gpu=name,memory.total,memory.free",
+                "--format=csv,noheader,nounits",
+            ],
             capture_output=True,
             text=True,
             timeout=3,
@@ -46,18 +62,20 @@ def _gpus() -> tuple[tuple[str, ...] | None, tuple[float | None, ...] | None]:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if result.returncode != 0:
-            return None, None
-        rows = [line.rsplit(",", 1) for line in result.stdout.splitlines() if line.strip()]
-        names, memory = [], []
-        for name, size in rows:
+            return None, None, None
+        names, total, free = [], [], []
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            name, total_mib, free_mib = line.rsplit(",", 2)
             names.append(name.strip())
-            try:
-                memory.append(round(float(size.strip()) / 1024, 1))
-            except ValueError:
-                memory.append(None)
-        return (tuple(names), tuple(memory)) if names else (None, None)
-    except (OSError, subprocess.TimeoutExpired):
-        return None, None
+            total.append(_mib_to_gb(total_mib))
+            free.append(_mib_to_gb(free_mib))
+        if not names:
+            return None, None, None
+        return tuple(names), tuple(total), tuple(free)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None, None, None
 
 
 def _llama_gpu_support() -> tuple[bool, bool | None]:
@@ -86,9 +104,11 @@ def detect(data_path: Path) -> HardwareSnapshot:
     except OSError:
         free = None
     threads = os.cpu_count()
-    names, vram = _gpus()
+    names, vram, vram_free = _gpus()
     runtime, gpu_backend = _llama_gpu_support()
-    return HardwareSnapshot(threads, total, available, free, names, vram, runtime, gpu_backend)
+    return HardwareSnapshot(
+        threads, total, available, free, names, vram, runtime, gpu_backend, vram_free
+    )
 
 
 def assess_model(snapshot: HardwareSnapshot, model: dict) -> tuple[str, str]:
@@ -105,9 +125,47 @@ def assess_model(snapshot: HardwareSnapshot, model: dict) -> tuple[str, str]:
         return "runtime_missing", "Локальный runtime llama.cpp не установлен."
     if snapshot.ram_available_gb < required_ram:
         return "no", f"Сейчас доступно {snapshot.ram_available_gb:.1f} ГБ RAM; ориентир модели — {required_ram:.1f} ГБ."
-    if snapshot.llama_gpu_offload_available:
-        return "cpu_unverified", f"RAM-ориентир ({required_ram:.1f} ГБ) помещается; DotLingo пока запускает перевод на CPU, GPU offload модели не проверен."
-    return "cpu_unverified", f"Расчётный ориентир RAM ({required_ram:.1f} ГБ) помещается, но CPU-запуск и пиковая память этой модели не проверены."
+    layers = gpu_layers_for(snapshot, model)
+    if layers < 0:
+        device = "Свободной VRAM хватает на расчётный объём, слои будут отданы GPU."
+    elif layers > 0:
+        device = f"На GPU уйдёт около {layers} слоёв, остальное останется на CPU."
+    else:
+        device = "Запуск пойдёт на CPU."
+    return (
+        "cpu_unverified",
+        f"Расчётный ориентир RAM ({required_ram:.1f} ГБ) помещается. {device} "
+        "Это оценка размещения, запуск и пиковая память не измерены.",
+    )
+
+
+def gpu_layers_for(snapshot: HardwareSnapshot, model: dict) -> int:
+    """Сколько слоёв отдать GPU. -1 значит все слои, 0 значит только CPU.
+
+    Решение сравнивает свободную VRAM с расчётным объёмом модели. Это не замер.
+    """
+    if not snapshot.llama_gpu_offload_available:
+        return 0
+    free_values = [
+        value
+        for value in (snapshot.gpu_vram_free_gb or ())
+        if isinstance(value, (int, float))
+    ]
+    needed = model.get("estimated_vram_gb")
+    if not free_values or not isinstance(needed, (int, float)) or float(needed) <= 0:
+        return 0
+    free = max(free_values)
+    reserve = 0.6
+    if free >= float(needed) + reserve:
+        return -1
+    layers = model.get("layer_count")
+    if not isinstance(layers, int) or layers <= 0:
+        return 0
+    usable = free - reserve
+    if usable < 1.2:
+        return 0
+    count = int(layers * min(0.85, usable / float(needed)))
+    return count if count >= 4 else 0
 
 
 def recommend_model(

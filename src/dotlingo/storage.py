@@ -646,6 +646,46 @@ class ProjectStore:
                 (task_id, "complete", "Перевод сохранён.", timestamp),
             )
 
+    def translation_flags(self, document_id: str, target_lang: str) -> dict[int, bool]:
+        with _connect(self.db_path) as db:
+            rows = db.execute(
+                "SELECT block_ord, edited FROM translations WHERE document_id=? AND target_lang=?",
+                (document_id, target_lang),
+            ).fetchall()
+        return {int(row["block_ord"]): bool(row["edited"]) for row in rows}
+
+    def machine_draft(self, document_id: str, target_lang: str) -> dict[int, str]:
+        """Собрать черновик модели из последней завершённой задачи этого языка."""
+        with _connect(self.db_path) as db:
+            task = db.execute(
+                "SELECT id FROM tasks WHERE document_id=? AND target_lang=? AND status='complete' "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (document_id, target_lang),
+            ).fetchone()
+            if task is None:
+                return {}
+            rows = db.execute(
+                "SELECT block_ord, segment_ord, translation FROM segments "
+                "WHERE task_id=? AND status='complete' ORDER BY block_ord, segment_ord",
+                (task["id"],),
+            ).fetchall()
+        grouped: dict[int, list[str]] = {}
+        for row in rows:
+            grouped.setdefault(int(row["block_ord"]), []).append(row["translation"])
+        return {order: "".join(parts) for order, parts in grouped.items()}
+
+    def confirmed_pairs(self, target_lang: str, limit: int = 200) -> list[tuple[str, str]]:
+        """Правленые пары проекта, новые первыми. Это подтверждённая память, не черновик."""
+        with _connect(self.db_path) as db:
+            rows = db.execute(
+                'SELECT b.text AS source, t.text AS translation FROM translations t '
+                'JOIN blocks b ON b.document_id = t.document_id AND b."ord" = t.block_ord '
+                "WHERE t.target_lang=? AND t.edited=1 AND length(trim(t.text))>0 "
+                "ORDER BY t.updated_at DESC LIMIT ?",
+                (target_lang, limit),
+            ).fetchall()
+        return [(row["source"], row["translation"]) for row in rows]
+
     def translations(
         self,
         document_id: str,

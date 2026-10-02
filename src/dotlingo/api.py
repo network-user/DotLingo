@@ -90,6 +90,9 @@ def _serialize_hardware(
         "diskFreeGb": snapshot.disk_free_gb,
         "gpuNames": list(snapshot.gpu_names or ()),
         "gpuVramGb": [value if value is not None else None for value in (snapshot.gpu_vram_gb or ())],
+        "gpuVramFreeGb": [
+            value if value is not None else None for value in (snapshot.gpu_vram_free_gb or ())
+        ],
         "llamaRuntimeAvailable": snapshot.llama_runtime_available,
         "llamaGpuOffloadAvailable": snapshot.llama_gpu_offload_available,
         "detectedAt": detected_at or datetime.now(timezone.utc).isoformat(),
@@ -105,6 +108,9 @@ def _hardware_from_cache(data: dict[str, Any]) -> HardwareSnapshot:
         gpu_names=tuple(data.get("gpuNames") or ()),
         gpu_vram_gb=tuple(data.get("gpuVramGb") or ()),
         llama_runtime_available=bool(data.get("llamaRuntimeAvailable")),
+        gpu_vram_free_gb=(
+            None if data.get("gpuVramFreeGb") is None else tuple(data.get("gpuVramFreeGb") or ())
+        ),
         llama_gpu_offload_available=data.get("llamaGpuOffloadAvailable"),
     )
 
@@ -507,10 +513,20 @@ class Api:
             for block in parsed.blocks
         ]
         translations: dict[str, dict[str, str]] = {}
+        edited_flags: dict[str, dict[str, bool]] = {}
+        machine_drafts: dict[str, dict[str, str]] = {}
         for lang in store.target_languages():
             translations[lang] = {
                 str(order): text
                 for order, text in store.translations(doc_id, target_lang=lang).items()
+            }
+            edited_flags[lang] = {
+                str(order): flag
+                for order, flag in store.translation_flags(doc_id, lang).items()
+            }
+            machine_drafts[lang] = {
+                str(order): text
+                for order, text in store.machine_draft(doc_id, lang).items()
             }
         exports = [
             {
@@ -529,6 +545,8 @@ class Api:
                 "warnings": list(record.warnings),
                 "blocks": blocks,
                 "translations": translations,
+                "editedFlags": edited_flags,
+                "machineDrafts": machine_drafts,
                 "detectedLanguage": store.detected_language(doc_id),
                 "exports": exports,
             }
@@ -730,6 +748,7 @@ class Api:
                     "testedOnWindows": bool(entry.get("tested_on_windows")),
                     "languageCodes": list(supported_languages(model)),
                     "uiDescription": entry.get("ui_description") or "",
+                    "tier": entry.get("tier") or "",
                     "uiDetails": entry.get("ui_details") or "",
                     "notes": entry.get("notes") or "",
                     "compatibility": compatibility,
