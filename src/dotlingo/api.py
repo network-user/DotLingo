@@ -14,8 +14,16 @@ from typing import Any, Callable
 
 import webview
 
+from dotlingo.dialogs import delete_dialog, list_dialogs, load_dialog, read_attachment, save_dialog
 from dotlingo.formats import export_document
-from dotlingo.hardware import HardwareSnapshot, assess_model, detect, recommend_model
+from dotlingo.hardware import (
+    HardwareSnapshot,
+    assess_model,
+    detect,
+    gpu_layers_for,
+    plan_setup,
+    recommend_model,
+)
 from dotlingo.languages import (
     AUTO_LANGUAGE,
     AUTO_LANGUAGE_LABEL,
@@ -856,6 +864,35 @@ class Api:
             )
         return _ok({"models": result, "recommendation": recommendation})
 
+    def planSetup(self) -> dict[str, Any]:
+        """Один план первого запуска. Ошибка каталога не блокирует вход в приложение."""
+        try:
+            models = all_models(root=self.models_dir)
+            installed_ids = {model["id"] for model in models if installed(model, self.models_dir)}
+            plan = plan_setup(self.hardware, models, installed_ids)
+            model = next((item for item in models if item.get("id") == plan["modelId"]), None)
+        except Exception as exc:
+            return _ok(
+                {
+                    "action": "skip",
+                    "modelId": None,
+                    "reason": f"Не удалось составить план: {exc}. Приложение откроется без загрузки.",
+                    "name": "",
+                    "sizeLabel": "",
+                    "license": "",
+                }
+            )
+        return _ok(
+            {
+                "action": plan["action"],
+                "modelId": plan["modelId"],
+                "reason": plan["reason"] or "",
+                "name": (model or {}).get("name") or plan["modelId"] or "",
+                "sizeLabel": _format_size(model.get("size_bytes")) if model else "",
+                "license": (model or {}).get("license") or "",
+            }
+        )
+
     def getHardware(self) -> dict[str, Any]:
         if self.hardware is None:
             return _ok(None)
@@ -1250,7 +1287,8 @@ class Api:
         if not isinstance(data, dict):
             return _err("Некорректные данные диалога.")
         text = str(data.get("text") or "").strip()
-        if not text:
+        attachment = str(data.get("attachment") or "").strip()[:8000]
+        if not text and not attachment:
             return _err("Введите текст.", "empty")
         if len(text) > SCRATCH_LIMIT:
             return _err(
@@ -1271,11 +1309,6 @@ class Api:
             model = load_model_for_scratch(model_id, self.models_dir)
         except ScratchRejected as exc:
             return _err(str(exc), exc.code)
-        if mode == "ask" and model.get("prompt_style") == "hy-mt2":
-            return _err(
-                "Эта модель переводит фрагменты и не ведёт свободный разговор.",
-                "mode",
-            )
         if not installed(model, self.models_dir):
             return _err("Сначала скачайте модель.", "model_missing")
         if not _runtime_available():
@@ -1292,7 +1325,9 @@ class Api:
         previous = _scratch_pairs(data.get("previous"))
         context = str(data.get("context") or "").strip()[:800]
         try:
-            request_id = self._scratch.submit(model, text, source, target, previous, context, mode)
+            request_id = self._scratch.submit(
+                model, text, source, target, previous, context, mode, attachment
+            )
         except ScratchRejected as exc:
             return _err(str(exc), exc.code)
         return _ok({"requestId": request_id})
@@ -1300,6 +1335,92 @@ class Api:
     def cancelScratch(self) -> dict[str, Any]:
         self._scratch.cancel()
         return _ok({"accepted": True})
+
+    def listDialogs(self) -> dict[str, Any]:
+        return _ok(list_dialogs(self.data_dir))
+
+    def loadDialog(self, dialog_id: str) -> dict[str, Any]:
+        try:
+            dialog = load_dialog(self.data_dir, dialog_id)
+        except ValueError as exc:
+            return _err(str(exc), "bad_id")
+        if dialog is None:
+            return _err("Диалог не найден.", "not_found")
+        return _ok(dialog)
+
+    def saveDialog(self, data: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            return _err("Некорректные данные диалога.")
+        try:
+            return _ok(save_dialog(self.data_dir, data))
+        except ValueError as exc:
+            return _err(str(exc), "bad_id")
+
+    def deleteDialog(self, dialog_id: str) -> dict[str, Any]:
+        try:
+            delete_dialog(self.data_dir, dialog_id)
+        except ValueError as exc:
+            return _err(str(exc), "bad_id")
+        return _ok(None)
+
+    def readChatAttachment(self, path: str) -> dict[str, Any]:
+        try:
+            return _ok(read_attachment(Path(path)))
+        except ValueError as exc:
+            return _err(str(exc), "attachment")
+
+    def dialogMeter(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Оценка контекста и снимок нагрузки. Это не замер качества и не токены модели."""
+        if not isinstance(data, dict):
+            data = {}
+        model = None
+        model_id = str(data.get("modelId") or "").strip()
+        if model_id:
+            try:
+                model = get_model(model_id, root=self.models_dir)
+            except KeyError:
+                model = None
+        limit = int((model or {}).get("default_context") or 2048)
+        if limit <= 0:
+            limit = 2048
+        try:
+            chars = max(0, int(data.get("charCount") or 0))
+        except (TypeError, ValueError):
+            chars = 0
+        used = chars // 4
+        percent = min(100, round(used * 100 / limit))
+        cpu = None
+        ram = None
+        try:
+            import psutil
+
+            cpu = round(float(psutil.cpu_percent(interval=None)), 1)
+            ram = round(float(psutil.virtual_memory().percent), 1)
+        except (OSError, AttributeError, ValueError):
+            cpu = None
+            ram = None
+        layers = 0
+        if model is not None and self.hardware is not None:
+            try:
+                layers = gpu_layers_for(self.hardware, model)
+            except (TypeError, ValueError):
+                layers = 0
+        if layers < 0:
+            placement = "GPU"
+        elif layers > 0:
+            placement = f"GPU, {layers} слоёв"
+        else:
+            placement = "CPU"
+        return _ok(
+            {
+                "cpuPercent": cpu,
+                "ramPercent": ram,
+                "placement": placement,
+                "contextLimit": limit,
+                "contextUsed": used,
+                "contextPercent": percent,
+            }
+        )
 
     # ------------------------------------------------------------------ shutdown
 

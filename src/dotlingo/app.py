@@ -9,7 +9,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 import traceback
 from pathlib import Path
 
@@ -133,11 +132,15 @@ def _set_windows_app_id() -> None:
 
 
 def _on_ui_thread(native, action) -> None:
-    """Выполнить действие на потоке окна WinForms."""
+    """Поставить действие в очередь окна и сразу вернуться.
+
+    Invoke ждёт UI-поток, а тот в pythonnet часто ждёт GIL. Окно тогда
+    перестаёт отвечать.
+    """
     from System.Windows.Forms import MethodInvoker
 
     if bool(native.InvokeRequired):
-        native.Invoke(MethodInvoker(action))
+        native.BeginInvoke(MethodInvoker(action))
     else:
         action()
 
@@ -163,28 +166,52 @@ def _apply_window_icon(window) -> None:
 
 
 def _enable_text_menu(window) -> None:
-    """Правый клик: Копировать, Вставить, Выделить всё. pywebview включает меню только в debug."""
+    """Правый клик: Копировать, Вставить, Выделить всё. pywebview включает меню только в debug.
+
+    CoreWebView2 можно читать только с потока окна. Опрос с другого потока
+    блокирует оба и оставляет чёрное «не отвечает».
+    """
     if sys.platform != "win32":
         return
-    for _ in range(50):
-        native = getattr(window, "native", None)
-        webview_control = getattr(native, "webview", None)
-        core = None
-        if webview_control is not None:
+    native = getattr(window, "native", None)
+    if native is None:
+        return
+
+    def start() -> None:
+        from System.Windows.Forms import Timer
+
+        state = {"left": 50}
+        timer = Timer()
+        timer.Interval = 100
+
+        def tick(_sender, _args) -> None:
+            state["left"] -= 1
+            core = None
             try:
-                core = webview_control.CoreWebView2
+                core = native.webview.CoreWebView2
             except Exception:
                 core = None
-        if native is not None and core is not None:
-            def assign(settings=core.Settings) -> None:
-                settings.AreDefaultContextMenusEnabled = True
-
+            if core is None:
+                if state["left"] <= 0:
+                    timer.Stop()
+                    timer.Dispose()
+                return
+            timer.Stop()
+            timer.Dispose()
             try:
-                _on_ui_thread(native, assign)
+                core.Settings.AreDefaultContextMenusEnabled = True
             except Exception:
                 traceback.print_exc()
-            return
-        time.sleep(0.1)
+
+        timer.Tick += tick
+        # Таймер нельзя отдать сборщику, пока он тикает.
+        _enable_text_menu.timer = timer
+        timer.Start()
+
+    try:
+        _on_ui_thread(native, start)
+    except Exception:
+        traceback.print_exc()
 
 
 # Коды консоли Windows: Ctrl+C, Ctrl+Break, закрытие консоли, выход из сеанса, выключение.
@@ -256,11 +283,88 @@ def _bind_console_stop(_window) -> None:
         signal.signal(signal.SIGTERM, _signal_handler)
 
 
-def _on_started(api: Api, _window) -> None:
-    # Проверка устройства кэшируется; автоматически запускается только один раз.
+def _merge_browser_arguments(current: str) -> str:
+    """Один флаг --disable-features. Второй такой аргумент затирает первый."""
+    flag = "CalculateNativeWinOcclusion"
+    text = current or ""
+    if flag in text:
+        return text
+    needle = "--disable-features="
+    if needle in text:
+        return text.replace(needle, f"{needle}{flag},", 1)
+    return f"{text} --disable-features={flag}".strip()
+
+
+# Копия инициализации pywebview с одним изменённым аргументом браузера.
+# Invoke в поток окна отсюда не вызывается: на старте он блокирует WinForms.
+_EDGE_INIT = """
+def _dotlingo_edge_init(self, form, window, cache_dir):
+    self.pywebview_window = window
+    self.webview = WebView2()
+    props = CoreWebView2CreationProperties()
+    props.UserDataFolder = cache_dir
+    self.user_data_folder = props.UserDataFolder
+    props.set_IsInPrivateModeEnabled(_state["private_mode"])
+    props.AdditionalBrowserArguments = _dotlingo_merge_arguments(
+        "--disable-features=ElasticOverscroll"
+    )
+    if webview_settings["ALLOW_FILE_URLS"]:
+        props.AdditionalBrowserArguments += " --allow-file-access-from-files"
+    port = webview_settings["REMOTE_DEBUGGING_PORT"]
+    if port is not None:
+        props.AdditionalBrowserArguments += " --remote-debugging-port=%s" % port
+    self.webview.CreationProperties = props
+    self.form = form
+    form.Controls.Add(self.webview)
+    self.js_results = {}
+    self.js_result_semaphore = Semaphore(0)
+    self.webview.Dock = WinForms.DockStyle.Fill
+    self.webview.BringToFront()
+    self.webview.CoreWebView2InitializationCompleted += self.on_webview_ready
+    self.webview.NavigationStarting += self.on_navigation_start
+    self.webview.NavigationCompleted += self.on_navigation_completed
+    self.webview.WebMessageReceived += self.on_script_notify
+    self.syncContextTaskScheduler = TaskScheduler.FromCurrentSynchronizationContext()
+    red = int(window.background_color.lstrip("#")[0:2], 16)
+    green = int(window.background_color.lstrip("#")[2:4], 16)
+    blue = int(window.background_color.lstrip("#")[4:6], 16)
+    self.webview.DefaultBackgroundColor = Color.FromArgb(255, red, green, blue)
+    if window.transparent:
+        self.webview.DefaultBackgroundColor = Color.Transparent
+    self.url = None
+    self.ishtml = False
+    self.html = DEFAULT_HTML
+    if _state["storage_path"]:
+        self.setup_webview2_environment()
+    else:
+        self.webview.EnsureCoreWebView2Async(None)
+"""
+
+
+def _install_webview_browser_arguments() -> None:
+    """Вписать флаг в аргументы WebView2 до создания среды."""
+    try:
+        import webview.platforms.edgechromium as edge
+    except Exception:
+        traceback.print_exc()
+        return
+    if getattr(edge.EdgeChrome, "_dotlingo_args", False):
+        return
+    edge.__dict__["_dotlingo_merge_arguments"] = _merge_browser_arguments
+    exec(_EDGE_INIT, edge.__dict__)
+    edge.EdgeChrome.__init__ = edge.__dict__["_dotlingo_edge_init"]
+    edge.EdgeChrome._dotlingo_args = True
+
+
+def _on_started(api: Api, window) -> None:
+    """Дождаться окна, не трогая его поток. Проверка устройства идёт отдельно."""
+    window.events.shown.wait(15)
     if api.hardware is None:
         api.detectHardware()
-    api.resumeQueuedTasks()
+    try:
+        api.resumeQueuedTasks()
+    except Exception:
+        traceback.print_exc()
 
 
 def _run_smoke_test(data_dir: Path | None) -> int:
@@ -297,6 +401,7 @@ def main() -> None:
     if not _ensure_webview2():
         sys.exit(1)
 
+    _install_webview_browser_arguments()
     _set_windows_app_id()
     api = Api(args.data_dir)
     window = webview.create_window(

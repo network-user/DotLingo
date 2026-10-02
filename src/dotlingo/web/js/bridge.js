@@ -88,6 +88,44 @@ function mockResponse(method) {
       return { ok: true, data: null };
     case 'listModels':
       return { ok: true, data: MOCK_MODELS };
+    case 'planSetup':
+      return {
+        ok: true,
+        data: {
+          action: 'skip',
+          modelId: null,
+          reason: 'Демонстрация без загрузки. Приложение открывается сразу.',
+          name: '',
+          sizeLabel: '',
+          license: '',
+        },
+      };
+    case 'detectHardware':
+      return { ok: true, data: { started: true } };
+    case 'listDialogs':
+      return { ok: true, data: [] };
+    case 'loadDialog':
+      return { ok: false, error: 'Диалог не найден.', code: 'not_found' };
+    case 'saveDialog':
+      return { ok: true, data: null };
+    case 'deleteDialog':
+      return { ok: true, data: null };
+    case 'readChatAttachment':
+      return { ok: true, data: { name: 'demo.txt', text: 'Демонстрационный файл.', truncated: false, chars: 24 } };
+    case 'dialogMeter':
+      return {
+        ok: true,
+        data: {
+          cpuPercent: null,
+          ramPercent: null,
+          placement: 'CPU',
+          contextLimit: 2048,
+          contextUsed: 0,
+          contextPercent: 0,
+        },
+      };
+    case 'resolveImportPaths':
+      return { ok: true, data: [] };
     case 'listMarket':
       return { ok: true, data: { fetchedAt: null, stale: false, errors: [], offers: [] } };
     case 'getDataDirs':

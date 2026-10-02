@@ -5,7 +5,7 @@ from pathlib import Path
 from dotlingo.api import Api
 from dotlingo.languages import supports_language
 from dotlingo.models import catalog
-from dotlingo.scratch import ScratchRejected, prepare_turn
+from dotlingo.scratch import prepare_turn
 
 
 def _model() -> dict:
@@ -22,16 +22,14 @@ def test_translation_prompt_contains_source_and_target() -> None:
     assert "Russian" in user or "рус" in user.casefold()
 
 
-def test_hy_mt2_refuses_free_chat() -> None:
+def test_hy_mt2_ask_puts_the_reply_instruction_in_the_user_turn() -> None:
     model = _model()
     if model.get("prompt_style") != "hy-mt2":
         return
-    try:
-        prepare_turn(model, "Привет", "ru", "en", [], "", "ask")
-    except ScratchRejected as exc:
-        assert exc.code == "mode"
-        return
-    raise AssertionError("hy-mt2 не должен принимать свободный вопрос.")
+    system, user = prepare_turn(model, "Привет", "ru", "en", [], "", "ask")
+    assert system == ""
+    assert "Привет" in user
+    assert "Assistant:" in user
 
 
 def test_ask_scratch_validates_without_loading_weights(tmp_path: Path) -> None:
@@ -65,15 +63,14 @@ def test_ask_scratch_validates_without_loading_weights(tmp_path: Path) -> None:
     assert missing["ok"] is False
     assert missing["code"] == "model_missing"
 
-    if model.get("prompt_style") == "hy-mt2":
-        asked = api.askScratch(
-            {
-                "modelId": model["id"],
-                "sourceLang": "en",
-                "targetLang": "ru",
-                "text": "Hello",
-                "mode": "ask",
-            }
-        )
-        assert asked["ok"] is False
-        assert asked["code"] == "mode"
+    asked = api.askScratch(
+        {
+            "modelId": model["id"],
+            "sourceLang": "en",
+            "targetLang": "ru",
+            "text": "Hello",
+            "mode": "ask",
+        }
+    )
+    assert asked["ok"] is False
+    assert asked["code"] == "model_missing"

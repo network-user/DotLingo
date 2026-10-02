@@ -24,28 +24,58 @@ async function boot() {
   // Контракт для консольной отладки (и для страниц); push_event появится ниже.
   window.DL = { store, router, call, components, isDemo };
 
-  wireShell();
-  wireKeyboard();
-  wirePushEvents();
-  components.installSelectMenus();
-
-  // Стартуем с тёмной темой до прихода prefs, чтобы не мигало.
-  store.set('theme', 'dark');
-  applyTheme('dark');
-
-  // Сначала только «Проекты», чтобы первый кадр не ждал весь граф страниц.
   try {
-    await import('./pages/projects.js');
-  } catch (e) {
-    console.error('[pages] не удалось открыть проекты', e);
-  }
-  router.showPage(DEFAULT_PAGE);
-  void loadExtraPages().then(() => {
-    if (document.querySelector('#page-host [data-stub]')) {
-      router.showPage(router.currentPage() || DEFAULT_PAGE);
+    wireShell();
+    wireKeyboard();
+    wirePushEvents();
+    components.installSelectMenus();
+
+    // Стартуем с тёмной темой до прихода prefs, чтобы не мигало.
+    store.set('theme', 'dark');
+    applyTheme('dark');
+
+    // Сначала только «Проекты», чтобы первый кадр не ждал весь граф страниц.
+    try {
+      await import('./pages/projects.js');
+    } catch (e) {
+      console.error('[pages] не удалось открыть проекты', e);
     }
+    router.showPage(DEFAULT_PAGE);
+  } catch (error) {
+    console.error('[boot]', error);
+    showBootFailure(error);
+  }
+
+  void loadExtraPages()
+    .then(() => {
+      if (document.querySelector('#page-host [data-stub]')) {
+        router.showPage(router.currentPage() || DEFAULT_PAGE);
+      }
+    })
+    .catch((error) => {
+      console.error('[pages] не удалось загрузить остальные экраны', error);
+    });
+  void initBridgeData().catch((error) => {
+    console.error('[boot] данные моста', error);
   });
-  initBridgeData();
+}
+
+/** Если модуль оболочки упал, на месте страницы остаётся текст, а не пустое поле. */
+function showBootFailure(error) {
+  const host = document.getElementById('page-host');
+  if (!host) return;
+  const box = document.createElement('div');
+  box.className = 'boot';
+  const title = document.createElement('p');
+  title.className = 'boot__title';
+  title.textContent = 'Интерфейс открыт частично';
+  const text = document.createElement('p');
+  text.className = 'boot__text';
+  text.textContent = error?.message
+    ? `${error.message} Закройте окно и запустите DotLingo ещё раз.`
+    : 'Закройте окно и запустите DotLingo ещё раз.';
+  box.append(title, text);
+  host.replaceChildren(box);
 }
 
 /** Остальные страницы и мастер первого запуска. Один запрос на сессию. */

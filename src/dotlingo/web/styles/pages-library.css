@@ -740,17 +740,23 @@
   z-index: 160;
   display: flex;
   justify-content: center;
+  align-items: center;
   padding: var(--sp-5) var(--sp-4);
   overflow: auto;
-  background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+  background-color: var(--bg-bottom);
+  background-image: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
 }
 
 .setup__frame {
-  width: min(920px, 100%);
+  width: min(520px, 100%);
   margin: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-5);
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+  background-color: var(--surface-solid);
 }
 
 .setup__brand {
@@ -834,6 +840,7 @@
   font-size: var(--fs-caption);
   line-height: 1.4;
   color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .setup__meter {

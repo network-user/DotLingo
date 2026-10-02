@@ -4,6 +4,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,18 +79,51 @@ def _gpus() -> tuple[
         return None, None, None
 
 
-def _llama_gpu_support() -> tuple[bool, bool | None]:
-    if importlib.util.find_spec("llama_cpp") is None:
-        return False, None
+# Повторные проверки устройства не запускают runtime заново.
+_LLAMA_PROBE: tuple[bool, bool | None] | None = None
+
+_LLAMA_PROBE_CODE = (
+    "from dotlingo.engine import prepare_llama_env\n"
+    "prepare_llama_env()\n"
+    "from llama_cpp import llama_supports_gpu_offload\n"
+    "print('1' if llama_supports_gpu_offload() else '0')\n"
+)
+
+
+def _probe_llama_gpu() -> bool | None:
+    """Спросить GPU-backend в отдельном процессе.
+
+    Импорт llama.cpp в этом процессе надолго забирает GIL, и окно WinForms
+    перестаёт отвечать.
+    """
     try:
-        from dotlingo.engine import prepare_llama_env
+        completed = subprocess.run(
+            [sys.executable, "-c", _LLAMA_PROBE_CODE],
+            capture_output=True,
+            text=True,
+            timeout=6,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    if not lines:
+        return None
+    return lines[-1] == "1"
 
-        prepare_llama_env()
-        from llama_cpp import llama_supports_gpu_offload
 
-        return True, bool(llama_supports_gpu_offload())
-    except (ImportError, AttributeError, OSError, RuntimeError):
-        return True, None
+def _llama_gpu_support() -> tuple[bool, bool | None]:
+    global _LLAMA_PROBE
+    if _LLAMA_PROBE is not None:
+        return _LLAMA_PROBE
+    if importlib.util.find_spec("llama_cpp") is None:
+        _LLAMA_PROBE = (False, None)
+        return _LLAMA_PROBE
+    _LLAMA_PROBE = (True, _probe_llama_gpu())
+    return _LLAMA_PROBE
 
 
 def detect(data_path: Path) -> HardwareSnapshot:
@@ -223,3 +257,88 @@ def recommend_model(
     if not snapshot.llama_runtime_available:
         reason += " Для запуска сначала потребуется llama-cpp-python."
     return smallest, reason
+
+
+def _catalog_rows(models: list[dict]) -> list[dict]:
+    """Оставить записи каталога, у которых есть id. Битые строки не роняют план."""
+    rows = []
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        model_id = model.get("id")
+        if isinstance(model_id, str) and model_id:
+            rows.append(model)
+    return rows
+
+
+def _download_candidate(model: dict) -> bool:
+    return (
+        model.get("status") == "available"
+        and isinstance(model.get("estimated_ram_gb"), (int, float))
+        and isinstance(model.get("size_bytes"), int)
+    )
+
+
+def plan_setup(
+    snapshot: HardwareSnapshot | None,
+    models: list[dict],
+    installed_ids: set[str] | None = None,
+) -> dict[str, str | None]:
+    """Решение первого запуска: модель уже есть, её нужно скачать или скачивать нечего.
+
+    Функция не бросает исключения из-за дырявого каталога и не измеряет качество перевода.
+    """
+    installed_ids = installed_ids or set()
+    rows = _catalog_rows(models)
+    installed = [model for model in rows if model["id"] in installed_ids]
+    if installed:
+        installed.sort(
+            key=lambda model: float(model["estimated_ram_gb"])
+            if isinstance(model.get("estimated_ram_gb"), (int, float))
+            else 0.0,
+            reverse=True,
+        )
+        return {
+            "action": "ready",
+            "modelId": installed[0]["id"],
+            "reason": "Модель уже на диске. Дополнительная загрузка не нужна.",
+        }
+
+    candidates = [model for model in rows if _download_candidate(model)]
+    if not candidates:
+        return {
+            "action": "skip",
+            "modelId": None,
+            "reason": "В каталоге нет модели, которую можно скачать. Приложение откроется без веса.",
+        }
+
+    if snapshot is None:
+        candidates.sort(key=lambda model: float(model["estimated_ram_gb"]))
+        return {
+            "action": "download",
+            "modelId": candidates[0]["id"],
+            "reason": "Устройство ещё не измерено. Берём модель с наименьшей оценкой памяти.",
+        }
+
+    found, reason = recommend_model(snapshot, candidates, installed_ids)
+    ordered = sorted(candidates, key=lambda model: float(model["estimated_ram_gb"]), reverse=True)
+    if found is not None:
+        ordered = [model for model in ordered if float(model["estimated_ram_gb"]) <= float(found["estimated_ram_gb"])]
+    for model in ordered:
+        try:
+            verdict, detail = assess_model(snapshot, model)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if verdict == "no":
+            continue
+        note = reason if found is not None and model["id"] == found["id"] else detail
+        return {"action": "download", "modelId": model["id"], "reason": note}
+
+    return {
+        "action": "skip",
+        "modelId": None,
+        "reason": (
+            "Ни одна модель не помещается в свободную память или на диск. "
+            "Приложение откроется без загрузки."
+        ),
+    }

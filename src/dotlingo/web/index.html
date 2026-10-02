@@ -10,6 +10,14 @@
   <meta name="color-scheme" content="dark light">
   <meta name="description" content="DotLingo - локальный перевод документов">
   <title>DotLingo</title>
+  <!-- Те же цвета, что в tokens.css. Нужны до загрузки таблиц, иначе первый кадр пустой. -->
+  <style>
+    html, body { height: 100%; margin: 0; background: #0b0b0e; color: #f5f5f7; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; }
+    #app { display: grid; grid-template-columns: 252px minmax(0, 1fr); height: 100%; }
+    .boot__title { margin: 28px 32px 0; font-size: 21px; font-weight: 700; }
+    .boot__text { margin: 8px 32px 0; color: rgba(235, 235, 245, 0.72); }
+  </style>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230B0B0E'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='-apple-system, Segoe UI, sans-serif' font-size='17' font-weight='700' fill='%23F5F5F7'%3ED%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles/tokens.css">
   <link rel="stylesheet" href="styles/base.css">
@@ -109,7 +117,12 @@
         </div>
         <div class="main-header__actions" id="page-actions"></div>
       </header>
-      <div class="page-scroll" id="page-host"></div>
+      <div class="page-scroll" id="page-host">
+        <div class="boot" id="boot">
+          <p class="boot__title">Проекты</p>
+          <p class="boot__text">Открываем локальные проекты…</p>
+        </div>
+      </div>
     </main>
 
   </div>
