@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import os
+import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import traceback
 from pathlib import Path
@@ -186,22 +187,76 @@ def _enable_text_menu(window) -> None:
         time.sleep(0.1)
 
 
-def _reveal_once(window) -> None:
-    """Показать окно один раз. Повторный вызов безопасен."""
-    if getattr(_reveal_once, "done", False):
-        return
-    _reveal_once.done = True
+# Коды консоли Windows: Ctrl+C, Ctrl+Break, закрытие консоли, выход из сеанса, выключение.
+_CONSOLE_STOP_CODES = frozenset({0, 1, 2, 5, 6})
+
+
+def _console_should_stop(ctrl_type: int) -> bool:
+    return ctrl_type in _CONSOLE_STOP_CODES
+
+
+def _halt_process(code: int) -> None:
+    """Завершить процесс сразу. Обычный sys.exit оставляет потоки pythonnet живыми."""
+    os._exit(code)
+
+
+def _ask_window_to_close(window) -> None:
+    """Закрыть окно с потока консоли, не блокируя обработчик Ctrl+C."""
+    native = getattr(window, "native", None)
+    begin = getattr(native, "BeginInvoke", None)
+    if callable(begin):
+        try:
+            import clr
+
+            clr.AddReference("System.Windows.Forms")
+            from System.Windows.Forms import MethodInvoker
+
+            def _close() -> None:
+                try:
+                    native.Close()
+                except Exception:
+                    _halt_process(0)
+
+            begin(MethodInvoker(_close))
+            return
+        except Exception:
+            traceback.print_exc()
     try:
-        window.show()
+        window.destroy()
     except Exception:
-        traceback.print_exc()
+        _halt_process(130)
 
 
-def _on_started(api: Api, window) -> None:
-    # Если страница не сообщила о загрузке, не оставлять процесс без окна.
-    timer = threading.Timer(2.0, _reveal_once, args=(window,))
-    timer.daemon = True
-    timer.start()
+def _bind_console_stop(_window) -> None:
+    """Ctrl+C в консоли завершает процесс. Цикл GUI сам это событие не видит."""
+    if sys.platform == "win32":
+        handler_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)
+
+        def _handler(ctrl_type: int) -> int:
+            if not _console_should_stop(ctrl_type):
+                return 0
+            # ExitProcess не ждёт GUI и не зависит от GIL после вызова.
+            ctypes.windll.kernel32.ExitProcess(130)
+            return 0
+
+        callback = handler_type(_handler)
+        # Колбэк нельзя отдать сборщику, иначе Windows вызовет уже мёртвую функцию.
+        _bind_console_stop.callback = callback
+        kernel32 = ctypes.windll.kernel32
+        # WinForms и новая группа процессов могут выключить Ctrl+C. Включаем обратно.
+        kernel32.SetConsoleCtrlHandler(None, False)
+        if kernel32.SetConsoleCtrlHandler(callback, True):
+            return
+
+    def _signal_handler(_signum: int, _frame: object) -> None:
+        _halt_process(130)
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _signal_handler)
+
+
+def _on_started(api: Api, _window) -> None:
     # Проверка устройства кэшируется; автоматически запускается только один раз.
     if api.hardware is None:
         api.detectHardware()
@@ -253,8 +308,6 @@ def main() -> None:
         min_size=(1020, 680),
         # Пока CSS не нарисован, окно не должно вспыхивать белым.
         background_color="#0B0B0E",
-        # Не показывать голый чёрный кадр, пока страница ещё не загрузилась.
-        hidden=True,
         # pywebview по умолчанию ставит user-select: none на всю страницу.
         text_select=True,
     )
@@ -262,18 +315,27 @@ def main() -> None:
 
     def _on_closed() -> None:
         # Подписчик события closed обязан вернуть hashable; возвращаем None.
-        api.closeGracefully()
+        try:
+            api.closeGracefully()
+        finally:
+            # Цикл WinForms и потоки pythonnet иначе оставляют python.exe живым.
+            _halt_process(0)
 
     def _on_shown() -> None:
+        # Повторно: WinForms может перехватить Ctrl+C уже после старта цикла.
+        _bind_console_stop(window)
         _apply_window_icon(window)
         _enable_text_menu(window)
 
     window.events.shown += _on_shown
-    window.events.loaded += lambda: _reveal_once(window)
     window.events.closed += _on_closed
+    _bind_console_stop(window)
+    exit_code = 0
     try:
         # http_server=True обязателен: ES-модули не грузятся с file:// (CORS).
         webview.start(func=_on_started, args=(api, window), http_server=True)
+    except KeyboardInterrupt:
+        exit_code = 130
     except Exception as exc:
         # Реальная ошибка запуска - не маскируем её под WebView2.
         traceback.print_exc()
@@ -282,7 +344,13 @@ def main() -> None:
             "DotLingo · ошибка запуска",
             0x00000010,
         )
-        sys.exit(1)
+        exit_code = 1
+    finally:
+        try:
+            api.closeGracefully()
+        except Exception:
+            traceback.print_exc()
+    _halt_process(exit_code)
 
 
 if __name__ == "__main__":
