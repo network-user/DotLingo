@@ -100,7 +100,7 @@ function render() {
   if (!root || closing) return;
   const frame = el('div', { class: 'setup__frame' }, [
     el('header', { class: 'setup__brand' }, [
-      el('div', { class: 'brand__mark', ariaHidden: 'true', text: 'D' }),
+      el('div', { class: 'brand__mark', ariaHidden: 'true' }),
       el('div', {}, [
         el('p', { class: 'setup__kicker', text: 'Первый запуск' }),
         el('p', { class: 'setup__product', text: 'Локальный перевод на этом компьютере' }),

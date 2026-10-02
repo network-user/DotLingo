@@ -49,12 +49,22 @@
   width: 27px;
   height: 27px;
   border-radius: 8px;
-  background: var(--accent);
-  color: var(--accent-text);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  background: var(--bg-bottom);
+  color: var(--accent);
+  border: 1px solid var(--hairline);
   flex-shrink: 0;
+}
+
+.brand__mark::before {
+  content: "";
+  width: 12px;
+  height: 16px;
+  border-radius: 2px 3px 3px 2px;
+  background: currentColor;
+  box-shadow:
+    inset 3px 0 0 var(--bg-bottom),
+    2px 0 0 var(--bg-bottom),
+    3px 0 0 currentColor;
 }
 
 .brand__text {

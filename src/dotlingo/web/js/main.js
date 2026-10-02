@@ -20,7 +20,24 @@ const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая' };
  * Boot
  * ------------------------------------------------------------------------- */
 
+function dismissLaunch() {
+  const launch = document.getElementById('launch');
+  if (!launch) return;
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || document.documentElement.dataset.reduceMotion === 'true';
+  if (reduce) {
+    launch.remove();
+    return;
+  }
+  const remove = () => launch.remove();
+  launch.addEventListener('animationend', (event) => {
+    if (event.target === launch) remove();
+  });
+  setTimeout(remove, 2000);
+}
+
 async function boot() {
+  dismissLaunch();
   // Контракт для консольной отладки (и для страниц); push_event появится ниже.
   window.DL = { store, router, call, components, isDemo };
 
@@ -40,21 +57,15 @@ async function boot() {
     } catch (e) {
       console.error('[pages] не удалось открыть проекты', e);
     }
+    await loadPage('projects');
     router.showPage(DEFAULT_PAGE);
   } catch (error) {
     console.error('[boot]', error);
     showBootFailure(error);
   }
 
-  void loadExtraPages()
-    .then(() => {
-      if (document.querySelector('#page-host [data-stub]')) {
-        router.showPage(router.currentPage() || DEFAULT_PAGE);
-      }
-    })
-    .catch((error) => {
-      console.error('[pages] не удалось загрузить остальные экраны', error);
-    });
+  // Остальные экраны подключаются до того, как по ним можно кликнуть без ожидания.
+  void loadExtraPages();
   void initBridgeData().catch((error) => {
     console.error('[boot] данные моста', error);
   });
@@ -78,31 +89,100 @@ function showBootFailure(error) {
   host.replaceChildren(box);
 }
 
-/** Остальные страницы и мастер первого запуска. Один запрос на сессию. */
-let extraPages = null;
+/** Каждая страница грузится отдельно: сбой одной не гасит остальные. */
+const PAGE_LOADERS = {
+  chat: () => import('./pages/chat.js'),
+  projects: () => import('./pages/projects.js'),
+  documents: () => import('./pages/documents.js'),
+  review: () => import('./pages/review.js'),
+  queue: () => import('./pages/queue.js'),
+  models: () => import('./pages/models.js'),
+  glossary: () => import('./pages/glossary.js'),
+  settings: () => import('./pages/settings.js'),
+};
 
-function loadExtraPages() {
-  if (!extraPages) {
-    extraPages = import('./pages/index.js').catch((error) => {
-      extraPages = null;
-      console.error('[pages] не удалось загрузить', error);
-      throw error;
-    });
+/** @type {Map<string, Promise<void>>} */
+const pageLoads = new Map();
+
+function loadPage(name) {
+  if (router.pageNames().includes(name)) return Promise.resolve();
+  const load = PAGE_LOADERS[name];
+  if (!load) return Promise.reject(new Error(`Неизвестная страница «${name}».`));
+  let pending = pageLoads.get(name);
+  if (!pending) {
+    pending = load()
+      .then(() => {})
+      .catch((error) => {
+        pageLoads.delete(name);
+        throw error;
+      });
+    pageLoads.set(name, pending);
   }
-  return extraPages;
+  return pending;
 }
 
-/** Открыть страницу, дождавшись её модуля, если оболочка кликнула раньше загрузки. */
+function loadExtraPages() {
+  const pages = Object.keys(PAGE_LOADERS).map((name) => loadPage(name).catch((error) => {
+    console.error(`[pages] ${name}`, error);
+  }));
+  const wizard = import('./pages/wizard.js').catch((error) => {
+    console.error('[pages] мастер', error);
+  });
+  return Promise.all([...pages, wizard]);
+}
+
+/** Открыть страницу, дождавшись её модуля. */
 async function openPage(name) {
   if (!router.pageNames().includes(name)) {
     try {
-      await loadExtraPages();
-    } catch {
-      // showPage покажет заглушку.
+      await loadPage(name);
+    } catch (error) {
+      console.error(`[pages] ${name}`, error);
+      showLoadError(name);
+      return;
     }
   }
   router.showPage(name);
 }
+
+function showLoadError(name) {
+  const host = document.getElementById('page-host');
+  const title = document.getElementById('page-title');
+  if (title) title.textContent = 'Страница не открылась';
+  if (!host) return;
+  host.replaceChildren();
+  const box = document.createElement('div');
+  box.className = 'boot';
+  const heading = document.createElement('p');
+  heading.className = 'boot__title';
+  heading.textContent = 'Страница не открылась';
+  const text = document.createElement('p');
+  text.className = 'boot__text';
+  text.textContent = 'Закройте окно и запустите DotLingo ещё раз.';
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'btn btn--primary';
+  retry.textContent = 'Повторить';
+  retry.addEventListener('click', () => void openPage(name));
+  box.append(heading, text, retry);
+  host.append(box);
+}
+
+let pendingPage = '';
+
+window.addEventListener('dl-page-missing', (event) => {
+  const name = event.detail;
+  if (!name || !PAGE_LOADERS[name]) return;
+  pendingPage = name;
+  loadPage(name)
+    .then(() => {
+      if (pendingPage === name) router.showPage(name);
+    })
+    .catch((error) => {
+      console.error(`[pages] ${name}`, error);
+      if (pendingPage === name) showLoadError(name);
+    });
+});
 
 /**
  * Определяет режим bridge, подтягивает prefs/проекты/железо/модели/языки.
@@ -121,6 +201,7 @@ async function initBridgeData() {
   store.patch({ theme, reduceMotion: Boolean(prefs?.reduce_motion) });
   applyTheme(theme);
   document.documentElement.dataset.reduceMotion = prefs?.reduce_motion ? 'true' : 'false';
+  if (prefs?.reduce_motion) dismissLaunch();
 
   const [[active], [hardware], [languages], [dirs]] = await Promise.all([
     tryCall('getActiveProject'),

@@ -14,22 +14,25 @@ def _draw_icon(size: int) -> Image.Image:
     draw = ImageDraw.Draw(image)
     plate = max(2, round(size * 0.22))
     draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=plate, fill=_BG)
-    left = round(size * 0.29)
-    top = round(size * 0.20)
-    right = round(size * 0.73)
-    bottom = round(size * 0.80)
+    radius = max(2, round(size * 0.05))
     draw.rounded_rectangle(
-        (left, top, right, bottom),
-        radius=max(2, round(size * 0.06)),
+        (round(size * 0.34), round(size * 0.26), round(size * 0.78), round(size * 0.76)),
+        radius=radius,
         fill=_INK,
     )
-    spine_x = left + max(2, round(size * 0.055))
-    inset = max(2, round(size * 0.07))
+    cover = (round(size * 0.24), round(size * 0.20), round(size * 0.68), round(size * 0.80))
+    draw.rounded_rectangle(cover, radius=max(2, round(size * 0.06)), fill=_INK)
+    inset = max(2, round(size * 0.08))
+    spine = cover[0] + max(2, round(size * 0.07))
     draw.line(
-        (spine_x, top + inset, spine_x, bottom - inset),
+        (spine, cover[1] + inset, spine, cover[3] - inset),
         fill=_BG,
-        width=max(1, round(size * 0.035)),
+        width=max(1, round(size * 0.04)),
     )
+    edge = max(1, round(size * 0.018))
+    for step in (0.045, 0.075):
+        x = cover[2] + round(size * step)
+        draw.line((x, cover[1] + inset, x, cover[3] - inset), fill=_BG, width=edge)
     return image
 
 

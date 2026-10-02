@@ -54,17 +54,20 @@ export function currentPage() {
 }
 
 /**
- * Переключить страницу. Если страница не зарегистрирована - заглушка
- * «каркас готов» (страницы добавит волна 2).
+ * Переключить страницу. Если модуль ещё не подключился, экран не подменяется
+ * заглушкой: оболочка догружает модуль и вызывает показ ещё раз.
  * @param {string} name
  */
 export function showPage(name) {
   const host = document.getElementById('page-host');
   if (!host) return;
-  // Повторный заход на ту же страницу ничего не делает, кроме заглушки:
-  // её нужно заменить, когда модуль страницы догрузился.
-  if (name === current && !host.querySelector('[data-stub]')) return;
-  if (name === current) current = '';
+  const def = pages.get(name);
+  if (!def) {
+    // Не подменять экран текстом-заглушкой. Оболочка догрузит модуль и вызовет снова.
+    window.dispatchEvent(new CustomEvent('dl-page-missing', { detail: name }));
+    return;
+  }
+  if (name === current) return;
 
   const prev = pages.get(current);
   if (prev?.destroy) {
@@ -79,7 +82,6 @@ export function showPage(name) {
   store.set('page', name);
   host.replaceChildren();
 
-  const def = pages.get(name);
   const title = document.getElementById('page-title');
   const subtitle = document.getElementById('page-subtitle');
   const actions = document.getElementById('page-actions');
@@ -103,11 +105,6 @@ export function showPage(name) {
         stubMessage('Ошибка отрисовки страницы. Подробности в консоли.', 'error')
       );
     }
-  } else {
-    if (title) title.textContent = PAGE_TITLES[name] ?? 'DotLingo';
-    if (subtitle) subtitle.hidden = true;
-    actions.replaceChildren();
-    page.append(stubMessage('Каркас готов. Страница появится в следующем обновлении.'));
   }
 
   host.appendChild(page);

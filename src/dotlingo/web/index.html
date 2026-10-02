@@ -17,8 +17,83 @@
     #app { display: grid; grid-template-columns: 252px minmax(0, 1fr); height: 100%; }
     .boot__title { margin: 28px 32px 0; font-size: 21px; font-weight: 700; }
     .boot__text { margin: 8px 32px 0; color: rgba(235, 235, 245, 0.72); }
+    .launch {
+      position: fixed;
+      inset: 0;
+      z-index: 500;
+      display: grid;
+      place-items: center;
+      background: #0b0b0e;
+      animation: launch-fade 1.8s ease forwards;
+    }
+    .launch__stage { perspective: 900px; }
+    .launch__book {
+      position: relative;
+      width: 128px;
+      height: 168px;
+      transform-style: preserve-3d;
+      animation: launch-grow 1.6s cubic-bezier(0.16, 0.84, 0.28, 1) forwards;
+    }
+    .launch i { font-style: normal; }
+    .launch__sheet {
+      position: absolute;
+      inset: 14px 22px;
+      border-radius: 2px;
+      background: #f5f5f7;
+      opacity: 0.72;
+    }
+    .launch__cover {
+      position: absolute;
+      top: 0;
+      width: 50%;
+      height: 100%;
+      background: #f5f5f7;
+      backface-visibility: hidden;
+    }
+    .launch__cover--left {
+      left: 0;
+      border-radius: 6px 0 0 6px;
+      transform-origin: right center;
+      animation: launch-left 1.45s cubic-bezier(0.2, 0.75, 0.2, 1) forwards;
+    }
+    .launch__cover--right {
+      left: 50%;
+      border-radius: 0 6px 6px 0;
+      transform-origin: left center;
+      animation: launch-right 1.45s cubic-bezier(0.2, 0.75, 0.2, 1) 0.08s forwards;
+    }
+    @keyframes launch-grow {
+      from { transform: scale(0.62); }
+      to { transform: scale(1); }
+    }
+    .launch__book::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 10px;
+      bottom: 10px;
+      width: 3px;
+      margin-left: -1.5px;
+      background: #0b0b0e;
+      z-index: 3;
+    }
+    @keyframes launch-left {
+      from { transform: rotateY(0deg); }
+      to { transform: rotateY(-58deg); }
+    }
+    @keyframes launch-right {
+      from { transform: rotateY(0deg); }
+      to { transform: rotateY(58deg); }
+    }
+    @keyframes launch-fade {
+      0%, 72% { opacity: 1; }
+      100% { opacity: 0; visibility: hidden; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .launch { display: none; }
+    }
   </style>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230B0B0E'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='-apple-system, Segoe UI, sans-serif' font-size='17' font-weight='700' fill='%23F5F5F7'%3ED%3C/text%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230B0B0E'/%3E%3Crect x='8' y='7' width='13' height='18' rx='2' fill='%23F5F5F7'/%3E%3Crect x='19' y='8' width='5' height='16' rx='1' fill='%23F5F5F7'/%3E%3Cpath d='M11 10v12' stroke='%230B0B0E' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles/tokens.css">
   <link rel="stylesheet" href="styles/base.css">
   <link rel="stylesheet" href="styles/components.css">
@@ -28,11 +103,20 @@
   <script type="module" src="js/main.js"></script>
 </head>
 <body>
+  <div id="launch" class="launch" role="presentation">
+    <div class="launch__stage">
+      <div class="launch__book">
+        <i class="launch__sheet"></i>
+        <i class="launch__cover launch__cover--left"></i>
+        <i class="launch__cover launch__cover--right"></i>
+      </div>
+    </div>
+  </div>
   <div id="app">
 
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand__mark" aria-hidden="true">D</div>
+        <div class="brand__mark" aria-hidden="true"></div>
         <div class="brand__text">
           <span class="brand__name">DotLingo</span>
           <span class="brand__sub">локальный перевод</span>
