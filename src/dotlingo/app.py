@@ -270,7 +270,7 @@ def _arm_close_watchdog(api, window) -> None:
     """Если страница не ответила, окно всё равно закрывается."""
 
     def _fire() -> None:
-        time.sleep(2.6)
+        time.sleep(3.2)
         if api.close_permitted:
             return
         api.permit_close()

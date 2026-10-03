@@ -100,8 +100,8 @@
 .deck__stage {
   position: relative;
   min-height: 440px;
-  perspective: 1600px;
-  perspective-origin: left center;
+  perspective: 1200px;
+  perspective-origin: 18% 42%;
 }
 
 .deck__page {
@@ -133,12 +133,20 @@
 }
 
 .deck__page.is-turn-forward {
-  animation: deck-turn-forward 460ms cubic-bezier(0.45, 0.02, 0.15, 1) forwards;
+  animation: deck-turn-forward 680ms linear forwards;
 }
 
 .deck__page.is-turn-back {
-  transform: rotateY(-86deg);
-  animation: deck-turn-back 460ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+  transform: rotateY(-94deg) translateY(-8px);
+  animation: deck-turn-back 680ms linear both;
+}
+
+.deck__page.is-arrive {
+  animation: deck-arrive 680ms linear both;
+}
+
+.deck__page.is-sink {
+  animation: deck-sink 680ms linear both;
 }
 
 .deck__page.is-turn-forward::before,
@@ -148,19 +156,35 @@
   top: 0;
   bottom: 0;
   left: 0;
-  width: 22px;
+  width: 28px;
   pointer-events: none;
-  background: linear-gradient(90deg, rgba(0, 0, 0, 0.22), transparent);
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.28), transparent);
 }
 
 @keyframes deck-turn-forward {
-  0% { transform: rotateY(0deg); }
-  100% { transform: rotateY(-86deg); opacity: 0.2; }
+  0% { transform: rotateY(0deg) rotateZ(0deg) translateY(0); opacity: 1; }
+  32% { transform: rotateY(-36deg) rotateZ(-2.6deg) translateY(-16px); opacity: 1; }
+  64% { transform: rotateY(-82deg) rotateZ(1.8deg) translateY(-6px); opacity: 1; }
+  100% { transform: rotateY(-102deg) rotateZ(-0.6deg) translateY(10px); opacity: 0; }
 }
 
 @keyframes deck-turn-back {
-  0% { transform: rotateY(-86deg); opacity: 0.25; }
-  100% { transform: rotateY(0deg); opacity: 1; }
+  0% { transform: rotateY(-98deg) rotateZ(-1.8deg) translateY(-10px); opacity: 0.2; }
+  36% { transform: rotateY(-34deg) rotateZ(2.4deg) translateY(-18px); opacity: 1; }
+  70% { transform: rotateY(7deg) rotateZ(-0.8deg) translateY(3px); opacity: 1; }
+  100% { transform: rotateY(0deg) rotateZ(0deg) translateY(0); opacity: 1; }
+}
+
+@keyframes deck-arrive {
+  0% { transform: rotateY(12deg) rotateZ(1.5deg) translateY(14px) scale(0.985); }
+  58% { transform: rotateY(-3deg) rotateZ(-0.7deg) translateY(-5px) scale(1.012); }
+  100% { transform: rotateY(0deg) rotateZ(0deg) translateY(0) scale(1); }
+}
+
+@keyframes deck-sink {
+  0% { transform: rotateZ(0deg) translateY(0) scale(1); }
+  45% { transform: rotateZ(0.9deg) translateY(7px) scale(0.99); }
+  100% { transform: rotateZ(0deg) translateY(0) scale(1); }
 }
 
 .deck .stack {
@@ -368,7 +392,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .deck__page.is-turn-forward,
-  .deck__page.is-turn-back {
+  .deck__page.is-turn-back,
+  .deck__page.is-arrive,
+  .deck__page.is-sink {
     animation: none;
   }
 }

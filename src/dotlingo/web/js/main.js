@@ -41,8 +41,8 @@ function dismissLaunch() {
   launch.addEventListener('animationend', (event) => {
     if (event.target === launch && event.animationName === 'launch-fade') hide();
   });
-  // Дольше кадра заставки (2.2 с), чтобы запасной таймер не оборвал листание.
-  setTimeout(hide, 2600);
+  // Дольше кадра заставки (2.5 с), чтобы запасной таймер не оборвал листание.
+  setTimeout(hide, 2900);
 }
 
 /** Книга захлопывается, затем окно отпускается. Повторный вызов ничего не делает. */
@@ -72,7 +72,7 @@ function playClose() {
   launch.addEventListener('animationend', (event) => {
     if (event.animationName === 'close-sit') finish();
   });
-  setTimeout(finish, 1900);
+  setTimeout(finish, 2400);
 }
 
 window.DL = { playClose };

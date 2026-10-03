@@ -441,10 +441,13 @@ function turn(direction) {
 
   turning = true;
   paintChrome();
+  const turnName = direction === 'forward' ? 'deck-turn-forward' : 'deck-turn-back';
   if (direction === 'forward') {
+    next.classList.add('is-arrive');
     stage.insertBefore(next, current);
     current.classList.add('is-turn-forward');
   } else {
+    current.classList.add('is-sink');
     next.classList.add('is-turn-back');
     stage.append(next);
   }
@@ -455,7 +458,7 @@ function turn(direction) {
     turning = false;
     if (!hostEl?.isConnected) return;
     current.remove();
-    next.classList.remove('is-turn-back');
+    next.classList.remove('is-turn-back', 'is-arrive');
     paintChrome();
     if (direction !== 'none') {
       const title = next.querySelector('h2');
@@ -463,8 +466,11 @@ function turn(direction) {
       title?.focus({ preventScroll: true });
     }
   };
-  moving.addEventListener('animationend', finishTurn, { once: true });
-  setTimeout(finishTurn, 560);
+  moving.addEventListener('animationend', (event) => {
+    if (event.target !== moving || event.animationName !== turnName) return;
+    finishTurn();
+  });
+  setTimeout(finishTurn, 780);
 }
 
 function buildPage() {
