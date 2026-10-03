@@ -9,6 +9,8 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -227,6 +229,56 @@ def _halt_process(code: int) -> None:
     os._exit(code)
 
 
+def _closing_result(decision: str, animation_started: bool) -> bool | None:
+    """None отпускает окно. False отменяет закрытие, пока книга не сложится."""
+    if decision == "allow":
+        return None
+    if decision == "wait":
+        return False
+    if animation_started:
+        return False
+    return None
+
+
+def _start_close_animation(window) -> bool:
+    """Запустить кадр закрытия на UI-потоке, не дожидаясь скрипта.
+
+    evaluate_js отсюда нельзя: он делает Invoke и ждёт семафор, а FormClosing
+    уже сидит на этом же потоке.
+    """
+    native = getattr(window, "native", None)
+    browser = getattr(native, "browser", None)
+    control = getattr(browser, "webview", None)
+    if control is None:
+        return False
+    script = (
+        "(function(){"
+        "if(window.DL&&window.DL.playClose){window.DL.playClose();return;}"
+        "if(window.pywebview&&window.pywebview.api&&window.pywebview.api.finishClose){"
+        "window.pywebview.api.finishClose();}"
+        "})()"
+    )
+    try:
+        control.ExecuteScriptAsync(script)
+    except Exception:
+        traceback.print_exc()
+        return False
+    return True
+
+
+def _arm_close_watchdog(api, window) -> None:
+    """Если страница не ответила, окно всё равно закрывается."""
+
+    def _fire() -> None:
+        time.sleep(2.6)
+        if api.close_permitted:
+            return
+        api.permit_close()
+        _ask_window_to_close(window)
+
+    threading.Thread(target=_fire, name="dotlingo-close", daemon=True).start()
+
+
 def _ask_window_to_close(window) -> None:
     """Закрыть окно с потока консоли, не блокируя обработчик Ctrl+C."""
     native = getattr(window, "native", None)
@@ -417,6 +469,18 @@ def main() -> None:
         text_select=True,
     )
     api.attach_window(window)
+    api.set_window_closer(lambda: _ask_window_to_close(window))
+
+    def _on_closing() -> bool | None:
+        decision = api.note_close_attempt()
+        if decision == "animate":
+            started = _start_close_animation(window)
+            if started:
+                _arm_close_watchdog(api, window)
+            else:
+                api.permit_close()
+            return _closing_result(decision, started)
+        return _closing_result(decision, False)
 
     def _on_closed() -> None:
         # Подписчик события closed обязан вернуть hashable; возвращаем None.
@@ -433,6 +497,7 @@ def main() -> None:
         _enable_text_menu(window)
 
     window.events.shown += _on_shown
+    window.events.closing += _on_closing
     window.events.closed += _on_closed
     _bind_console_stop(window)
     exit_code = 0

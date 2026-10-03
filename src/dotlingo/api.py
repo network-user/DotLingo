@@ -272,6 +272,9 @@ class Api:
         self._download_cancel: DownloadCancellation | None = None
         self._market_busy = False
         self._closing = False
+        self._close_permitted = False
+        self._close_animating = False
+        self._window_closer: Callable[[], None] | None = None
         self.hardware, self._hardware_detected_at = _load_hardware_cache(self.data_dir)
         self._scratch = ScratchTranslator(self.models_dir, self._push, self._document_busy)
         preferences = load_preferences(self.preferences_root)
@@ -285,6 +288,26 @@ class Api:
     def attach_window(self, window: Any) -> None:
         """Bind the pywebview window so the bridge can push events and dialogs."""
         self._window = window
+
+    def set_window_closer(self, closer: Callable[[], None] | None) -> None:
+        """Куда звать, когда книга уже закрылась и окно можно отпустить."""
+        self._window_closer = closer
+
+    def note_close_attempt(self) -> str:
+        """allow - окно можно закрыть, wait - книга уже складывается, animate - начать кадр."""
+        if self._close_permitted:
+            return "allow"
+        if self._close_animating:
+            return "wait"
+        self._close_animating = True
+        return "animate"
+
+    def permit_close(self) -> None:
+        self._close_permitted = True
+
+    @property
+    def close_permitted(self) -> bool:
+        return self._close_permitted
 
     def _push(self, name: str, payload: dict[str, Any]) -> None:
         window = self._window
@@ -1423,6 +1446,14 @@ class Api:
         )
 
     # ------------------------------------------------------------------ shutdown
+
+    def finishClose(self) -> dict[str, Any]:
+        """Книга закрылась: разрешить окну уйти."""
+        self._close_permitted = True
+        closer = self._window_closer
+        if closer is not None:
+            closer()
+        return _ok(None)
 
     def closeGracefully(self) -> dict[str, Any]:
         self._closing = True

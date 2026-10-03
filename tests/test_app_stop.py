@@ -1,4 +1,11 @@
-from dotlingo.app import _ask_window_to_close, _console_should_stop
+from dotlingo.app import _ask_window_to_close, _closing_result, _console_should_stop
+
+
+def test_closing_keeps_the_window_until_the_book_shuts() -> None:
+    assert _closing_result("animate", True) is False
+    assert _closing_result("wait", False) is False
+    assert _closing_result("allow", True) is None
+    assert _closing_result("animate", False) is None
 
 
 def test_console_stop_covers_ctrl_c_and_console_close() -> None:
@@ -23,6 +30,20 @@ def test_console_close_uses_the_ui_thread_when_the_form_exists() -> None:
     assert posted
     posted[0]()
     assert posted[-1] == "close"
+
+
+def test_finish_close_permits_the_window_to_go(tmp_path) -> None:
+    from dotlingo.api import Api
+
+    api = Api(tmp_path)
+    calls: list[str] = []
+    api.set_window_closer(lambda: calls.append("close"))
+    assert api.note_close_attempt() == "animate"
+    assert api.note_close_attempt() == "wait"
+    assert api.finishClose()["ok"] is True
+    assert api.close_permitted is True
+    assert calls == ["close"]
+    assert api.note_close_attempt() == "allow"
 
 
 def test_console_close_destroys_the_window_before_the_form_exists() -> None:

@@ -20,26 +20,67 @@ const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая' };
  * Boot
  * ------------------------------------------------------------------------- */
 
+let closeStarted = false;
+
+function reduceMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || document.documentElement.dataset.reduceMotion === 'true';
+}
+
 function dismissLaunch() {
   const launch = document.getElementById('launch');
-  if (!launch) return;
-  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    || document.documentElement.dataset.reduceMotion === 'true';
-  if (reduce) {
-    launch.remove();
+  if (!launch || launch.classList.contains('is-closing')) return;
+  if (reduceMotion()) {
+    launch.hidden = true;
     return;
   }
-  const remove = () => launch.remove();
+  const hide = () => {
+    if (closeStarted || launch.classList.contains('is-closing')) return;
+    launch.hidden = true;
+  };
   launch.addEventListener('animationend', (event) => {
-    if (event.target === launch) remove();
+    if (event.target === launch && event.animationName === 'launch-fade') hide();
   });
-  setTimeout(remove, 2000);
+  // Дольше кадра заставки (2.2 с), чтобы запасной таймер не оборвал листание.
+  setTimeout(hide, 2600);
 }
+
+/** Книга захлопывается, затем окно отпускается. Повторный вызов ничего не делает. */
+function requestWindowClose() {
+  void call('finishClose').catch(() => {});
+}
+
+function playClose() {
+  if (closeStarted) return;
+  closeStarted = true;
+  if (reduceMotion()) {
+    requestWindowClose();
+    return;
+  }
+  const launch = document.getElementById('launch');
+  if (!launch) {
+    requestWindowClose();
+    return;
+  }
+  launch.hidden = false;
+  launch.classList.add('is-closing');
+  const finish = () => {
+    if (finish.done) return;
+    finish.done = true;
+    requestWindowClose();
+  };
+  launch.addEventListener('animationend', (event) => {
+    if (event.animationName === 'close-sit') finish();
+  });
+  setTimeout(finish, 1900);
+}
+
+window.DL = { playClose };
 
 async function boot() {
   dismissLaunch();
   // Контракт для консольной отладки (и для страниц); push_event появится ниже.
-  window.DL = { store, router, call, components, isDemo };
+  window.DL = { store, router, call, components, isDemo, playClose };
 
   try {
     wireShell();

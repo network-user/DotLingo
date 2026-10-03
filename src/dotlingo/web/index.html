@@ -17,6 +17,7 @@
     #app { display: grid; grid-template-columns: 252px minmax(0, 1fr); height: 100%; }
     .boot__title { margin: 28px 32px 0; font-size: 21px; font-weight: 700; }
     .boot__text { margin: 8px 32px 0; color: rgba(235, 235, 245, 0.72); }
+    /* Книга: ~2.2 с. Закрытая обложка по центру, затем разворот и 12 листов. */
     .launch {
       position: fixed;
       inset: 0;
@@ -24,71 +25,200 @@
       display: grid;
       place-items: center;
       background: #0b0b0e;
-      animation: launch-fade 1.8s ease forwards;
+      animation: launch-fade 2.2s linear forwards;
     }
-    .launch__stage { perspective: 900px; }
+    .launch__stage {
+      perspective: 1400px;
+      perspective-origin: 50% 42%;
+      padding: 36px 0 28px;
+    }
     .launch__book {
       position: relative;
-      width: 128px;
-      height: 168px;
+      width: min(340px, 74vw);
+      height: min(230px, 46vh);
       transform-style: preserve-3d;
-      animation: launch-grow 1.6s cubic-bezier(0.16, 0.84, 0.28, 1) forwards;
+      animation: launch-sit 2.2s cubic-bezier(0.22, 0.8, 0.2, 1) forwards;
     }
-    .launch i { font-style: normal; }
-    .launch__sheet {
-      position: absolute;
-      inset: 14px 22px;
-      border-radius: 2px;
-      background: #f5f5f7;
-      opacity: 0.72;
-    }
-    .launch__cover {
+    .launch__back,
+    .launch__leaf,
+    .launch__cover,
+    .launch__spine {
       position: absolute;
       top: 0;
+    }
+    .launch__back {
       width: 50%;
       height: 100%;
-      background: #f5f5f7;
-      backface-visibility: hidden;
+      background-color: #f5f5f7;
+      background-repeat: no-repeat;
+      background-image:
+        linear-gradient(rgba(11, 11, 14, 0.5), rgba(11, 11, 14, 0.5)),
+        linear-gradient(rgba(11, 11, 14, 0.22), rgba(11, 11, 14, 0.22)),
+        linear-gradient(rgba(11, 11, 14, 0.22), rgba(11, 11, 14, 0.22)),
+        linear-gradient(rgba(11, 11, 14, 0.18), rgba(11, 11, 14, 0.18));
     }
-    .launch__cover--left {
+    .launch__back--left {
       left: 0;
-      border-radius: 6px 0 0 6px;
-      transform-origin: right center;
-      animation: launch-left 1.45s cubic-bezier(0.2, 0.75, 0.2, 1) forwards;
+      border-radius: 7px 0 0 7px;
+      background-size: 34% 2px, 60% 1.5px, 54% 1.5px, 64% 1.5px;
+      background-position: 16px 24px, 16px 36px, 16px 44px, 16px 56px;
+      opacity: 0;
+      animation: launch-reveal 0.28s ease 0.36s forwards;
     }
-    .launch__cover--right {
+    .launch__back--right {
       left: 50%;
-      border-radius: 0 6px 6px 0;
+      border-radius: 0 7px 7px 0;
+      background-size: 28% 2px, 66% 1.5px, 58% 1.5px, 48% 1.5px;
+      background-position: 18px 28px, 18px 42px, 18px 50px, 18px 62px;
+    }
+    .launch__leaf,
+    .launch__cover {
+      left: 50%;
+      width: 50%;
+      height: 100%;
       transform-origin: left center;
-      animation: launch-right 1.45s cubic-bezier(0.2, 0.75, 0.2, 1) 0.08s forwards;
+      transform-style: preserve-3d;
     }
-    @keyframes launch-grow {
-      from { transform: scale(0.62); }
-      to { transform: scale(1); }
+    .launch__leaf {
+      z-index: calc(40 - var(--i));
+      animation: launch-leaf 0.4s cubic-bezier(0.45, 0.02, 0.2, 1) both;
+      animation-delay: calc(0.58s + var(--i) * 0.07s);
     }
-    .launch__book::after {
-      content: "";
+    .launch__cover { z-index: 30; animation: launch-cover 0.58s cubic-bezier(0.4, 0.05, 0.18, 1) 0.2s both; }
+    .launch__leaf span,
+    .launch__cover span {
       position: absolute;
+      inset: 0;
+      backface-visibility: hidden;
+      background-color: #f5f5f7;
+    }
+    .launch__leaf span:first-child,
+    .launch__cover span:first-child { border-radius: 0 5px 5px 0; }
+    .launch__leaf span:last-child,
+    .launch__cover span:last-child {
+      transform: rotateY(180deg);
+      border-radius: 5px 0 0 5px;
+      background-color: #f5f5f7;
+      background-repeat: no-repeat;
+      background-image:
+        linear-gradient(rgba(11, 11, 14, 0.07), rgba(11, 11, 14, 0.07)),
+        linear-gradient(rgba(11, 11, 14, 0.4), rgba(11, 11, 14, 0.4)),
+        linear-gradient(rgba(11, 11, 14, 0.22), rgba(11, 11, 14, 0.22)),
+        linear-gradient(rgba(11, 11, 14, 0.22), rgba(11, 11, 14, 0.22));
+      background-size: auto, 48% 1.5px, 70% 1.5px, 58% 1.5px;
+      background-position: 0 0, 14px 22px, 14px 34px, 14px 46px;
+    }
+    .launch__leaf span:first-child {
+      background-repeat: no-repeat;
+      background-image:
+        linear-gradient(rgba(11, 11, 14, 0.55), rgba(11, 11, 14, 0.55)),
+        linear-gradient(rgba(11, 11, 14, 0.24), rgba(11, 11, 14, 0.24)),
+        linear-gradient(rgba(11, 11, 14, 0.24), rgba(11, 11, 14, 0.24)),
+        linear-gradient(rgba(11, 11, 14, 0.24), rgba(11, 11, 14, 0.24)),
+        linear-gradient(rgba(11, 11, 14, 0.18), rgba(11, 11, 14, 0.18));
+      background-size: 40% 2px, 72% 1.5px, 66% 1.5px, 70% 1.5px, 52% 1.5px;
+      background-position:
+        12px calc(16px + var(--i) * 2px),
+        12px calc(28px + var(--i) * 2px),
+        12px calc(36px + var(--i) * 2px),
+        12px calc(44px + var(--i) * 2px),
+        12px calc(56px + var(--i) * 2px);
+    }
+    .launch__cover span:first-child {
+      background-repeat: no-repeat;
+      background-image:
+        linear-gradient(#0b0b0e, #0b0b0e),
+        linear-gradient(rgba(11, 11, 14, 0.35), rgba(11, 11, 14, 0.35)),
+        linear-gradient(rgba(11, 11, 14, 0.2), rgba(11, 11, 14, 0.2)),
+        linear-gradient(rgba(11, 11, 14, 0.2), rgba(11, 11, 14, 0.2)),
+        linear-gradient(rgba(11, 11, 14, 0.16), rgba(11, 11, 14, 0.16));
+      background-size: 36px 3px, 56px 2px, 68% 1.5px, 60% 1.5px, 64% 1.5px;
+      background-position: 16px 28px, 16px 40px, 16px 58px, 16px 68px, 16px 78px;
+      box-shadow:
+        1px 0 0 rgba(11, 11, 14, 0.22),
+        2px 0 0 #f5f5f7,
+        3px 0 0 rgba(11, 11, 14, 0.28),
+        4px 0 0 #f5f5f7,
+        5px 0 0 rgba(11, 11, 14, 0.32),
+        6px 0 0 #f5f5f7,
+        7px 0 0 rgba(11, 11, 14, 0.24);
+    }
+    .launch__spine {
       left: 50%;
-      top: 10px;
-      bottom: 10px;
-      width: 3px;
-      margin-left: -1.5px;
-      background: #0b0b0e;
-      z-index: 3;
+      top: 7px;
+      bottom: 7px;
+      width: 9px;
+      margin-left: -4px;
+      border-radius: 5px;
+      z-index: 36;
+      opacity: 0;
+      pointer-events: none;
+      background: linear-gradient(90deg, rgba(11, 11, 14, 0.55), rgba(245, 245, 247, 0.55) 48%, rgba(11, 11, 14, 0.4));
+      animation: launch-reveal 0.22s ease 0.48s forwards;
     }
-    @keyframes launch-left {
-      from { transform: rotateY(0deg); }
-      to { transform: rotateY(-58deg); }
+    @keyframes launch-sit {
+      0% { transform: translateX(-25%) rotateX(14deg) scale(0.92); }
+      18% { transform: translateX(-25%) rotateX(11deg) scale(1); }
+      40% { transform: translateX(0) rotateX(7deg) scale(1); }
+      100% { transform: translateX(0) rotateX(7deg) scale(1); }
     }
-    @keyframes launch-right {
-      from { transform: rotateY(0deg); }
-      to { transform: rotateY(58deg); }
+    @keyframes launch-cover {
+      0% { transform: rotateY(0deg); z-index: 30; }
+      72% { z-index: 30; }
+      100% { transform: rotateY(-172deg); z-index: 1; }
     }
+    @keyframes launch-leaf {
+      0% { transform: rotateY(0deg); z-index: calc(40 - var(--i)); }
+      68% { z-index: calc(40 - var(--i)); }
+      78% { z-index: calc(2 + var(--i)); }
+      100% { transform: rotateY(-176deg); z-index: calc(2 + var(--i)); }
+    }
+    @keyframes launch-reveal { to { opacity: 1; } }
     @keyframes launch-fade {
-      0%, 72% { opacity: 1; }
+      0%, 84% { opacity: 1; }
       100% { opacity: 0; visibility: hidden; }
     }
+    /* Закрытие: открытый разворот, страницы возвращаются, обложка захлопывается. */
+    .launch.is-closing {
+      visibility: visible;
+      animation: close-in 0.16s ease both;
+    }
+    .launch.is-closing .launch__book {
+      animation: close-sit 1.75s cubic-bezier(0.4, 0.05, 0.2, 1) both;
+    }
+    .launch.is-closing .launch__leaf {
+      z-index: calc(12 + var(--i));
+      animation: close-leaf 0.32s cubic-bezier(0.45, 0.02, 0.2, 1) both;
+      animation-delay: calc((11 - var(--i)) * 0.055s);
+    }
+    .launch.is-closing .launch__cover {
+      animation: close-cover 0.48s cubic-bezier(0.4, 0.05, 0.18, 1) 0.86s both;
+    }
+    .launch.is-closing .launch__back--left,
+    .launch.is-closing .launch__spine {
+      opacity: 1;
+      animation: close-hide 0.24s ease 1.22s forwards;
+    }
+    @keyframes close-in {
+      from { opacity: 0; visibility: visible; }
+      to { opacity: 1; visibility: visible; }
+    }
+    @keyframes close-sit {
+      0%, 52% { transform: translateX(0) rotateX(7deg) scale(1); }
+      82%, 100% { transform: translateX(-25%) rotateX(12deg) scale(0.96); }
+    }
+    @keyframes close-leaf {
+      0% { transform: rotateY(-176deg); z-index: calc(12 + var(--i)); }
+      12% { z-index: 70; }
+      72% { z-index: 70; }
+      100% { transform: rotateY(0deg); z-index: calc(28 - var(--i)); }
+    }
+    @keyframes close-cover {
+      0% { transform: rotateY(-172deg); z-index: 1; }
+      18% { z-index: 36; }
+      100% { transform: rotateY(0deg); z-index: 36; }
+    }
+    @keyframes close-hide { to { opacity: 0; } }
     @media (prefers-reduced-motion: reduce) {
       .launch { display: none; }
     }
@@ -106,9 +236,22 @@
   <div id="launch" class="launch" role="presentation">
     <div class="launch__stage">
       <div class="launch__book">
-        <i class="launch__sheet"></i>
-        <i class="launch__cover launch__cover--left"></i>
-        <i class="launch__cover launch__cover--right"></i>
+        <div class="launch__back launch__back--left"></div>
+        <div class="launch__back launch__back--right"></div>
+        <div class="launch__leaf" style="--i:11"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:10"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:9"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:8"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:7"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:6"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:5"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:4"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:3"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:2"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:1"><span></span><span></span></div>
+        <div class="launch__leaf" style="--i:0"><span></span><span></span></div>
+        <div class="launch__cover"><span></span><span></span></div>
+        <div class="launch__spine"></div>
       </div>
     </div>
   </div>
