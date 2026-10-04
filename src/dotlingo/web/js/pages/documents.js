@@ -283,7 +283,11 @@ async function revealLatestExport(docId) {
 
 /** Диалог выбора файлов и запуск импорта. */
 async function importFiles(host) {
-  const [paths] = await tryCall('resolveImportPaths');
+  const [paths, error] = await tryCall('resolveImportPaths');
+  if (error) {
+    toast(error.message, 'error');
+    return;
+  }
   if (!paths || paths.length === 0) return;
   try {
     await call('importDocuments', paths);

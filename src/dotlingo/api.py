@@ -64,7 +64,12 @@ from dotlingo.scratch import (
 from dotlingo.storage import ProjectStore, delete_project, list_projects
 from dotlingo.task_queue import TaskQueue, build_chunks
 
-IMPORT_EXTENSIONS = ("*.txt;*.md;*.markdown;*.docx;*.epub;*.pdf", "Все файлы (*.*)")
+# Формат фильтра: «описание (*.ext)». Строка без описания pywebview отвергает,
+# и диалог тогда не открывается. То же правило, что у GGUF_FILE_TYPES.
+IMPORT_EXTENSIONS = (
+    "Документы (*.txt;*.md;*.markdown;*.docx;*.epub;*.pdf)",
+    "Все файлы (*.*)",
+)
 
 
 EXPORT_ALLOWED = {
@@ -1409,15 +1414,15 @@ class Api:
 
     def resolveImportPaths(self) -> dict[str, Any]:
         if self._window is None:
-            return _ok([])
+            return _err("Окно приложения ещё не готово.", "no_window")
         try:
             paths = self._window.create_file_dialog(
                 webview.OPEN_DIALOG,
                 allow_multiple=True,
                 file_types=IMPORT_EXTENSIONS,
             )
-        except Exception:
-            return _ok([])
+        except Exception as exc:
+            return _err(f"Не удалось открыть проводник: {exc}")
         if not paths:
             return _ok([])
         return _ok([str(item) for item in paths])

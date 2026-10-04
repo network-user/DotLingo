@@ -39,6 +39,17 @@ def test_gguf_dialog_filter_is_valid() -> None:
         assert pattern.startswith("*")
 
 
+def test_import_dialog_filter_is_valid() -> None:
+    from webview.util import parse_file_type
+
+    for item in api_module.IMPORT_EXTENSIONS:
+        description, pattern = parse_file_type(item)
+        assert description
+        assert pattern.startswith("*")
+    assert "*.docx" in api_module.IMPORT_EXTENSIONS[0]
+    assert "*.pdf" in api_module.IMPORT_EXTENSIONS[0]
+
+
 def test_claim_dropped_file_returns_path(tmp_path: Path) -> None:
     from webview.dom import _dnd_state
 
