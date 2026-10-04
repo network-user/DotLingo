@@ -18,6 +18,8 @@ import {
   modal,
   spinner,
   icon,
+  helpMark,
+  closeHelpMarks,
 } from '../components.js';
 
 /* -------------------------------------------------------------------------
@@ -69,10 +71,10 @@ let marketPayload = { fetchedAt: null, stale: false, errors: [], offers: [] };
 let marketRefreshing = false;
 
 const MARKET_INTRO = [
-  'Фиксированный список переводческих и многоязычных GGUF с Hugging Face.',
-  'Кнопка только читает карточки, веса не качаются.',
-  'Для CPU оставлены Q4 как баланс скорости и Q6 как более точный и более тяжёлый квант.',
-  'Качество перевода здесь не измерялось.',
+  'Закреплённый список переводческих GGUF с Hugging Face.',
+  '«Обновить» только читает карточки и ничего не скачивает.',
+  'Для процессора оставлены Q4, он легче, и Q6, он тяжелее и точнее.',
+  'Насколько хорошо модель переводит конкретную пару, этот список не проверяет.',
 ].join(' ');
 
 /* -------------------------------------------------------------------------
@@ -117,6 +119,7 @@ function render(host) {
 
 /** Полная перерисовка содержимого страницы из store. */
 function paint(host, { loading = false } = {}) {
+  closeHelpMarks();
   const hardware = store.get('hardware');
   const recommendation = store.get('recommendation');
   const models = store.get('models') || [];
@@ -135,8 +138,8 @@ function paint(host, { loading = false } = {}) {
         ? el('div', { class: 'page-loading' }, [spinner('lg')])
         : emptyState({
             iconName: 'chip',
-            title: 'Каталог моделей пуст',
-            text: 'Добавьте собственный GGUF-файл кнопкой «Добавить модель».',
+            title: 'В каталоге пока нет моделей',
+            text: 'Скачайте файл с рынка ниже или добавьте свой GGUF кнопкой «Добавить модель».',
           })
     );
   } else {
@@ -149,7 +152,7 @@ function paint(host, { loading = false } = {}) {
       grid,
       el('p', {
         class: 'model-shop-note',
-        text: 'Свой GGUF добавляется отдельно. Качество перевода отдельных направлений не измеряется.',
+        text: 'Свой файл GGUF добавляется кнопкой «Добавить модель». Качество отдельных языковых пар каталог не проверяет.',
       }),
       marketBlock(),
     ])
@@ -222,7 +225,10 @@ function marketBlock() {
 
   return el('section', { class: 'stack' }, [
     el('div', { class: 'model-card__head' }, [
-      el('h2', { class: 'hw-panel__title', text: 'Рынок моделей' }),
+      el('div', { class: 'title-with-help' }, [
+        el('h2', { class: 'hw-panel__title', text: 'Рынок моделей' }),
+        helpMark('Закреплённый список с Hugging Face. «Обновить» только читает карточки. Файл скачивается отдельно, после согласия.'),
+      ]),
       button({
         label: marketRefreshing ? 'Обновление…' : 'Обновить с Hugging Face',
         variant: 'ghost',
@@ -341,7 +347,7 @@ function recommendationPanel(recommendation) {
     el('p', { class: 'model-rec__reason', text: recommendation.reason || '' }),
     el('p', {
       class: 'model-rec__disclaimer',
-      text: 'Подбор оценивает совместимость по ресурсам, не качество перевода; используется CPU.',
+      text: 'Подбор смотрит, хватит ли памяти и места на диске. Качество перевода он не оценивает.',
     }),
     activeProject && model
       ? el('div', { class: 'model-rec__actions' }, [
@@ -775,7 +781,8 @@ function destroy() {
 
 router.registerPage('models', {
   title: 'Модели',
-  subtitle: 'Локальные GGUF-модели перевода',
+  subtitle: 'Файлы перевода на этом компьютере',
+  help: 'Каталог - файлы, которые уже на диске. Рынок показывает закреплённый список с Hugging Face и ничего не качает, пока вы не нажмёте «Скачать». Свой GGUF копируется в каталог и проверяется по размеру и SHA-256. Подбор смотрит память и место, не качество перевода.',
   render,
   destroy,
   actions,

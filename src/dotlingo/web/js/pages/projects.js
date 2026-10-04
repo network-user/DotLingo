@@ -16,6 +16,7 @@ import {
   emptyState,
   confirmDialog,
   spinner,
+  helpMark,
 } from '../components.js';
 
 const STEPS = [
@@ -669,7 +670,10 @@ function languageSlide() {
   return el('div', { class: 'stack stack--lg' }, [
     slideHead('Языки', lead),
     el('div', { class: 'field' }, [
-      el('label', { class: 'field__label', htmlFor: 'deck-source', text: 'Исходный язык' }),
+      el('label', { class: 'field__label field__label--with-help', htmlFor: 'deck-source' }, [
+        'Исходный язык',
+        helpMark('«Авто» не фиксирует язык. Перед переводом модель смотрит образец документа и выбирает код из своего списка. Если язык известен, укажите его сами.'),
+      ]),
       source,
     ]),
     el('div', { class: 'field' }, [
@@ -969,7 +973,8 @@ export function openCreateProjectModal() {
 
 router.registerPage('projects', {
   title: 'Проекты',
-  subtitle: 'Четыре листа: проект, языки, модель, проверка',
+  subtitle: 'Открыть проект или собрать новый',
+  help: 'Четыре шага: название, языки, модель и проверка перед сохранением. Уже существующий проект можно открыть сразу. Список языков берётся из выбранной модели.',
   render,
   destroy,
   actions,

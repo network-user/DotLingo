@@ -116,7 +116,7 @@ function render() {
     el('p', { class: 'setup__note', text: deviceLine() }),
     el('p', {
       class: 'setup__note',
-      text: 'Если скачать не получится или подходящего веса нет, приложение всё равно откроется.',
+      text: 'Если скачать не получится или подходящей модели нет, приложение всё равно откроется.',
     }),
     el('div', { class: 'setup__actions' }, [primaryButton()]),
   ]);
@@ -138,7 +138,7 @@ function primaryButton() {
 
 function previewText() {
   if (hasInstalledModel()) {
-    return 'Подходящий вес уже на диске. Кнопка просто откроет приложение.';
+    return 'Подходящая модель уже на диске. Кнопка просто откроет приложение.';
   }
   const { model, reason } = recommendedChoice();
   if (model && !placementBlocked(model)) {
@@ -153,7 +153,7 @@ function previewText() {
 
 function deviceLine() {
   const hw = store.get('hardware');
-  if (!hw) return 'Устройство ещё считается. Кнопку можно нажать сразу.';
+  if (!hw) return 'Устройство ещё проверяется. Кнопку можно нажать сразу.';
   const parts = [];
   if (hw.cpuThreads) parts.push(`${hw.cpuThreads} потоков`);
   if (Number.isFinite(hw.ramTotalGb)) parts.push(`${formatGb(hw.ramTotalGb)} RAM`);

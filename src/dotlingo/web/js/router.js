@@ -2,6 +2,7 @@
  * Hash-free SPA-роутер: showPage(name), реестр страниц, fade/slide 180ms.
  */
 
+import { closeHelpMarks, helpMark } from './components.js';
 import { icon } from './icons.js';
 import * as store from './store.js';
 
@@ -28,7 +29,8 @@ let current = '';
  * @param {string} name - уникальный ключ (совпадает с data-page в навигации).
  * @param {object} def
  * @param {string} def.title - заголовок в шапке.
- * @param {string} [def.subtitle] - подзаголовок в шапке.
+ * @param {string} [def.subtitle] - короткая строка под заголовком.
+ * @param {string} [def.help] - пояснение вкладки на знаке «?» у заголовка.
  * @param {(host: HTMLElement, ctx: object) => void} def.render -
  *   строит DOM страницы внутри host (вызывается при каждом показе).
  * @param {(host: HTMLElement) => void} [def.destroy] -
@@ -94,6 +96,13 @@ export function showPage(name) {
     if (subtitle) {
       subtitle.textContent = def.subtitle ?? '';
       subtitle.hidden = !def.subtitle;
+    }
+    closeHelpMarks();
+    const helpHost = document.getElementById('page-help');
+    if (helpHost) {
+      helpHost.replaceChildren();
+      if (def.help) helpHost.append(helpMark(def.help));
+      helpHost.hidden = !def.help;
     }
     actions.replaceChildren();
     try {

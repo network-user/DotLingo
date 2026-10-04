@@ -77,7 +77,7 @@ function render(host) {
 
   host.append(
     el('p', { class: 'queue-note text-secondary' }, [
-      'Прогресс показывает готовые фрагменты. Время до завершения не оценивается.',
+      'Прогресс считает готовые фрагменты. Время до конца не оценивается.',
     ]),
     el('div', { class: 'queue-toolbar row row--between row--wrap' }, [
       el('div', { class: 'row row--wrap' }, [
@@ -144,11 +144,14 @@ function renderList(host) {
   });
 
   if (visible.length === 0) {
+    const narrowed = allTasks.length > 0;
     list.replaceChildren(
       emptyState({
         iconName: 'list',
-        title: 'Очередь пуста',
-        text: 'Перевод начнётся после постановки задач.',
+        title: narrowed ? 'Ничего не подошло' : 'Задач пока нет',
+        text: narrowed
+          ? 'Смените фильтр или очистите поиск.'
+          : 'Их ставят на странице «Документы», кнопкой «Перевести».',
       })
     );
     return;
@@ -398,7 +401,8 @@ function destroy() {
 
 router.registerPage('queue', {
   title: 'Очередь',
-  subtitle: 'Задачи перевода всех проектов',
+  subtitle: 'Задачи по всем проектам',
+  help: 'Счётчик показывает готовые фрагменты, не минуты. Пауза останавливает задачу, «Продолжить» возвращает её в работу. Отмена снимает задачу с очереди. Уже записанные фрагменты в документе остаются.',
   render,
   destroy,
   actions,

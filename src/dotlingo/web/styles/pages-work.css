@@ -974,10 +974,19 @@
   flex-shrink: 0;
 }
 
+.review-nav__tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .review-filters {
   display: flex;
+  flex: 1;
   flex-wrap: wrap;
   gap: var(--sp-1);
+  min-width: 0;
 }
 
 .review-tree {
@@ -1247,6 +1256,25 @@
   color: var(--text-secondary);
 }
 
+.chat-field__label--with-help,
+.chat-meter-line,
+.chat-mode-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-meter-line {
+  display: flex;
+}
+
+.chat-meter-line .chat-meter {
+  flex: 1;
+  min-width: 0;
+}
+
 .chat-note,
 .chat-empty {
   margin: 0;
@@ -1256,6 +1284,8 @@
 
 .chat-modes {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
 }
 
@@ -1335,6 +1365,12 @@
 }
 
 .chat-context summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
   cursor: pointer;
   font-size: var(--fs-small);
   color: var(--text-secondary);

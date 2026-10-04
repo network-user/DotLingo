@@ -319,6 +319,125 @@ export function emptyState(opts = {}) {
 }
 
 /* -------------------------------------------------------------------------
+ * Знак пояснения
+ * ------------------------------------------------------------------------- */
+
+/** Пауза, пока курсор остаётся на знаке, прежде чем показать текст. */
+const HELP_DWELL_MS = 450;
+
+let helpSeq = 0;
+/** @type {Set<() => void>} */
+const openHelp = new Set();
+
+/** Закрыть все открытые пояснения, например при смене вкладки. */
+export function closeHelpMarks() {
+  for (const close of [...openHelp]) close();
+}
+
+/**
+ * Знак «?» у места, которое само не объясняется.
+ * Текст показывается, если курсор подержать на знаке, нажать его
+ * или перейти к нему с клавиатуры. Уход курсора текст убирает.
+ * @param {string} text
+ * @returns {HTMLSpanElement}
+ */
+export function helpMark(text) {
+  const id = `help-tip-${++helpSeq}`;
+  const tip = el('div', { class: 'help-tip', id, role: 'tooltip' });
+  tip.textContent = text;
+  tip.hidden = true;
+
+  const mark = el('button', {
+    class: 'help-mark',
+    type: 'button',
+    ariaLabel: 'Пояснение',
+    ariaExpanded: 'false',
+    'aria-describedby': id,
+  }, [icon('help')]);
+
+  let timer = 0;
+  let open = false;
+
+  const place = () => {
+    const rect = mark.getBoundingClientRect();
+    const margin = 8;
+    tip.hidden = false;
+    tip.style.left = '0px';
+    tip.style.top = '0px';
+    const box = tip.getBoundingClientRect();
+    let left = rect.left + rect.width / 2 - box.width / 2;
+    let top = rect.bottom + 8;
+    if (left + box.width > window.innerWidth - margin) {
+      left = window.innerWidth - margin - box.width;
+    }
+    if (left < margin) left = margin;
+    if (top + box.height > window.innerHeight - margin) {
+      top = rect.top - 8 - box.height;
+    }
+    if (top < margin) top = margin;
+    tip.style.left = `${Math.round(left)}px`;
+    tip.style.top = `${Math.round(top)}px`;
+  };
+
+  const onKey = (event) => {
+    if (event.key === 'Escape') hide();
+  };
+
+  const hide = () => {
+    window.clearTimeout(timer);
+    timer = 0;
+    if (!open) return;
+    open = false;
+    openHelp.delete(hide);
+    tip.hidden = true;
+    tip.remove();
+    mark.setAttribute('aria-expanded', 'false');
+    window.removeEventListener('scroll', hide, true);
+    window.removeEventListener('keydown', onKey);
+  };
+
+  const show = () => {
+    window.clearTimeout(timer);
+    timer = 0;
+    if (open) {
+      place();
+      return;
+    }
+    open = true;
+    openHelp.add(hide);
+    mark.setAttribute('aria-expanded', 'true');
+    document.body.append(tip);
+    place();
+    window.addEventListener('scroll', hide, true);
+    window.addEventListener('keydown', onKey);
+  };
+
+  const arm = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(show, HELP_DWELL_MS);
+  };
+
+  mark.addEventListener('pointerenter', arm);
+  mark.addEventListener('pointerdown', () => show());
+  mark.addEventListener('pointerleave', () => {
+    window.clearTimeout(timer);
+    timer = 0;
+    if (mark.matches(':focus-visible')) return;
+    hide();
+  });
+  mark.addEventListener('focus', () => {
+    if (mark.matches(':focus-visible')) show();
+  });
+  mark.addEventListener('blur', hide);
+  mark.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+
+  return el('span', { class: 'help' }, [mark, tip]);
+}
+
+/* -------------------------------------------------------------------------
  * Утилиты
  * ------------------------------------------------------------------------- */
 

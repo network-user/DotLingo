@@ -13,6 +13,7 @@ import {
   emptyState,
   confirmDialog,
   spinner,
+  helpMark,
 } from '../components.js';
 
 /** Ключ store с выбранным целевым языком глоссария. */
@@ -52,6 +53,7 @@ function render(host) {
 
   const langSelect = el('select', {
     class: 'select gl-lang-select',
+    ariaLabel: 'Язык перевода',
     onChange: (e) => {
       store.set(LANG_KEY, e.target.value);
       refresh(host);
@@ -60,11 +62,12 @@ function render(host) {
   fillLangOptions(langSelect, project.targetLangs, lang);
 
   const head = el('div', { class: 'panel__header' }, [
-    el('div', {}, [
+    el('div', { class: 'title-with-help' }, [
       el('h2', {
         class: 'panel__title',
         text: `${langLabel(project.sourceLang || 'auto')} → ${langLabel(lang)}`,
       }),
+      helpMark('Этот список только для выбранного языка перевода. У другого языка проекта пары свои.'),
     ]),
     el('div', { class: 'panel__actions' }, [langSelect]),
   ]);
@@ -83,8 +86,8 @@ function render(host) {
 function noProjectState() {
   return emptyState({
     iconName: 'book',
-    title: 'Сначала выберите проект',
-    text: 'Глоссарий хранится внутри проекта.',
+    title: 'Сначала откройте проект',
+    text: 'Термины лежат в проекте, отдельно для каждого языка перевода.',
     action: button({
       label: 'К проектам',
       variant: 'ghost',
@@ -122,8 +125,8 @@ async function refresh(host) {
     (terms ?? []).length === 0
       ? emptyState({
           iconName: 'book',
-          title: 'В глоссарии пока нет терминов',
-          text: 'Добавьте пары термин → перевод, чтобы защищать их от искажения.',
+          title: 'Терминов пока нет',
+          text: 'Напишите термин и как его переводить. Пара подставится во фрагменты выбранного языка.',
         })
       : null,
     buildFootnote()
@@ -331,7 +334,7 @@ async function deleteTermFlow(term, host) {
 function buildFootnote() {
   return el('p', {
     class: 'gl-footnote text-tertiary',
-    text: 'Совпадения без учёта регистра защищаются внутри каждого фрагмента при переводе.',
+    text: 'Совпадение ищется без учёта регистра, по границам слова. Двойной щелчок по ячейке открывает правку.',
   });
 }
 
@@ -360,7 +363,8 @@ function actions(host) {
 
 router.registerPage('glossary', {
   title: 'Глоссарий',
-  subtitle: 'Защита терминов при переводе',
+  subtitle: 'Термины, которые перевод не должен подменять',
+  help: 'Пара хранится для выбранного языка перевода этого проекта. Перед переводом термин в фрагменте заменяется меткой, после ответа на её место ставится заданный перевод. Регистр исходного слова не важен. Если модель испортит метку, фрагмент придётся перевести ещё раз.',
   render,
   actions,
 });

@@ -15,6 +15,8 @@ import {
   confirmDialog,
   spinner,
   debounce,
+  helpMark,
+  closeHelpMarks,
 } from '../components.js';
 
 /* -------------------------------------------------------------------------
@@ -134,8 +136,8 @@ function resetState() {
 function noProjectState() {
   return emptyState({
     iconName: 'folder',
-    title: 'Сначала выберите проект',
-    text: 'Проверка перевода работает внутри проекта.',
+    title: 'Сначала откройте проект',
+    text: 'Правка идёт по переведённым фрагментам открытого проекта.',
     action: button({ label: 'К проектам', variant: 'ghost', onClick: () => router.showPage('projects') }),
   });
 }
@@ -145,7 +147,7 @@ function noDocumentsState() {
   return emptyState({
     iconName: 'document',
     title: 'Добавьте файлы',
-    text: 'Проверять можно только переведённые документы проекта.',
+    text: 'Сначала положите документы в проект и запустите перевод. Здесь правят уже готовые фрагменты.',
     action: button({
       label: 'К документам',
       variant: 'ghost',
@@ -165,6 +167,7 @@ function langLabel(code) {
  * ------------------------------------------------------------------------- */
 
 function buildLayout(host) {
+  closeHelpMarks();
   host.replaceChildren();
 
   const searchInput = el('input', {
@@ -186,7 +189,10 @@ function buildLayout(host) {
 
   const nav = el('aside', { class: 'review-nav panel' }, [
     el('div', { class: 'review-nav__search' }, [
-      el('div', { class: 'review-filters' }),
+      el('div', { class: 'review-nav__tools' }, [
+        el('div', { class: 'review-filters' }),
+        helpMark('«Пустые» ещё без перевода. «Черновик» - ответ модели, его ещё не правили. «Правка» - текст, который вы уже меняли. На карте справа одна полоска - один фрагмент. Чем она ярче, тем перевод уже есть.'),
+      ]),
       button({
         label: 'Следующий пустой',
         size: 'sm',
@@ -206,7 +212,7 @@ function buildLayout(host) {
     onNavigate: (block) => selectBlock(String(block.order)),
   });
   const mapAside = el('aside', { class: 'review-map panel' }, [
-    el('div', { class: 'review-map__label', text: 'карта' }),
+    el('div', { class: 'review-map__label', text: 'Карта' }),
     docMap.root,
   ]);
 
@@ -233,7 +239,7 @@ function buildLayout(host) {
 const STATUS_FILTERS = [
   ['all', 'Все'],
   ['empty', 'Пустые'],
-  ['machine', 'Машина'],
+  ['machine', 'Черновик'],
   ['edited', 'Правка'],
 ];
 
@@ -605,7 +611,7 @@ function updateStatusBar() {
     if (state in counts) counts[state] += 1;
   }
   const done = counts.machine + counts.edited;
-  status.textContent = `Переведено ${done}/${translatable.length} · пустые ${counts.empty} · машина ${counts.machine} · правка ${counts.edited}`;
+  status.textContent = `Переведено ${done}/${translatable.length} · пустые ${counts.empty} · черновик ${counts.machine} · правка ${counts.edited}`;
 }
 
 function refreshBlockChrome() {
@@ -621,7 +627,7 @@ function refreshBlockChrome() {
 function stateCaption(block) {
   const state = blockState(block);
   if (state === 'edited') return 'правка';
-  if (state === 'machine') return 'машинный';
+  if (state === 'machine') return 'черновик';
   if (state === 'empty') return 'пусто';
   return '';
 }
@@ -798,7 +804,8 @@ function destroy() {
 
 router.registerPage('review', {
   title: 'Проверка',
-  subtitle: 'Правка переводов и экспорт',
+  subtitle: 'Правка перевода и выгрузка',
+  help: 'Слева фрагменты документа, справа оригинал и перевод. Фильтры отделяют пустые места, черновик модели и вашу правку. Карта справа открывает фрагмент, «Следующий пустой» прыгает к пропуску.',
   render,
   destroy,
   actions,

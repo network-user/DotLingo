@@ -380,7 +380,24 @@
   min-width: 0;
 }
 
+.main-header__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+#page-help {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+#page-help[hidden] {
+  display: none;
+}
+
 .main-header__titles h1 {
+  min-width: 0;
   font-size: 21px;
   font-weight: 700;
   letter-spacing: -0.02em;

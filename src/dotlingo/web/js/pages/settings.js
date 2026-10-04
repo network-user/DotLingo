@@ -11,6 +11,7 @@ import {
   button,
   toast,
   spinner,
+  helpMark,
 } from '../components.js';
 import { downloadFlow } from './models.js';
 import {
@@ -166,7 +167,7 @@ function noProjectPanel() {
     el('div', { class: 'panel__header' }, [
       el('h2', { class: 'panel__title', text: 'Проект' }),
     ]),
-    el('p', { class: 'st-muted', text: 'Проект не выбран.' }),
+    el('p', { class: 'st-muted', text: 'Проект не открыт. Языки, контекст и правила задаются у него.' }),
     el('div', { class: 'row' }, [
       button({
         label: 'К проектам',
@@ -329,7 +330,10 @@ function projectPanel(project) {
       ]),
       models.length > 0
         ? el('div', { class: 'field' }, [
-            el('label', { class: 'field__label', text: 'Исходный язык' }),
+            el('span', { class: 'field__label field__label--with-help' }, [
+              'Исходный язык',
+              helpMark('«Авто» не фиксирует язык. Перед переводом модель смотрит образец документа и выбирает код из своего списка.'),
+            ]),
             sourceSelect,
           ])
         : null,
@@ -343,11 +347,17 @@ function projectPanel(project) {
           ])
         : null,
       el('div', { class: 'field' }, [
-        el('label', { class: 'field__label', text: 'Контекст проекта' }),
+        el('span', { class: 'field__label field__label--with-help' }, [
+          'Контекст проекта',
+          helpMark('О чём текст и каким тоном писать. Попадает в запрос перевода, до 800 знаков.'),
+        ]),
         contextInput,
       ]),
       el('div', { class: 'field' }, [
-        el('label', { class: 'field__label', text: 'Правила перевода' }),
+        el('span', { class: 'field__label field__label--with-help' }, [
+          'Правила перевода',
+          helpMark('Что соблюдать: имена, формы, чего избегать. Попадает в тот же запрос, до 800 знаков.'),
+        ]),
         rulesInput,
       ]),
     ]),
@@ -651,7 +661,7 @@ function dataPanel() {
     box,
     el('p', {
       class: 'st-data-note text-tertiary',
-      text: 'Оригиналы остаются неизменяемыми; переводы и экспорты хранятся отдельно.',
+      text: 'Исходный файл не перезаписывается. Переводы и экспорты лежат отдельно.',
     }),
   ]);
 }
@@ -719,7 +729,8 @@ function wireHardwareEvents(host) {
 
 router.registerPage('settings', {
   title: 'Настройки',
-  subtitle: 'Проект и приложение',
+  subtitle: 'Языки проекта, вид и папки',
+  help: 'Контекст и правила уходят в запрос перевода. «Авто» не фиксирует исходный язык: перед переводом модель смотрит образец документа. Проверка устройства смотрит память, диск, процессор, NVIDIA и llama.cpp. Исходные файлы не перезаписываются.',
   render: (host) => {
     render(host);
     wireHardwareEvents(host);

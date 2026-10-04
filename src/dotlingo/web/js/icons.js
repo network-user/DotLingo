@@ -64,6 +64,10 @@ const PATHS = {
   info:
     '<circle cx="12" cy="12" r="8.5"/>' +
     '<path d="M12 11v5M12 8h.01"/>',
+  help:
+    '<circle cx="12" cy="12" r="8"/>' +
+    '<path d="M9.55 9.4a2.45 2.45 0 0 1 4.55 1.25c0 1.15-.75 1.7-1.6 2.15-.5.28-.65.52-.65 1v.3"/>' +
+    '<circle cx="12" cy="16.35" r="0.9" fill="currentColor" stroke="none"/>',
   'arrow-right': '<path d="M4.5 12h15M13.5 6l6 6-6 6"/>',
   message:
     '<path d="M5 6.5h14a1.5 1.5 0 0 1 1.5 1.5v7.2a1.5 1.5 0 0 1-1.5 1.5H9.2L5 20.2v-3.5A1.5 1.5 0 0 1 3.5 15.2V8A1.5 1.5 0 0 1 5 6.5z"/>',

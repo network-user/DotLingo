@@ -57,8 +57,8 @@ function noProjectState() {
   ]);
   return emptyState({
     iconName: 'folder',
-    title: 'Сначала выберите проект',
-    text: 'Документы, переводы и экспорты хранятся внутри проекта.',
+    title: 'Сначала откройте проект',
+    text: 'Файлы, переводы и экспорты лежат в проекте. Исходный файл при этом не меняется.',
     action: actionRow,
   });
 }
@@ -330,10 +330,10 @@ function openTranslateModal(documentIds, host) {
       }),
     ]),
     el('li', {}, [
-      el('span', { class: 'text-secondary', text: 'Задач будет создано: ' }),
+      el('span', { class: 'text-secondary', text: 'Задач: ' }),
       el('span', { text: String(documents.length * targets.length) }),
     ]),
-    el('li', { class: 'text-tertiary', text: 'ETA не рассчитывается.' }),
+    el('li', { class: 'text-tertiary', text: 'Срок не считается. В очереди видно, сколько фрагментов уже готово.' }),
     ...warnings.map((warning) =>
       el('li', { class: 'summary-list__warning' }, [
         badge({ label: 'Предупреждение', tone: 'warning' }),
@@ -343,7 +343,7 @@ function openTranslateModal(documentIds, host) {
   ]);
 
   const dialog = modal({
-    title: 'Поставить перевод',
+    title: 'Запустить перевод',
     subtitle: 'Проверьте сводку перед запуском.',
     body: [summary],
     actions: [
@@ -417,7 +417,8 @@ function wireImportEvents(host) {
 
 router.registerPage('documents', {
   title: 'Документы',
-  subtitle: 'Документы активного проекта',
+  subtitle: 'Файлы открытого проекта',
+  help: 'Сюда кладут TXT, Markdown, DOCX, EPUB и PDF с текстовым слоем. Скан без текста не читается. «Перевести» ставит отдельную задачу на каждый язык перевода. Исходный файл не меняется.',
   render: (host) => {
     render(host);
     wireImportEvents(host);

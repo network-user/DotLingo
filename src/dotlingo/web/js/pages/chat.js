@@ -6,7 +6,7 @@
 import { call, isDemo, tryCall } from '../bridge.js';
 import * as store from '../store.js';
 import * as router from '../router.js';
-import { el, button, toast, confirmDialog } from '../components.js';
+import { el, button, toast, confirmDialog, helpMark, closeHelpMarks } from '../components.js';
 
 const TEXT_LIMIT = 2000;
 const FILE_CAP = 3;
@@ -501,6 +501,7 @@ async function send() {
 }
 
 function render(host) {
+  closeHelpMarks();
   ensureWire();
   const models = installedModels();
   if (!modelId || !models.some((model) => model.id === modelId)) {
@@ -602,11 +603,22 @@ function render(host) {
                 onClick: () => router.showPage('models'),
               }),
             ]),
-        el('div', { class: 'chat-modes', role: 'radiogroup', ariaLabel: 'Режим' }, [
-          modeButton('translate', 'Перевод', host),
-          modeButton('ask', 'Общение', host),
+        el('div', { class: 'chat-mode-wrap' }, [
+          el('div', { class: 'chat-modes', role: 'radiogroup', ariaLabel: 'Режим' }, [
+            modeButton('translate', 'Перевод', host),
+            modeButton('ask', 'Общение', host),
+          ]),
+          helpMark(
+            '«Перевод» берёт фрагмент и пару языков. «Общение» отвечает на сообщение, без выбора языков. Модель, обученная переводить, в общении может просто пересказать фразу.',
+          ),
         ]),
-        mode === 'translate' && models.length ? field('Оригинал', sourceSelect) : null,
+        mode === 'translate' && models.length
+          ? field(
+            'Оригинал',
+            sourceSelect,
+            '«Авто» не называет язык оригинала. Если он известен, выберите его в списке.',
+          )
+          : null,
         mode === 'translate' && models.length ? field('Перевод', targetSelect) : null,
         hyNote,
       ]),
@@ -634,10 +646,16 @@ function render(host) {
               el('div', { class: 'chat-meter-track', ariaHidden: 'true' }, [
                 el('div', { class: 'chat-meter__fill' }),
               ]),
-              el('p', { class: 'chat-meter', text: meterNote }),
+              el('div', { class: 'chat-meter-line' }, [
+                el('p', { class: 'chat-meter', text: meterNote }),
+                helpMark('Оценка, сколько контекста модели уже занято. Это не ход перевода.'),
+              ]),
             ]),
             el('details', { class: 'chat-context' }, [
-              el('summary', { text: 'Контекст для тона' }),
+              el('summary', {}, [
+                'Контекст для тона',
+                helpMark('Необязательно. Предмет, тон и имена уходят в запрос вместе с текстом, до 800 знаков.'),
+              ]),
               contextInput,
             ]),
             el('div', { class: 'chat-files' }),
@@ -663,9 +681,12 @@ function render(host) {
   void refreshMeter();
 }
 
-function field(label, control) {
+function field(label, control, help) {
   return el('label', { class: 'chat-field' }, [
-    el('span', { class: 'chat-field__label', text: label }),
+    el('span', { class: 'chat-field__label chat-field__label--with-help' }, [
+      label,
+      help ? helpMark(help) : null,
+    ]),
     control,
   ]);
 }
@@ -684,7 +705,9 @@ function modeButton(value, label, host) {
 
 router.registerPage('chat', {
   title: 'Диалог',
-  subtitle: 'Перевод или разговор на этом компьютере',
+  subtitle: 'Фрагмент или короткий разговор',
+  help: '«Перевод» берёт фрагмент и пару языков. «Общение» отвечает на сообщение. Диалоги остаются на этом компьютере. Длинный текст лучше положить в проект: здесь лимит '
+    + `${TEXT_LIMIT} знаков.`,
   layout: 'chat',
   render,
 });
