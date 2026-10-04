@@ -13,7 +13,7 @@ from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree as ET
 
 SUPPORTED_IMPORT = {".txt", ".md", ".markdown", ".docx", ".epub", ".pdf"}
-SUPPORTED_EXPORT = {".txt", ".md", ".markdown", ".docx", ".epub"}
+SUPPORTED_EXPORT = {".txt", ".md", ".markdown", ".docx", ".epub", ".pdf"}
 MAX_DOCUMENT_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 20_000
 MAX_ARCHIVE_UNPACKED = 512 * 1024 * 1024
@@ -327,15 +327,70 @@ def _import_epub(path: Path) -> ParsedDocument:
     return ParsedDocument(title or path.stem, "epub", tuple(blocks), tuple(warnings))
 
 
-def _import_pdf(path: Path) -> ParsedDocument:
+def _open_pdf_reader(path: Path):
+    """Открыть PDF. Пустой пароль пользователя снимается: так закрыт только доступ владельца."""
     try:
         from pypdf import PdfReader
     except ImportError as exc:
         raise DocumentError("Импорт PDF требует дополнительной зависимости pypdf. Установите пакет pdf.") from exc
     try:
         doc = PdfReader(str(path), strict=True)
-        if doc.is_encrypted:
+    except Exception as exc:
+        raise DocumentError("Не удалось прочитать PDF. Проверьте, что файл не повреждён или защищён паролем.") from exc
+    if doc.is_encrypted:
+        try:
+            opened = doc.decrypt("")
+        except Exception as exc:
+            raise DocumentError("PDF защищён паролем. Снимите защиту перед импортом.") from exc
+        if not opened:
             raise DocumentError("PDF защищён паролем. Снимите защиту перед импортом.")
+    return doc
+
+
+def _book_layout_document(path: Path, page_count: int) -> ParsedDocument | None:
+    """Абзацы книжной полосы. None, если это не такая книга или укладка недоступна."""
+    try:
+        from dotlingo.pdf_layout import extract_paragraphs
+    except ImportError:
+        return None
+    try:
+        paragraphs = extract_paragraphs(path, list(range(1, page_count + 1)), "book")
+    except Exception:
+        return None
+    if not paragraphs:
+        return None
+    blocks = [
+        Block(
+            order,
+            f"page-{item.page}",
+            f"Страница {item.page}",
+            "heading" if item.kind == "header" else "paragraph",
+            item.source,
+            locator={"page": item.page, "index": item.index, "layout": "book"},
+        )
+        for order, item in enumerate(paragraphs)
+    ]
+    return ParsedDocument(
+        path.stem,
+        "pdf",
+        tuple(blocks),
+        ("Книга вернётся PDF: текст заменяется, картинки и номера страниц остаются.",),
+        {"pdfLayout": "book", "pageCount": page_count},
+    )
+
+
+def _import_pdf(path: Path) -> ParsedDocument:
+    doc = _open_pdf_reader(path)
+    try:
+        page_count = len(doc.pages)
+    except Exception as exc:
+        raise DocumentError("Не удалось прочитать PDF. Проверьте, что файл не повреждён или защищён паролем.") from exc
+    if page_count < 1:
+        raise DocumentError("PDF не содержит страниц.")
+    laid_out = _book_layout_document(path, page_count)
+    if laid_out is not None:
+        return laid_out
+    try:
         page_texts = [page.extract_text() or "" for page in doc.pages]
     except DocumentError:
         raise
@@ -481,6 +536,46 @@ def _export_docx(source: Path, destination: Path, parsed: ParsedDocument, transl
     doc.save(destination)
 
 
+def _layout_translations(parsed: ParsedDocument, translations: dict[int, str]) -> dict[tuple[int, int], str]:
+    placed: dict[tuple[int, int], str] = {}
+    for block in parsed.blocks:
+        locator = block.locator
+        if locator.get("layout") != "book":
+            continue
+        placed[(int(locator["page"]), int(locator["index"]))] = _translation_for(block, translations)
+    return placed
+
+
+def _export_pdf_layout(
+    source_path: Path,
+    destination: Path,
+    parsed: ParsedDocument,
+    translations: dict[int, str],
+) -> None:
+    if parsed.metadata.get("pdfLayout") != "book":
+        raise DocumentError("Для этого PDF нет записи в тот же файл. Доступны TXT и Markdown.")
+    try:
+        page_count = int(parsed.metadata.get("pageCount") or 0)
+    except (TypeError, ValueError) as exc:
+        raise DocumentError("В PDF не записано число страниц.") from exc
+    if page_count < 1:
+        raise DocumentError("В PDF не записано число страниц.")
+    try:
+        from dotlingo.pdf_layout import LayoutError, place_translations
+    except ImportError as exc:
+        raise DocumentError("Для сборки PDF не хватает библиотек укладки.") from exc
+    try:
+        place_translations(
+            source_path,
+            destination,
+            _layout_translations(parsed, translations),
+            pages=list(range(1, page_count + 1)),
+            scope="book",
+        )
+    except LayoutError as exc:
+        raise DocumentError(str(exc)) from exc
+
+
 def export_document(
     source_path: Path,
     destination: Path,
@@ -505,6 +600,10 @@ def export_document(
         if parsed.format != "epub":
             raise DocumentError("EPUB-экспорт доступен только из импортированного EPUB.")
         _export_epub(source_path, temporary, parsed, translations)
+    elif suffix == ".pdf":
+        if parsed.format != "pdf":
+            raise DocumentError("PDF-экспорт доступен только из импортированного PDF.")
+        _export_pdf_layout(source_path, temporary, parsed, translations)
     os.replace(temporary, destination)
 
 

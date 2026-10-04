@@ -83,7 +83,8 @@ EXPORT_ALLOWED = {
 # Быстрый перевод без выбранного проекта живёт в одном локальном проекте.
 QUICK_PROJECT_TITLE = "Быстрые"
 
-# Тот же контейнер, что у оригинала. PDF в PDF не пишется.
+# Тот же контейнер, что у оригинала. Книжная укладка подменяет PDF на .pdf в publishTranslation.
+# Обычный PDF без полосы книги остаётся Markdown.
 SAME_FORMAT_SUFFIX = {
     "txt": ".txt",
     "markdown": ".md",
@@ -834,14 +835,16 @@ class Api:
             return _err("Сначала выберите проект.", "no_project")
         try:
             record = store.document(str(doc_id))
+            parsed = store.parsed(str(doc_id))
         except KeyError:
             return _err("Документ не найден.", "not_found")
         lang = str(target_lang or "").strip()
         if not lang:
             return _err("Не выбран язык перевода.", "no_target")
-        suffix = SAME_FORMAT_SUFFIX.get(record.format, ".txt")
+        layout = parsed.metadata.get("pdfLayout") == "book"
+        suffix = ".pdf" if layout else SAME_FORMAT_SUFFIX.get(record.format, ".txt")
         note = ""
-        if record.format == "pdf":
+        if record.format == "pdf" and not layout:
             note = "PDF возвращается как Markdown: запись PDF в PDF в программе нет."
         for item in store.exports(str(doc_id)):
             if str(item.get("target_lang") or "") != lang:
@@ -1485,9 +1488,13 @@ class Api:
             return _err("Сначала выберите проект.", "no_project")
         try:
             record = store.document(doc_id)
+            parsed = store.parsed(doc_id)
         except KeyError:
             return _err("Документ не найден.", "not_found")
-        return _ok(list(EXPORT_ALLOWED.get(record.format, (".txt", ".md"))))
+        allowed = list(EXPORT_ALLOWED.get(record.format, (".txt", ".md")))
+        if parsed.metadata.get("pdfLayout") == "book" and ".pdf" not in allowed:
+            allowed.insert(0, ".pdf")
+        return _ok(allowed)
 
     def revealPath(self, path: str) -> dict[str, Any]:
         if not path:

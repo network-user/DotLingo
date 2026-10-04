@@ -702,6 +702,13 @@ async function refreshProjects() {
   paintDialogs();
 }
 
+function pdfJobNote(doc) {
+  const warnings = Array.isArray(doc?.warnings) ? doc.warnings : [];
+  if (warnings.some((item) => String(item).includes('вернётся PDF'))) return 'Вернётся PDF.';
+  if (doc?.format === 'pdf') return 'Вернётся как Markdown.';
+  return '';
+}
+
 async function refreshProjectDocs() {
   if (focusKind !== 'project' || !focusProjectId) {
     projectDocs = [];
@@ -724,7 +731,7 @@ async function refreshProjectDocs() {
         format: doc.format,
         targetLang: '',
         status: 'imported',
-        note: (jobs.get(key) || {}).note || (doc.format === 'pdf' ? 'Вернётся как Markdown.' : ''),
+        note: (jobs.get(key) || {}).note || pdfJobNote(doc),
       });
       continue;
     }
@@ -738,7 +745,7 @@ async function refreshProjectDocs() {
         documentId: doc.id,
         name: doc.name || task.documentName,
         format: doc.format,
-        note: prev.note || (doc.format === 'pdf' ? 'Вернётся как Markdown.' : ''),
+        note: prev.note || pdfJobNote(doc),
         targetLang: task.targetLang,
         taskId: task.taskId,
         status,
@@ -914,9 +921,6 @@ async function startFiles(paths, explicitProjectId) {
     project = updated;
   }
   store.set('activeProject', project);
-  if (list.some((path) => String(path).toLowerCase().endsWith('.pdf'))) {
-    toast('PDF вернётся как Markdown: запись PDF в PDF в программе нет.', 'info', 7000);
-  }
   let payload;
   try {
     payload = await waitImport(list);
@@ -1604,7 +1608,7 @@ window.addEventListener('dl-focus-project', (event) => {
 router.registerPage('chat', {
   title: 'Перевод',
   subtitle: 'Текст, файл или проект',
-  help: 'Напишите фрагмент или бросьте файл. Файл без выбранного проекта попадает в «Быстрые» и возвращается в том же формате. PDF приходит как Markdown. Языки и модель открываются строкой под полем. Здесь лимит фрагмента '
+  help: 'Напишите фрагмент или бросьте файл. Файл без выбранного проекта попадает в «Быстрые» и возвращается в том же формате. Книжный PDF возвращается PDF: заменяется текст, картинки остаются. Прочий PDF приходит как Markdown. Языки и модель открываются строкой под полем. Здесь лимит фрагмента '
     + `${TEXT_LIMIT} знаков.`,
   layout: 'chat',
   render,

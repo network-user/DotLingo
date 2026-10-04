@@ -148,3 +148,81 @@ def test_corrupt_epub_is_rejected_without_copying(tmp_path: Path) -> None:
     source.write_bytes(b"not a zip")
     with pytest.raises(DocumentError):
         import_document(source)
+
+
+def _write_line_pdf(path: Path, text: str, font: str) -> None:
+    from reportlab.pdfgen import canvas
+
+    sheet = canvas.Canvas(str(path), pagesize=(400, 300))
+    sheet.setFont(font, 12)
+    sheet.drawString(40, 200, text)
+    sheet.save()
+
+
+def _encrypt_pdf(source: Path, destination: Path, user_password: str, owner_password: str) -> None:
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+    writer.append(PdfReader(str(source)))
+    writer.encrypt(user_password, owner_password)
+    with destination.open("wb") as handle:
+        writer.write(handle)
+
+
+def test_empty_user_password_pdf_imports(tmp_path: Path) -> None:
+    pytest.importorskip("pypdf")
+    pytest.importorskip("reportlab")
+    plain = tmp_path / "plain.pdf"
+    _write_line_pdf(plain, "This is searchable text for the lock.", "Helvetica")
+    locked = tmp_path / "locked.pdf"
+    _encrypt_pdf(plain, locked, "", "owner-secret")
+    from pypdf import PdfReader
+
+    assert PdfReader(str(locked)).is_encrypted
+    parsed = import_document(locked)
+    assert any("searchable text" in block.text for block in parsed.blocks)
+    assert parsed.metadata.get("pdfLayout") != "book"
+
+
+def test_real_pdf_password_is_rejected(tmp_path: Path) -> None:
+    pytest.importorskip("pypdf")
+    pytest.importorskip("reportlab")
+    plain = tmp_path / "plain.pdf"
+    _write_line_pdf(plain, "Closed page.", "Helvetica")
+    locked = tmp_path / "locked.pdf"
+    _encrypt_pdf(plain, locked, "secret", "owner-secret")
+    with pytest.raises(DocumentError, match="паролем"):
+        import_document(locked)
+
+
+def test_book_pdf_with_empty_password_exports_pdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("pypdf")
+    pytest.importorskip("reportlab")
+    pytest.importorskip("pdfminer")
+    pytest.importorskip("pypdfium2")
+    import dotlingo.pdf_layout as pdf_layout
+    from dotlingo.pdf_layout import FONT_NAME, _register_font
+
+    # В тестовом шрифте внутреннее имя OldStandard, не ModernMT. Правило полосы то же.
+    monkeypatch.setattr(pdf_layout, "_BOOK_FONT", "OldStandard")
+    _register_font()
+    plain = tmp_path / "alice.pdf"
+    _write_line_pdf(plain, "Alice was not hurt, and she jumped up.", FONT_NAME)
+    locked = tmp_path / "alice-locked.pdf"
+    _encrypt_pdf(plain, locked, "", "owner-secret")
+    parsed = import_document(locked)
+    assert parsed.metadata.get("pdfLayout") == "book"
+    assert parsed.metadata.get("pageCount") == 1
+    translations = {
+        block.order: "Алиса совсем не ушиблась."
+        for block in parsed.blocks
+        if block.translatable
+    }
+    output = tmp_path / "alice-ru.pdf"
+    export_document(locked, output, parsed, translations)
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument(str(output))
+    text = document[0].get_textpage().get_text_bounded()
+    document.close()
+    assert "Алиса совсем не ушиблась." in text
