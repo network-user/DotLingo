@@ -17,7 +17,12 @@
     #app { display: grid; grid-template-columns: 252px minmax(0, 1fr); height: 100%; }
     .boot__title { margin: 28px 32px 0; font-size: 21px; font-weight: 700; }
     .boot__text { margin: 8px 32px 0; color: rgba(235, 235, 245, 0.72); }
-    /* Книга: ~2.5 с. Крен, разгон листов и догон обложки, не ровный метроном. */
+    /*
+      Книга: один жест, без качания.
+      Открытие 0.92 с: обложка 0.40 с с 0.04 с, шесть листов по 0.30 с с 0.24 с, шаг 0.042 с.
+      Закрытие 0.56 с: листы 0.20 с, обложка 0.22 с с 0.32 с.
+      Запасной таймер в main.js (0.60 с) и сторож в app.py (0.75 с) длиннее кадра.
+    */
     .launch {
       position: fixed;
       inset: 0;
@@ -25,19 +30,33 @@
       display: grid;
       place-items: center;
       background: #0b0b0e;
-      animation: launch-fade 2.5s linear forwards;
+      animation: launch-fade 0.92s linear forwards;
     }
     .launch__stage {
-      perspective: 1100px;
-      perspective-origin: 46% 36%;
+      perspective: 1500px;
+      perspective-origin: 50% 42%;
       padding: 48px 0 36px;
     }
     .launch__book {
       position: relative;
+      z-index: 1;
       width: min(340px, 74vw);
       height: min(230px, 46vh);
       transform-style: preserve-3d;
-      animation: launch-sit 2.5s linear forwards;
+      animation: launch-sit 0.64s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    .launch__book::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: -18px;
+      z-index: -1;
+      width: 78%;
+      height: 22px;
+      margin-left: -39%;
+      pointer-events: none;
+      background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.42), transparent 70%);
+      animation: launch-shadow 0.64s cubic-bezier(0.16, 1, 0.3, 1) both;
     }
     .launch__back,
     .launch__leaf,
@@ -63,7 +82,7 @@
       background-size: 34% 2px, 60% 1.5px, 54% 1.5px, 64% 1.5px;
       background-position: 16px 24px, 16px 36px, 16px 44px, 16px 56px;
       opacity: 0;
-      animation: launch-reveal 0.28s ease 0.36s forwards;
+      animation: launch-reveal 0.16s ease 0.20s forwards;
     }
     .launch__back--right {
       left: 50%;
@@ -81,15 +100,16 @@
     }
     .launch__leaf {
       z-index: calc(40 - var(--i));
-      animation: launch-leaf 0.52s cubic-bezier(0.45, 0.04, 0.18, 1) both;
-      animation-delay: calc(0.5s + var(--i) * 0.095s - var(--i) * var(--i) * 0.004s);
+      animation: launch-leaf 0.30s linear both;
+      animation-delay: calc(0.24s + var(--i) * 0.042s);
     }
-    .launch__cover { z-index: 30; animation: launch-cover 0.78s cubic-bezier(0.34, 0.08, 0.16, 1) 0.16s both; }
+    .launch__cover { z-index: 48; animation: launch-cover 0.40s linear 0.04s both; }
     .launch__leaf span,
     .launch__cover span {
       position: absolute;
       inset: 0;
       backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
       background-color: #f5f5f7;
     }
     .launch__leaf span:first-child,
@@ -150,104 +170,120 @@
       width: 9px;
       margin-left: -4px;
       border-radius: 5px;
-      z-index: 36;
+      z-index: 60;
       opacity: 0;
       pointer-events: none;
       background: linear-gradient(90deg, rgba(11, 11, 14, 0.55), rgba(245, 245, 247, 0.55) 48%, rgba(11, 11, 14, 0.4));
-      animation: launch-reveal 0.22s ease 0.48s forwards;
+      animation: launch-reveal 0.16s ease 0.20s forwards;
     }
     @keyframes launch-sit {
-      0% { transform: translateX(-25%) translateY(16px) rotateX(18deg) rotateZ(-7deg) scale(0.84); }
-      12% { transform: translateX(-20%) translateY(-2px) rotateX(11deg) rotateZ(-2deg) scale(1.03); }
-      26% { transform: translateX(-6%) translateY(-10px) rotateX(7deg) rotateZ(4deg) scale(1); }
-      44% { transform: translateX(3%) translateY(4px) rotateX(10deg) rotateZ(-3.2deg) scale(1.015); }
-      62% { transform: translateX(-2%) translateY(-6px) rotateX(5deg) rotateZ(2.2deg) scale(1); }
-      80% { transform: translateX(1%) translateY(2px) rotateX(8deg) rotateZ(-0.8deg) scale(1); }
-      100% { transform: translateX(0) translateY(0) rotateX(7deg) rotateZ(0deg) scale(1); }
+      from { transform: translate3d(-25%, 6px, 0) rotateX(12deg) scale(0.965); }
+      to { transform: translate3d(0, 0, 0) rotateX(6deg) scale(1); }
     }
+    @keyframes launch-shadow {
+      from { opacity: 0.26; transform: translateX(28%) scaleX(0.55); }
+      to { opacity: 0.4; transform: translateX(0) scaleX(1); }
+    }
+    /* Слой меняется на ребре, пока лист почти не виден. Иначе страница прыгает. */
     @keyframes launch-cover {
-      0% { transform: rotateY(0deg) rotateZ(0deg); z-index: 30; }
-      58% { transform: rotateY(-192deg) rotateZ(-4deg); z-index: 30; }
-      78% { transform: rotateY(-160deg) rotateZ(1.6deg); z-index: 6; }
-      100% { transform: rotateY(-172deg) rotateZ(0deg); z-index: 1; }
+      0% {
+        transform: rotateY(0deg);
+        z-index: 48;
+        animation-timing-function: cubic-bezier(0.5, 0, 0.85, 0.45);
+      }
+      49% { transform: rotateY(-90deg); z-index: 48; }
+      50% {
+        transform: rotateY(-92deg);
+        z-index: 1;
+        animation-timing-function: cubic-bezier(0.12, 0.5, 0.2, 1);
+      }
+      100% { transform: rotateY(-168deg); z-index: 1; }
     }
     @keyframes launch-leaf {
-      0% { transform: rotateY(0deg) rotateZ(0deg) translateY(0); z-index: calc(40 - var(--i)); }
-      36% {
-        transform: rotateY(-78deg) rotateZ(calc((var(--i) - 5.5) * 1.1deg)) translateY(-16px);
+      0% {
+        transform: rotateY(0deg);
         z-index: calc(40 - var(--i));
+        animation-timing-function: cubic-bezier(0.5, 0, 0.85, 0.45);
       }
-      64% {
-        transform: rotateY(-158deg) rotateZ(calc((5.5 - var(--i)) * 0.7deg)) translateY(5px);
-        z-index: calc(2 + var(--i));
+      49% { transform: rotateY(-90deg); z-index: calc(40 - var(--i)); }
+      50% {
+        transform: rotateY(-92deg);
+        z-index: calc(3 + var(--i));
+        animation-timing-function: cubic-bezier(0.12, 0.5, 0.2, 1);
       }
-      84% { transform: rotateY(-188deg) rotateZ(1deg) translateY(-3px); z-index: calc(2 + var(--i)); }
-      100% { transform: rotateY(-176deg) rotateZ(0deg) translateY(0); z-index: calc(2 + var(--i)); }
+      100% { transform: rotateY(-168deg); z-index: calc(3 + var(--i)); }
     }
     @keyframes launch-reveal { to { opacity: 1; } }
     @keyframes launch-fade {
-      0%, 90% { opacity: 1; }
+      0%, 84% { opacity: 1; }
       100% { opacity: 0; visibility: hidden; }
     }
-    /* Закрытие: открытый разворот, страницы возвращаются, обложка захлопывается. */
+    /* Закрытие сразу с открытого разворота. Прозрачность родителя схлопнула бы 3D. */
     .launch.is-closing {
       visibility: visible;
-      animation: close-in 0.16s ease both;
+      opacity: 1;
+      animation: none;
     }
     .launch.is-closing .launch__book {
-      animation: close-sit 2.1s linear both;
+      animation: close-sit 0.56s cubic-bezier(0.55, 0, 1, 1) both;
+    }
+    .launch.is-closing .launch__book::after {
+      animation: close-shadow 0.56s cubic-bezier(0.55, 0, 1, 1) both;
     }
     .launch.is-closing .launch__leaf {
-      z-index: calc(12 + var(--i));
-      animation: close-leaf 0.44s cubic-bezier(0.5, 0.02, 0.18, 1) both;
-      animation-delay: calc((11 - var(--i)) * 0.078s - (11 - var(--i)) * (11 - var(--i)) * 0.0032s);
+      animation: close-leaf 0.20s linear both;
+      animation-delay: calc((5 - var(--i)) * 0.036s);
     }
     .launch.is-closing .launch__cover {
-      animation: close-cover 0.58s cubic-bezier(0.45, 0.02, 0.2, 1) 0.78s both;
+      animation: close-cover 0.22s linear 0.32s both;
     }
     .launch.is-closing .launch__back--left,
     .launch.is-closing .launch__spine {
       opacity: 1;
-      animation: close-hide 0.28s ease 1.2s forwards;
-    }
-    @keyframes close-in {
-      from { opacity: 0; visibility: visible; }
-      to { opacity: 1; visibility: visible; }
+      animation: close-hide 0.1s ease 0.46s forwards;
     }
     @keyframes close-sit {
-      0% { transform: translateX(0) translateY(0) rotateX(7deg) rotateZ(0deg) scale(1); }
-      16% { transform: translateX(2%) translateY(-8px) rotateX(8deg) rotateZ(3.4deg) scale(1.02); }
-      36% { transform: translateX(-3%) translateY(5px) rotateX(6deg) rotateZ(-4deg) scale(1); }
-      58% { transform: translateX(-12%) translateY(-4px) rotateX(11deg) rotateZ(2.4deg) scale(1.02); }
-      76% { transform: translateX(-28%) translateY(8px) rotateX(15deg) rotateZ(-1.6deg) scale(0.93); }
-      88% { transform: translateX(-22%) translateY(-3px) rotateX(10deg) rotateZ(0.6deg) scale(0.99); }
-      100% { transform: translateX(-25%) translateY(0) rotateX(12deg) rotateZ(0deg) scale(0.96); }
+      from { transform: translate3d(0, 0, 0) rotateX(6deg) scale(1); }
+      to { transform: translate3d(-25%, 0, 0) rotateX(8deg) scale(0.985); }
+    }
+    @keyframes close-shadow {
+      from { opacity: 0.4; transform: translateX(0) scaleX(1); }
+      to { opacity: 0.24; transform: translateX(28%) scaleX(0.55); }
     }
     @keyframes close-leaf {
-      0% { transform: rotateY(-176deg) rotateZ(0deg) translateY(0); z-index: calc(12 + var(--i)); }
-      32% {
-        transform: rotateY(-104deg) rotateZ(calc((var(--i) - 5.5) * -1.15deg)) translateY(-18px);
-        z-index: 70;
+      0% {
+        transform: rotateY(-168deg);
+        z-index: calc(3 + var(--i));
+        animation-timing-function: cubic-bezier(0.45, 0, 0.9, 0.5);
       }
-      66% {
-        transform: rotateY(-18deg) rotateZ(calc((5.5 - var(--i)) * 0.55deg)) translateY(4px);
-        z-index: 70;
+      49% { transform: rotateY(-90deg); z-index: calc(3 + var(--i)); }
+      50% {
+        transform: rotateY(-88deg);
+        z-index: calc(40 - var(--i));
+        animation-timing-function: cubic-bezier(0.08, 0.45, 0.2, 1);
       }
-      84% { transform: rotateY(8deg) rotateZ(-1deg) translateY(-2px); z-index: calc(28 - var(--i)); }
-      100% { transform: rotateY(0deg) rotateZ(0deg) translateY(0); z-index: calc(28 - var(--i)); }
+      100% { transform: rotateY(0deg); z-index: calc(40 - var(--i)); }
     }
     @keyframes close-cover {
-      0% { transform: rotateY(-172deg) rotateZ(0deg); z-index: 1; }
-      48% { transform: rotateY(-24deg) rotateZ(3deg); z-index: 36; }
-      72% { transform: rotateY(11deg) rotateZ(-2deg); z-index: 36; }
-      100% { transform: rotateY(0deg) rotateZ(0deg); z-index: 36; }
+      0% {
+        transform: rotateY(-168deg);
+        z-index: 1;
+        animation-timing-function: cubic-bezier(0.45, 0, 0.9, 0.5);
+      }
+      49% { transform: rotateY(-90deg); z-index: 1; }
+      50% {
+        transform: rotateY(-88deg);
+        z-index: 48;
+        animation-timing-function: cubic-bezier(0.08, 0.45, 0.2, 1);
+      }
+      100% { transform: rotateY(0deg); z-index: 48; }
     }
     @keyframes close-hide { to { opacity: 0; } }
     @media (prefers-reduced-motion: reduce) {
       .launch { display: none; }
     }
   </style>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230B0B0E'/%3E%3Crect x='8' y='7' width='13' height='18' rx='2' fill='%23F5F5F7'/%3E%3Crect x='19' y='8' width='5' height='16' rx='1' fill='%23F5F5F7'/%3E%3Cpath d='M11 10v12' stroke='%230B0B0E' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3.5' fill='%230B0B0E'/%3E%3Cpath fill='%23F5F5F7' d='M2.15 4.35Q4.55 3.55 7.05 5.85V11.55Q4.45 11.35 2.15 12.35Z'/%3E%3Cpath fill='%23F5F5F7' d='M13.85 4.35Q11.45 3.55 8.95 5.85V11.55Q11.55 11.35 13.85 12.35Z'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles/tokens.css">
   <link rel="stylesheet" href="styles/base.css">
   <link rel="stylesheet" href="styles/components.css">
@@ -262,12 +298,6 @@
       <div class="launch__book">
         <div class="launch__back launch__back--left"></div>
         <div class="launch__back launch__back--right"></div>
-        <div class="launch__leaf" style="--i:11"><span></span><span></span></div>
-        <div class="launch__leaf" style="--i:10"><span></span><span></span></div>
-        <div class="launch__leaf" style="--i:9"><span></span><span></span></div>
-        <div class="launch__leaf" style="--i:8"><span></span><span></span></div>
-        <div class="launch__leaf" style="--i:7"><span></span><span></span></div>
-        <div class="launch__leaf" style="--i:6"><span></span><span></span></div>
         <div class="launch__leaf" style="--i:5"><span></span><span></span></div>
         <div class="launch__leaf" style="--i:4"><span></span><span></span></div>
         <div class="launch__leaf" style="--i:3"><span></span><span></span></div>
@@ -288,32 +318,42 @@
           <span class="brand__name">DotLingo</span>
           <span class="brand__sub">локальный перевод</span>
         </div>
+        <button
+          class="sidebar-toggle"
+          id="sidebar-toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="nav"
+          title="Скрыть вкладки"
+        >
+          <span class="sidebar-toggle__icon" data-icon="chevron-left"></span>
+        </button>
       </div>
 
       <nav class="nav" id="nav" aria-label="Основная навигация">
         <div class="nav-group">
           <div class="nav-group__label">Работа</div>
-          <button class="nav-item" type="button" data-page="chat">
+          <button class="nav-item" type="button" data-page="chat" aria-keyshortcuts="1">
             <span class="nav-item__icon" data-icon="message"></span>
             <span class="nav-item__label">Диалог</span>
             <span class="nav-item__hint">1</span>
           </button>
-          <button class="nav-item is-active" type="button" data-page="projects">
+          <button class="nav-item is-active" type="button" data-page="projects" aria-keyshortcuts="2">
             <span class="nav-item__icon" data-icon="folder"></span>
             <span class="nav-item__label">Проекты</span>
             <span class="nav-item__hint">2</span>
           </button>
-          <button class="nav-item" type="button" data-page="documents">
+          <button class="nav-item" type="button" data-page="documents" aria-keyshortcuts="3">
             <span class="nav-item__icon" data-icon="document"></span>
             <span class="nav-item__label">Документы</span>
             <span class="nav-item__hint">3</span>
           </button>
-          <button class="nav-item" type="button" data-page="review">
+          <button class="nav-item" type="button" data-page="review" aria-keyshortcuts="4">
             <span class="nav-item__icon" data-icon="search"></span>
             <span class="nav-item__label">Проверка</span>
             <span class="nav-item__hint">4</span>
           </button>
-          <button class="nav-item" type="button" data-page="queue">
+          <button class="nav-item" type="button" data-page="queue" aria-keyshortcuts="5">
             <span class="nav-item__icon" data-icon="list"></span>
             <span class="nav-item__label">Очередь</span>
             <span class="nav-item__hint">5</span>
@@ -322,12 +362,12 @@
 
         <div class="nav-group">
           <div class="nav-group__label">Библиотека</div>
-          <button class="nav-item" type="button" data-page="models">
+          <button class="nav-item" type="button" data-page="models" aria-keyshortcuts="6">
             <span class="nav-item__icon" data-icon="chip"></span>
             <span class="nav-item__label">Модели</span>
             <span class="nav-item__hint">6</span>
           </button>
-          <button class="nav-item" type="button" data-page="glossary">
+          <button class="nav-item" type="button" data-page="glossary" aria-keyshortcuts="7">
             <span class="nav-item__icon" data-icon="book"></span>
             <span class="nav-item__label">Глоссарий</span>
             <span class="nav-item__hint">7</span>
@@ -336,7 +376,7 @@
 
         <div class="nav-group">
           <div class="nav-group__label">Приложение</div>
-          <button class="nav-item" type="button" data-page="settings">
+          <button class="nav-item" type="button" data-page="settings" aria-keyshortcuts="8">
             <span class="nav-item__icon" data-icon="settings"></span>
             <span class="nav-item__label">Настройки</span>
             <span class="nav-item__hint">8</span>
@@ -346,6 +386,7 @@
 
       <div class="sidebar__footer">
         <button class="active-project" id="active-project" type="button">
+          <span class="active-project__icon" data-icon="folder" aria-hidden="true"></span>
           <span class="active-project__kicker">Проект</span>
           <span class="active-project__label" id="active-project-label">Не выбран</span>
         </button>
@@ -359,6 +400,15 @@
         </div>
       </div>
     </aside>
+    <div
+      id="sidebar-resize"
+      class="sidebar-resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Ширина боковой панели"
+      tabindex="0"
+      title="Потяните, чтобы изменить ширину. Двойной щелчок вернёт размер."
+    ></div>
 
     <main class="main">
       <header class="main-header">

@@ -87,6 +87,61 @@ def test_confirm_offer_rejects_a_moved_revision(monkeypatch: pytest.MonkeyPatch)
         market.confirm_offer(offer)
 
 
+def test_match_market_link_selects_a_cached_file() -> None:
+    offers = select_offers(SOURCE, REV, "apache-2.0", _tree())
+    blob = (
+        "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/blob/main/"
+        "HY-MT1.5-1.8B-Q4_K_M.gguf?download=true"
+    )
+    matched = market.match_market_link(blob, offers)
+    assert matched["offer_id"] == offers[0]["id"]
+    assert matched["filename"] == "HY-MT1.5-1.8B-Q4_K_M.gguf"
+
+    short = "https://hf.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main/HY-MT1.5-1.8B-Q6_K.gguf"
+    assert market.match_market_link(short, offers)["filename"] == "HY-MT1.5-1.8B-Q6_K.gguf"
+
+    page = market.match_market_link(
+        "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/tree/main",
+        offers,
+    )
+    assert page["offer_id"] is None
+    assert page["offer_ids"] == [item["id"] for item in offers]
+
+
+def test_match_market_link_rejects_unknown_sources() -> None:
+    offers = select_offers(SOURCE, REV, "apache-2.0", _tree())
+    with pytest.raises(MarketError, match="не входит"):
+        market.match_market_link("https://huggingface.co/other/repo/blob/main/file.gguf", offers)
+    with pytest.raises(MarketError, match="https"):
+        market.match_market_link("http://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF", offers)
+    with pytest.raises(MarketError, match="один файл"):
+        market.match_market_link(
+            "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/blob/main/sub/file.gguf",
+            offers,
+        )
+    with pytest.raises(MarketError, match="репозитория"):
+        market.match_market_link("https://huggingface.co/Qwen/Qwen3-8B-GGUF", offers)
+    with pytest.raises(MarketError, match="Этого файла"):
+        market.match_market_link(
+            "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/blob/main/HY-MT1.5-1.8B-Q8_0.gguf",
+            offers,
+        )
+
+
+def test_resolve_market_link_uses_the_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    offer = select_offers(SOURCE, REV, "apache-2.0", _tree())[0]
+    monkeypatch.setattr(market, "load_source", lambda source: [offer] if source["repo"] == SOURCE["repo"] else [])
+    api = _make_api(tmp_path, sync=True)
+    assert api.refreshMarket()["ok"] is True
+    url = f"https://huggingface.co/{SOURCE['repo']}/blob/main/{offer['filename']}"
+    found = api.resolveMarketLink(url)
+    assert found["ok"] is True
+    assert found["data"]["offerId"] == offer["id"]
+    assert found["data"]["offers"][0]["filename"] == offer["filename"]
+    assert api.resolveMarketLink("https://example.com/file.gguf")["ok"] is False
+    assert api.resolveMarketLink("  ")["ok"] is False
+
+
 def test_market_download_registers_the_confirmed_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     offer = select_offers(SOURCE, REV, "apache-2.0", _tree())[0]
     monkeypatch.setattr(market, "load_source", lambda source: [offer] if source["repo"] == SOURCE["repo"] else [])

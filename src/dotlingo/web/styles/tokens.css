@@ -31,15 +31,17 @@
     "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
 
-  /* Типографика */
-  --fs-caption: 11px;
-  --fs-small: 12px;
-  --fs-body: 13px;
-  --fs-body-lg: 14px;
-  --fs-heading: 15px;
-  --fs-subtitle: 17px;
-  --fs-title: 22px;
-  --fs-display: 28px;
+  /* Типографика. --text-scale меняет только буквы, --ui-scale зумит всё окно. */
+  --ui-scale: 1;
+  --text-scale: 1;
+  --fs-caption: calc(11px * var(--text-scale));
+  --fs-small: calc(12px * var(--text-scale));
+  --fs-body: calc(13px * var(--text-scale));
+  --fs-body-lg: calc(14px * var(--text-scale));
+  --fs-heading: calc(15px * var(--text-scale));
+  --fs-subtitle: calc(17px * var(--text-scale));
+  --fs-title: calc(22px * var(--text-scale));
+  --fs-display: calc(28px * var(--text-scale));
 
   /* Анимации */
   --dur-fast: 160ms;
@@ -101,8 +103,16 @@
   --info: rgba(235, 235, 245, 0.6);
   --info-bg: rgba(235, 235, 245, 0.08);
 
+  /* Плотные пластины тостов и окон. Сквозь них страница не просвечивает. */
+  --overlay: #222228;
+  --overlay-sink: #1a1a1f;
+  --overlay-edge: rgba(255, 255, 255, 0.18);
+  --overlay-text: #f5f5f7;
+  --overlay-muted: #c8c8d0;
+  --overlay-quiet: #9b9ba4;
+
   /* Затемнение и фокус */
-  --scrim: rgba(0, 0, 0, 0.4);
+  --scrim: rgba(0, 0, 0, 0.64);
   --focus-ring: rgba(245, 245, 247, 0.55);
   --focus-halo: rgba(245, 245, 247, 0.18);
 
@@ -116,7 +126,7 @@
   --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.44), 0 28px 72px rgba(0, 0, 0, 0.42);
 
   /* Стрелка селекта */
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239999A5' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9.5l6 6 6-6'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239999A5' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.5 9.25 12 14.75l5.5-5.5'/%3E%3C/svg%3E");
 }
 
 /* --------------------------------------------------------------------------
@@ -161,8 +171,16 @@
   --info: #6e6e73;
   --info-bg: rgba(0, 0, 0, 0.05);
 
+  /* Плотные пластины тостов и окон. */
+  --overlay: #ffffff;
+  --overlay-sink: #f3f3f6;
+  --overlay-edge: rgba(0, 0, 0, 0.16);
+  --overlay-text: #1d1d1f;
+  --overlay-muted: #3a3a3e;
+  --overlay-quiet: #5c5c62;
+
   /* Затемнение и фокус */
-  --scrim: rgba(0, 0, 0, 0.32);
+  --scrim: rgba(20, 20, 24, 0.46);
   --focus-ring: rgba(29, 29, 31, 0.45);
   --focus-halo: rgba(29, 29, 31, 0.12);
 
@@ -176,5 +194,5 @@
   --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.1), 0 28px 72px rgba(0, 0, 0, 0.12);
 
   /* Стрелка селекта */
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236E6E73' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9.5l6 6 6-6'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236E6E73' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.5 9.25 12 14.75l5.5-5.5'/%3E%3C/svg%3E");
 }

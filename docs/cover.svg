@@ -26,16 +26,14 @@
     <g opacity="0.1" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
       <path d="M5 13 Q14 9 24 14 Q34 9 43 13 V37 Q34 33 24 38 Q14 33 5 37 Z"/>
       <path d="M24 14 V38"/>
-      <path d="M11 19 H18 M11 24 H18 M30 19 H37 M30 24 H37"/>
-      <path d="M19 29 H29 M26 26 L29 29 L26 32"/>
+      <path d="M11 19 H18 M11 24 H18 M11 29 H18 M30 19 H37 M30 24 H37 M30 29 H37"/>
     </g>
   </svg>
   <svg x="140" y="118" width="86" height="86" viewBox="0 0 48 48">
     <g fill="none" stroke="#f3f3f1" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
       <path d="M5 13 Q14 9 24 14 Q34 9 43 13 V37 Q34 33 24 38 Q14 33 5 37 Z"/>
       <path d="M24 14 V38"/>
-      <path d="M11 19 H18 M11 24 H18 M30 19 H37 M30 24 H37"/>
-      <path d="M19 29 H29 M26 26 L29 29 L26 32"/>
+      <path d="M11 19 H18 M11 24 H18 M11 29 H18 M30 19 H37 M30 24 H37 M30 29 H37"/>
     </g>
   </svg>
   <text x="138" y="408" font-family="Inter, Arial, sans-serif" font-size="132" font-weight="800" fill="#f3f3f1" letter-spacing="-3">.лингво</text>

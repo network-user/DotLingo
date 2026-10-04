@@ -80,6 +80,8 @@ function mockResponse(method) {
       return { ok: true, data: { ...MOCK_PREFS } };
     case 'getLanguages':
       return { ok: true, data: MOCK_LANGUAGES };
+    case 'getLocaleHints':
+      return { ok: true, data: { keyboard: '', interface: '' } };
     case 'listProjects':
       return { ok: true, data: [] };
     case 'getActiveProject':
@@ -128,6 +130,12 @@ function mockResponse(method) {
       return { ok: true, data: [] };
     case 'listMarket':
       return { ok: true, data: { fetchedAt: null, stale: false, errors: [], offers: [] } };
+    case 'resolveMarketLink':
+      return {
+        ok: false,
+        error: 'В браузере без окна приложения ссылка не проверяется.',
+        code: 'invalid',
+      };
     case 'getDataDirs':
       return { ok: true, data: { projectsDir: 'C:\\demo\\projects', modelsDir: 'C:\\demo\\models' } };
     case 'listTasks':

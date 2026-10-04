@@ -270,7 +270,8 @@ def _arm_close_watchdog(api, window) -> None:
     """Если страница не ответила, окно всё равно закрывается."""
 
     def _fire() -> None:
-        time.sleep(3.2)
+        # Кадр закрытия 0.56 с, запасной таймер в playClose чуть длиннее.
+        time.sleep(0.75)
         if api.close_permitted:
             return
         api.permit_close()
@@ -393,6 +394,26 @@ def _dotlingo_edge_init(self, form, window, cache_dir):
 """
 
 
+def _release_webview_without_waiting(self) -> None:
+    """Не ждать процесс WebView2 на потоке окна.
+
+    Штатный clear_user_data делает Dispose и Process.WaitForExit(3000).
+    Пока вызов не вернулся, WinForms не прячет последний кадр закрытой книги.
+    Процесс браузера останавливаем без ожидания: Kill не блокирует поток окна.
+    """
+    webview_control = getattr(self, "webview", None)
+    if webview_control is None:
+        return
+    try:
+        from System import Convert
+        from System.Diagnostics import Process
+
+        process_id = Convert.ToInt32(webview_control.CoreWebView2.BrowserProcessId)
+        Process.GetProcessById(process_id).Kill()
+    except Exception:
+        return
+
+
 def _install_webview_browser_arguments() -> None:
     """Вписать флаг в аргументы WebView2 до создания среды."""
     try:
@@ -400,6 +421,8 @@ def _install_webview_browser_arguments() -> None:
     except Exception:
         traceback.print_exc()
         return
+    # Ждать процесс браузера при выходе нельзя: окно замирает на закрытой книге.
+    edge.EdgeChrome.clear_user_data = _release_webview_without_waiting
     if getattr(edge.EdgeChrome, "_dotlingo_args", False):
         return
     edge.__dict__["_dotlingo_merge_arguments"] = _merge_browser_arguments

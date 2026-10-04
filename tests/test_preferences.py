@@ -3,11 +3,12 @@ from __future__ import annotations
 import errno
 from pathlib import Path
 
-from dotlingo.preferences import load_preferences, save_preferences
+from dotlingo.preferences import DEFAULTS, load_preferences, save_preferences
 
 
 def test_save_preferences_flushes_and_atomically_round_trips(tmp_path: Path) -> None:
     expected = {
+        **DEFAULTS,
         "setup_seen": True,
         "reduce_motion": False,
         "theme": "dark",
@@ -27,6 +28,7 @@ def test_save_preferences_survives_windows_bad_descriptor_fsync(
     tmp_path: Path, monkeypatch
 ) -> None:
     expected = {
+        **DEFAULTS,
         "setup_seen": True,
         "reduce_motion": False,
         "theme": "dark",

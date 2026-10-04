@@ -111,6 +111,7 @@ export function modal(opts = {}) {
     actions = [],
     dismissable = true,
     closeTitle = 'Закрыть',
+    panelClass = '',
     onClose,
   } = opts;
 
@@ -159,7 +160,7 @@ export function modal(opts = {}) {
 
   const scrim = el('div', { class: 'modal-scrim', onClick: requestClose }, [
     el('div', {
-      class: 'modal',
+      class: ['modal', panelClass].filter(Boolean).join(' '),
       role: 'dialog',
       'aria-modal': 'true',
       'aria-label': title,

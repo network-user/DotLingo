@@ -53,7 +53,7 @@ export function recommendedChoice() {
   return { model, reason: recommendation?.reason || '', models };
 }
 
-/** Вес не помещается по диску или свободной RAM. */
+/** Вес не помещается по диску или по всей RAM устройства. */
 export function placementBlocked(model) {
   return model?.compatibility?.verdict === 'no';
 }

@@ -30,6 +30,29 @@ def _make_api(tmp_path: Path, *, sync: bool = False) -> Api:
     return api
 
 
+def test_gguf_dialog_filter_is_valid() -> None:
+    from webview.util import parse_file_type
+
+    for item in api_module.GGUF_FILE_TYPES:
+        description, pattern = parse_file_type(item)
+        assert description
+        assert pattern.startswith("*")
+
+
+def test_claim_dropped_file_returns_path(tmp_path: Path) -> None:
+    from webview.dom import _dnd_state
+
+    api = _make_api(tmp_path)
+    saved = list(_dnd_state.get("paths") or [])
+    _dnd_state["paths"] = [("model.gguf", r"D:\weights\model.gguf")]
+    try:
+        result = api.claimDroppedFile("model.gguf")
+    finally:
+        _dnd_state["paths"] = saved
+    assert result["ok"] is True
+    assert result["data"] == r"D:\weights\model.gguf"
+
+
 def _create_project(api: Api, model_id: str = "", targets: list[str] | None = None) -> dict:
     return api.createProject(
         {
@@ -102,6 +125,39 @@ def test_preferences_roundtrip(tmp_path: Path) -> None:
     result = api.setPreferences({"theme": "light"})
     assert result["ok"] is True
     assert result["data"]["theme"] == "light"
+
+
+def test_layout_preferences(tmp_path: Path) -> None:
+    api = _make_api(tmp_path)
+    saved = api.setPreferences({
+        "sidebar_collapsed": True,
+        "sidebar_width": 320,
+        "chat_list_width": 300,
+        "chat_list_height": 12,
+        "chat_list_hidden": True,
+    })
+    assert saved["ok"] is True
+    assert saved["data"]["sidebar_collapsed"] is True
+    assert saved["data"]["sidebar_width"] == 320
+    assert saved["data"]["chat_list_width"] == 300
+    assert saved["data"]["chat_list_height"] == 120
+    assert saved["data"]["chat_list_hidden"] is True
+    again = api.getPreferences()["data"]
+    assert again["sidebar_collapsed"] is True
+    assert again["sidebar_width"] == 320
+    assert again["chat_list_width"] == 300
+    narrow = api.setPreferences({"sidebar_width": 10})
+    assert narrow["data"]["sidebar_width"] == 80
+    mid = api.setPreferences({"sidebar_width": 90})
+    assert mid["data"]["sidebar_width"] == 90
+    wide = api.setPreferences({"sidebar_width": 900})
+    assert wide["data"]["sidebar_width"] == 480
+    scaled = api.setPreferences({"ui_scale": 125, "text_scale": 4})
+    assert scaled["data"]["ui_scale"] == 125
+    assert scaled["data"]["text_scale"] == 75
+    huge = api.setPreferences({"ui_scale": 400, "text_scale": 140})
+    assert huge["data"]["ui_scale"] == 160
+    assert huge["data"]["text_scale"] == 140
 
 
 # --------------------------------------------------------------------- projects

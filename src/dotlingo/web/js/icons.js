@@ -1,80 +1,100 @@
 /**
- * Inline SVG stroke-иконки: 1.5px stroke, round caps, 24x24 viewBox.
- * Иконки только stroke, без fill - наследуют currentColor.
+ * Общие штриховые иконки, 24×24.
+ * Обводка 1.75, круглые концы. Точки залиты, а не нарисованы штрихом нулевой длины.
+ * Имена стабильны: страницы и кнопки просят глиф по имени.
  */
 
 const PATHS = {
   folder:
-    '<path d="M3.5 7.5c0-1.1.9-2 2-2h3.2c.6 0 1.2.3 1.6.8l.9 1.2h6.3c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2h-12c-1.1 0-2-.9-2-2v-10z"/>',
+    '<path d="M4 19.45V5.35h6.35l2.2 3.55H20v10.55z"/>',
   document:
-    '<path d="M7 3.5h7l4 4v13H7z"/>' +
-    '<path d="M14 3.5V7.5h4"/>' +
-    '<path d="M10 12.5h5M10 16h5"/>',
+    '<path d="M6.35 3.75h7.35L18.35 8.65V20.45H6.35z"/>' +
+    '<path d="M13.7 3.75V8.65h4.65"/>' +
+    '<path d="M9.05 12.25h5.6M9.05 15.7h3.85"/>',
   search:
-    '<circle cx="11" cy="11" r="6.5"/>' +
-    '<path d="M15.8 15.8L21 21"/>',
+    '<circle cx="10.55" cy="10.55" r="6.1"/>' +
+    '<path d="M16.7 16.7 20.65 20.65"/>',
   list:
-    '<path d="M9 6.5h11M9 12h11M9 17.5h11"/>' +
-    '<path d="M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01"/>',
+    '<circle cx="4.85" cy="6.75" r="1.35" fill="currentColor" stroke="none"/>' +
+    '<circle cx="4.85" cy="12" r="1.35" fill="currentColor" stroke="none"/>' +
+    '<circle cx="4.85" cy="17.25" r="1.35" fill="currentColor" stroke="none"/>' +
+    '<path d="M8.35 6.75H19.6M8.35 12H19.6M8.35 17.25H19.6"/>',
   chip:
-    '<rect x="6.5" y="6.5" width="11" height="11" rx="2.5"/>' +
-    '<path d="M10 3.5v3M14 3.5v3M10 17.5v3M14 17.5v3M3.5 10h3M3.5 14h3M17.5 10h3M17.5 14h3"/>',
+    '<rect x="6.65" y="6.65" width="10.7" height="10.7" rx="2.2"/>' +
+    '<path d="M12 3.45V6.65M12 17.35v3.2M3.45 12H6.65M17.35 12h3.2"/>',
   book:
-    '<path d="M4.5 5.5c0-1.1.9-2 2-2H19v16H6.5c-1.1 0-2 .9-2 2v-16z"/>' +
-    '<path d="M4.5 19.5c0-1.1.9-2 2-2H19"/>',
+    '<path d="M3.23 6.53Q6.83 5.33 10.58 8.78V17.33Q6.68 17.03 3.23 18.53Z"/>' +
+    '<path d="M20.78 6.53Q17.18 5.33 13.43 8.78V17.33Q17.33 17.03 20.78 18.53Z"/>',
   settings:
-    '<circle cx="12" cy="12" r="3"/>' +
-    '<path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1"/>',
+    '<path d="M4 7.2h16M4 12h16M4 16.8h16"/>' +
+    '<circle cx="9.05" cy="7.2" r="2.05" fill="currentColor" stroke="none"/>' +
+    '<circle cx="15.05" cy="12" r="2.05" fill="currentColor" stroke="none"/>' +
+    '<circle cx="11.15" cy="16.8" r="2.05" fill="currentColor" stroke="none"/>',
   sun:
     '<circle cx="12" cy="12" r="4"/>' +
-    '<path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/>',
+    '<path d="M12 3.15v2.4M12 18.45v2.4M3.15 12h2.4M18.45 12h2.4"/>' +
+    '<path d="M5.7 5.7 7.4 7.4M16.6 16.6l1.7 1.7M18.3 5.7 16.6 7.4M7.4 16.6 5.7 18.3"/>',
   moon:
-    '<path d="M20 13.5A8 8 0 0 1 10.5 4 8 8 0 1 0 20 13.5z"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  close: '<path d="M6 6l12 12M18 6L6 18"/>',
-  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
-  'chevron-down': '<path d="M6 9.5l6 6 6-6"/>',
-  'chevron-right': '<path d="M9.5 6l6 6-6 6"/>',
-  download: '<path d="M12 4v11M7.5 10.5l4.5 4.5 4.5-4.5"/><path d="M4.5 19.5h15"/>',
-  upload: '<path d="M12 15V4M7.5 8.5L12 4l4.5 4.5"/><path d="M4.5 19.5h15"/>',
-  pause: '<path d="M9 5.5v13M15 5.5v13"/>',
-  play: '<path d="M8 5.5l11 6.5-11 6.5z"/>',
-  stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/>',
+    '<path d="M15.15 4.05c-1.15 1.35-1.8 3.05-1.8 4.95 0 4.35 3.15 7.7 7.05 8.35A8.05 8.05 0 1 1 15.15 4.05z"/>',
+  plus: '<path d="M12 4.75v14.5M4.75 12h14.5"/>',
+  close: '<path d="M6.85 6.85 17.15 17.15M17.15 6.85 6.85 17.15"/>',
+  check: '<path d="M5.35 12.4 9.95 16.95 18.85 7.35"/>',
+  'chevron-down': '<path d="M6.5 9.25 12 14.75l5.5-5.5"/>',
+  'chevron-left': '<path d="M14.75 6.5 9.25 12l5.5 5.5"/>',
+  'chevron-right': '<path d="M9.25 6.5 14.75 12l-5.5 5.5"/>',
+  download:
+    '<path d="M12 3.65V13.85"/>' +
+    '<path d="M7.7 9.6 12 13.85 16.3 9.6"/>' +
+    '<path d="M4.75 16.15v2.15c0 .95.8 1.7 1.75 1.7h10.9c.95 0 1.75-.75 1.75-1.7v-2.15"/>',
+  upload:
+    '<path d="M12 13.85V3.65"/>' +
+    '<path d="M7.7 7.9 12 3.65 16.3 7.9"/>' +
+    '<path d="M4.75 16.15v2.15c0 .95.8 1.7 1.75 1.7h10.9c.95 0 1.75-.75 1.75-1.7v-2.15"/>',
+  pause:
+    '<rect x="6.2" y="5.35" width="3.35" height="13.3" rx="1.15" fill="currentColor" stroke="none"/>' +
+    '<rect x="14.45" y="5.35" width="3.35" height="13.3" rx="1.15" fill="currentColor" stroke="none"/>',
+  play:
+    '<path d="M8.85 5.65 18.25 12 8.85 18.35z" fill="currentColor" stroke="none"/>',
+  stop: '<rect x="6.55" y="6.55" width="10.9" height="10.9" rx="2"/>',
   trash:
-    '<path d="M4.5 6.5h15"/>' +
-    '<path d="M9 6.5V5c0-.8.7-1.5 1.5-1.5h3c.8 0 1.5.7 1.5 1.5v1.5"/>' +
-    '<path d="M6.5 6.5l.8 12c.1 1 .9 1.5 1.7 1.5h6c.8 0 1.6-.5 1.7-1.5l.8-12"/>' +
-    '<path d="M10 10.5v6M14 10.5v6"/>',
+    '<path d="M9.35 6.85V5.6c0-.5.4-.95.95-.95h3.4c.55 0 .95.45.95.95v1.25"/>' +
+    '<path d="M4.8 6.85h14.4"/>' +
+    '<path d="M7.15 6.85l.85 11.15c.05.7.6 1.2 1.3 1.2h5.4c.7 0 1.25-.5 1.3-1.2l.85-11.15"/>',
   edit:
-    '<path d="M4.5 19.5h4l10-10-4-4-10 10z"/>' +
-    '<path d="M13.5 6.5l4 4"/>',
+    '<path d="M13.55 6.15 17.85 10.45 8.65 19.65H4.35v-4.3z"/>' +
+    '<path d="M11.25 8.45 15.55 12.75"/>',
   export:
-    '<path d="M14 4.5h5.5V10"/>' +
-    '<path d="M19.5 4.5l-8 8"/>' +
-    '<path d="M18 14v4.5c0 1.1-.9 2-2 2h-11c-1.1 0-2-.9-2-2v-11c0-1.1.9-2 2-2H10"/>',
+    '<path d="M5.2 9.2V17.7c0 1 .75 1.75 1.75 1.75h8.5c1 0 1.75-.75 1.75-1.75V13.5"/>' +
+    '<path d="M5.2 9.2h6.15"/>' +
+    '<path d="M13.15 4.55h6.3v6.3"/>' +
+    '<path d="M19.2 4.8 12.35 11.65"/>',
   refresh:
-    '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3L19.5 9"/>' +
-    '<path d="M19.5 4v5h-5"/>',
+    '<path d="M19.2 12A7.2 7.2 0 1 1 15.6 5.76"/>' +
+    '<path d="M15.6 5.76 17.95 7.12 17.05 4.2" stroke-linejoin="miter"/>',
   warning:
-    '<path d="M12 4L2.8 19.5h18.4z"/>' +
-    '<path d="M12 10v4.5M12 17.5h.01"/>',
+    '<path d="M12 4.1 3.3 19.4h17.4z"/>' +
+    '<path d="M12 9.55v4.15"/>' +
+    '<circle cx="12" cy="16.45" r="1.15" fill="currentColor" stroke="none"/>',
   error:
-    '<circle cx="12" cy="12" r="8.5"/>' +
-    '<path d="M9 9l6 6M15 9l-6 6"/>',
+    '<circle cx="12" cy="12" r="8"/>' +
+    '<path d="M8.8 8.8 15.2 15.2M15.2 8.8 8.8 15.2"/>',
   info:
-    '<circle cx="12" cy="12" r="8.5"/>' +
-    '<path d="M12 11v5M12 8h.01"/>',
+    '<circle cx="12" cy="12" r="8"/>' +
+    '<path d="M12 11v4.75"/>' +
+    '<circle cx="12" cy="8.05" r="1.15" fill="currentColor" stroke="none"/>',
   help:
     '<circle cx="12" cy="12" r="8"/>' +
     '<path d="M9.55 9.4a2.45 2.45 0 0 1 4.55 1.25c0 1.15-.75 1.7-1.6 2.15-.5.28-.65.52-.65 1v.3"/>' +
     '<circle cx="12" cy="16.35" r="0.9" fill="currentColor" stroke="none"/>',
-  'arrow-right': '<path d="M4.5 12h15M13.5 6l6 6-6 6"/>',
+  'arrow-right':
+    '<path d="M4.35 12H18.65"/>' +
+    '<path d="M13.1 6.65 18.65 12 13.1 17.35"/>',
   message:
-    '<path d="M5 6.5h14a1.5 1.5 0 0 1 1.5 1.5v7.2a1.5 1.5 0 0 1-1.5 1.5H9.2L5 20.2v-3.5A1.5 1.5 0 0 1 3.5 15.2V8A1.5 1.5 0 0 1 5 6.5z"/>',
+    '<path d="M7.05 6.3h10.15A1.85 1.85 0 0 1 19.05 8.15v6.2a1.85 1.85 0 0 1-1.85 1.85H9.45L5.2 19.9V8.15A1.85 1.85 0 0 1 7.05 6.3z"/>',
   globe:
-    '<circle cx="12" cy="12" r="8.5"/>' +
-    '<path d="M3.5 12h17"/>' +
-    '<path d="M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5s1.3-6.2 3.8-8.5z"/>',
+    '<circle cx="12" cy="12" r="8"/>' +
+    '<path d="M4 12h16"/>' +
+    '<ellipse cx="12" cy="12" rx="3.45" ry="8"/>',
 };
 
 /** Общий шаблон SVG-элемента. */
@@ -83,7 +103,7 @@ function svgWrap(inner) {
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('fill', 'none');
   svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.5');
+  svg.setAttribute('stroke-width', '1.75');
   svg.setAttribute('stroke-linecap', 'round');
   svg.setAttribute('stroke-linejoin', 'round');
   svg.setAttribute('aria-hidden', 'true');

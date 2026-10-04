@@ -29,6 +29,16 @@ const state = {
   taskEvents: [],
   /** @type {boolean} bridge на моках (demo data) */
   demo: false,
+  /** @type {boolean} колонка сжата до рельса значков */
+  sidebarCollapsed: false,
+  /** @type {number} последняя ширина колонки выше рельса, px */
+  sidebarWidth: 252,
+  /** @type {number} ширина списка диалогов, px */
+  chatListWidth: 240,
+  /** @type {number} высота списка диалогов в узком окне, px */
+  chatListHeight: 200,
+  /** @type {boolean} список диалогов скрыт, лента на всю ширину */
+  chatListHidden: false,
 };
 
 /** Подписчики на изменения: (ключ, значение, предыдущее) => void. */

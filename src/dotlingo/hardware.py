@@ -155,13 +155,16 @@ def assess_model(snapshot: HardwareSnapshot, model: dict) -> tuple[str, str]:
     required_disk = float(model["size_bytes"]) / 1024**3 * 1.1
     if snapshot.disk_free_gb < required_disk:
         return "no", f"Для веса и временного файла нужно около {required_disk:.1f} ГБ свободного места."
-    if snapshot.ram_available_gb is None:
-        return "unknown", "Доступную оперативную память определить не удалось."
+    if snapshot.ram_total_gb is None:
+        return "unknown", "Объём оперативной памяти определить не удалось."
     required_ram = float(model["estimated_ram_gb"])
     if not snapshot.llama_runtime_available:
         return "runtime_missing", "Локальный runtime llama.cpp не установлен."
-    if snapshot.ram_available_gb < required_ram:
-        return "no", f"Сейчас доступно {snapshot.ram_available_gb:.1f} ГБ RAM; ориентир модели — {required_ram:.1f} ГБ."
+    if snapshot.ram_total_gb < required_ram:
+        return (
+            "no",
+            f"На устройстве {snapshot.ram_total_gb:.1f} ГБ RAM, ориентир модели {required_ram:.1f} ГБ.",
+        )
     layers = gpu_layers_for(snapshot, model)
     if layers < 0:
         device = "Свободной VRAM хватает на расчётный объём, слои будут отданы GPU."
@@ -226,7 +229,7 @@ def recommend_model(
     for model in candidates:
         ram = float(model["estimated_ram_gb"])
         disk_required = int(model["size_bytes"] * 1.1)
-        memory_fits = snapshot.ram_available_gb is not None and snapshot.ram_available_gb >= ram + 1.0
+        memory_fits = snapshot.ram_total_gb is not None and snapshot.ram_total_gb >= ram + 1.0
         disk_fits = (
             model["id"] in installed_ids
             or snapshot.disk_free_gb is not None
@@ -238,8 +241,8 @@ def recommend_model(
         choice = eligible[0]
         reason = (
             f"Подобрана самая крупная доступная оценка среди моделей, которым хватает места: "
-            f"ориентир {choice['estimated_ram_gb']:.1f} ГБ RAM при свободных "
-            f"{snapshot.ram_available_gb:.1f} ГБ с резервом 1 ГБ. Значение расчётное, не измерено."
+            f"ориентир {choice['estimated_ram_gb']:.1f} ГБ RAM при {snapshot.ram_total_gb:.1f} ГБ "
+            f"на устройстве и резерве 1 ГБ. Значение расчётное, не измерено."
         )
         if not snapshot.llama_runtime_available:
             reason += " Для запуска сначала потребуется llama-cpp-python."
@@ -248,10 +251,10 @@ def recommend_model(
     smallest = candidates[-1]
     if snapshot.disk_free_gb is None:
         reason = "Свободное место определить не удалось; выбрана модель с наименьшей расчётной потребностью."
-    elif snapshot.ram_available_gb is None:
+    elif snapshot.ram_total_gb is None:
         reason = "RAM определить не удалось; выбрана модель с наименьшей расчётной потребностью."
-    elif snapshot.ram_available_gb < float(smallest["estimated_ram_gb"]) + 1.0:
-        reason = "Свободной RAM мало даже для минимального резерва; выбрана наименьшая модель."
+    elif snapshot.ram_total_gb < float(smallest["estimated_ram_gb"]) + 1.0:
+        reason = "Памяти устройства мало даже для минимального резерва; выбрана наименьшая модель."
     else:
         reason = "Свободного места мало для моделей-кандидатов; выбрана наименьшая модель."
     if not snapshot.llama_runtime_available:
@@ -338,7 +341,7 @@ def plan_setup(
         "action": "skip",
         "modelId": None,
         "reason": (
-            "Ни одна модель не помещается в свободную память или на диск. "
+            "Ни одна модель не помещается в память устройства или на диск. "
             "Приложение откроется без загрузки."
         ),
     }

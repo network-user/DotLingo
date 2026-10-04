@@ -190,6 +190,34 @@ def find_cached_offer(root: Path, offer_id: str) -> dict[str, Any] | None:
     return None
 
 
+def match_market_link(url: str, offers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Match a Hugging Face link to a cached curated file. Does not download."""
+    repo, filename = _parse_market_link(url)
+    same = [
+        item
+        for item in offers
+        if isinstance(item, dict) and item.get("repo") == repo and item.get("id")
+    ]
+    if filename:
+        found = next((item for item in same if item.get("filename") == filename), None)
+        if found is None:
+            raise MarketError("Этого файла нет в текущем списке. Обновите рынок и выберите его там.")
+        return {
+            "repo": repo,
+            "filename": filename,
+            "offer_id": found["id"],
+            "offer_ids": [found["id"]],
+        }
+    if not same:
+        raise MarketError("В текущем списке нет файлов этого репозитория. Обновите рынок.")
+    return {
+        "repo": repo,
+        "filename": "",
+        "offer_id": None,
+        "offer_ids": [str(item["id"]) for item in same],
+    }
+
+
 def refresh_market(root: Path) -> dict[str, Any]:
     """Read the curated repositories. Does not download weights."""
     base = Path(root)
@@ -446,6 +474,30 @@ def _trusted_https(url: str) -> bool:
     return parsed.scheme == "https" and (
         host == "huggingface.co" or host.endswith(".huggingface.co") or host.endswith(".hf.co")
     )
+
+
+def _parse_market_link(url: str) -> tuple[str, str]:
+    text = str(url or "").strip()
+    parsed = urllib.parse.urlparse(text)
+    host = (parsed.hostname or "").lower()
+    trusted = parsed.scheme == "https" and (
+        host in {"huggingface.co", "hf.co"}
+        or host.endswith(".huggingface.co")
+        or host.endswith(".hf.co")
+    )
+    if not trusted or parsed.username or parsed.password:
+        raise MarketError("Нужна ссылка https на huggingface.co из закреплённого рынка.")
+    parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    if len(parts) < 2 or not _REPO.fullmatch(f"{parts[0]}/{parts[1]}"):
+        raise MarketError("Нужна ссылка https на huggingface.co из закреплённого рынка.")
+    repo = f"{parts[0]}/{parts[1]}"
+    if _source_for(repo) is None:
+        raise MarketError("Этот репозиторий не входит в рынок DotLingo.")
+    if len(parts) == 2 or (parts[2] == "tree" and len(parts) <= 4):
+        return repo, ""
+    if parts[2] in {"blob", "resolve"} and len(parts) == 5 and _plain_gguf(parts[4]):
+        return repo, parts[4]
+    raise MarketError("Ссылка должна вести на репозиторий рынка или на один файл .gguf.")
 
 
 def _source_for(repo: str) -> dict[str, Any] | None:

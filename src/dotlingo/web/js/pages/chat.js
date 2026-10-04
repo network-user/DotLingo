@@ -32,6 +32,8 @@ let sending = false;
 let wired = false;
 let stick = true;
 let booted = false;
+let incognito = false;
+let listHidden = false;
 let meterNote = 'Контекст появится после выбора модели.';
 
 function installedModels() {
@@ -315,6 +317,7 @@ function snapshot() {
 }
 
 async function persist() {
+  if (incognito) return;
   if (!dialogId || !thread.some((turn) => turn.text && !turn.pending)) return;
   const [saved] = await tryCall('saveDialog', snapshot());
   if (!saved) return;
@@ -331,6 +334,10 @@ async function persist() {
 async function openDialog(id) {
   if (sending) {
     toast('Сначала остановите ответ.', 'info');
+    return;
+  }
+  if (incognito) {
+    toast('Инкогнито не открывает сохранённые диалоги. Выключите его, чтобы открыть историю.', 'info');
     return;
   }
   if (id === dialogId) return;
@@ -381,12 +388,39 @@ async function removeDialog(id) {
   } else paintDialogs();
 }
 
+function setListHidden(hidden) {
+  listHidden = hidden;
+  store.set('chatListHidden', hidden);
+  rememberPane({ chat_list_hidden: hidden });
+  const chat = document.querySelector('.chat');
+  if (!chat) return;
+  chat.classList.toggle('is-list-hidden', hidden);
+  const show = chat.querySelector('.chat-list-show');
+  if (show) show.hidden = !hidden;
+}
+
+function setIncognito(next) {
+  if (sending) {
+    toast('Сначала остановите ответ.', 'info');
+    return;
+  }
+  incognito = next;
+  const button = document.querySelector('.chat-incognito');
+  if (button) {
+    button.classList.toggle('is-selected', incognito);
+    button.setAttribute('aria-pressed', incognito ? 'true' : 'false');
+  }
+  const note = document.querySelector('.chat-private');
+  if (note) note.hidden = !incognito;
+  if (!incognito) void persist();
+}
+
 function startNew() {
   if (sending) {
     toast('Сначала остановите ответ.', 'info');
     return;
   }
-  void persist();
+  if (!incognito) void persist();
   dialogId = newId();
   thread = [];
   attachments = [];
@@ -513,6 +547,7 @@ function render(host) {
     targetLang = codes.includes('ru') ? 'ru' : codes[0];
   }
   if (!dialogId) dialogId = newId();
+  listHidden = Boolean(store.get('chatListHidden'));
 
   const modelSelect = el('select', {
     class: 'select',
@@ -583,16 +618,50 @@ function render(host) {
       })
     : null;
 
-  host.replaceChildren(el('div', { class: 'chat' }, [
+  const chat = el('div', {
+    class: `chat${listHidden ? ' is-list-hidden' : ''}`,
+    dataset: { stack: 'col' },
+  }, [
     el('aside', { class: 'chat-dialogs', ariaLabel: 'Диалоги' }, [
       el('div', { class: 'chat-dialogs__head' }, [
         el('p', { class: 'chat-dialogs__label', text: 'Диалоги' }),
-        button({ label: 'Новый', size: 'sm', onClick: startNew }),
+        el('div', { class: 'chat-dialogs__actions' }, [
+          button({
+            label: 'Скрыть',
+            size: 'sm',
+            title: 'Скрыть список и отдать место ленте',
+            onClick: () => setListHidden(true),
+          }),
+          button({ label: 'Новый', size: 'sm', onClick: startNew }),
+        ]),
       ]),
       el('div', { class: 'chat-dialogs__list' }),
     ]),
+    el('div', {
+      class: 'chat-split',
+      role: 'separator',
+      ariaOrientation: 'vertical',
+      ariaLabel: 'Ширина списка диалогов',
+      tabIndex: 0,
+    }),
     el('div', { class: 'chat-main' }, [
       el('div', { class: 'chat-bar' }, [
+        el('button', {
+          type: 'button',
+          class: 'btn btn--sm chat-list-show',
+          hidden: !listHidden,
+          title: 'Показать список диалогов',
+          text: 'Диалоги',
+          onClick: () => setListHidden(false),
+        }),
+        el('button', {
+          type: 'button',
+          class: `btn btn--sm chat-incognito${incognito ? ' is-selected' : ''}`,
+          ariaPressed: incognito ? 'true' : 'false',
+          title: 'Не записывать этот диалог на диск',
+          text: 'Инкогнито',
+          onClick: () => setIncognito(!incognito),
+        }),
         models.length
           ? field('Модель', modelSelect)
           : el('div', { class: 'chat-missing' }, [
@@ -622,6 +691,11 @@ function render(host) {
         mode === 'translate' && models.length ? field('Перевод', targetSelect) : null,
         hyNote,
       ]),
+      el('p', {
+        class: 'chat-private',
+        hidden: !incognito,
+        text: 'Этот диалог не сохранится.',
+      }),
       el('div', { class: 'chat-stage' }, [
         log,
         el('button', {
@@ -673,12 +747,174 @@ function render(host) {
             ]),
           ]),
     ]),
-  ]));
+  ]);
+  host.replaceChildren(chat);
+  bindChatSplit(chat);
   paintDialogs();
   paintLog();
   paintFiles();
   void loadDialogs();
   void refreshMeter();
+}
+
+const LIST_MIN = 168;
+const LIST_HEIGHT_MIN = 120;
+const MAIN_MIN = 300;
+const STACK_AT = 520;
+let splitWatch = null;
+
+function paneNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function rememberPane(patch) {
+  void call('setPreferences', patch).catch(() => {});
+}
+
+function bindChatSplit(chat) {
+  splitWatch?.();
+  const handle = chat.querySelector('.chat-split');
+  const pane = chat.querySelector('.chat-dialogs');
+  if (!(handle instanceof HTMLElement) || !(pane instanceof HTMLElement)) return;
+
+  const stacked = () => chat.dataset.stack === 'row';
+  let drag = null;
+
+  const place = () => {
+    if (drag) return;
+    const narrow = chat.clientWidth > 0 && chat.clientWidth < STACK_AT;
+    const next = narrow ? 'row' : 'col';
+    if (chat.dataset.stack !== next) chat.dataset.stack = next;
+    const vertical = stacked();
+    const total = vertical ? chat.clientHeight : chat.clientWidth;
+    if (total <= 0) return;
+    const min = vertical ? LIST_HEIGHT_MIN : LIST_MIN;
+    const reserve = vertical ? 240 : MAIN_MIN;
+    const max = Math.max(min, total - reserve - 10);
+    const raw = vertical
+      ? paneNumber(store.get('chatListHeight'), 200)
+      : paneNumber(store.get('chatListWidth'), 240);
+    const size = Math.round(Math.min(max, Math.max(min, raw)));
+    chat.style.setProperty(vertical ? '--chat-list-h' : '--chat-list', `${size}px`);
+    handle.ariaOrientation = vertical ? 'horizontal' : 'vertical';
+    handle.ariaValueMin = String(min);
+    handle.ariaValueMax = String(Math.round(max));
+    handle.ariaValueNow = String(size);
+    const label = vertical ? 'Высота списка диалогов' : 'Ширина списка диалогов';
+    handle.setAttribute('aria-label', label);
+    handle.title = vertical
+      ? 'Потяните, чтобы изменить высоту. Двойной щелчок вернёт размер.'
+      : 'Потяните, чтобы изменить ширину. Двойной щелчок вернёт размер.';
+  };
+
+  place();
+  const observer = new ResizeObserver(place);
+  observer.observe(chat);
+  splitWatch = () => {
+    observer.disconnect();
+    splitWatch = null;
+  };
+  const stopStore = store.subscribe((key) => {
+    if (key === 'chatListWidth' || key === 'chatListHeight') place();
+  });
+  const previous = splitWatch;
+  splitWatch = () => {
+    stopStore();
+    previous?.();
+  };
+
+  const finish = () => {
+    if (!drag) return;
+    const vertical = drag.vertical;
+    const size = Number(handle.ariaValueNow);
+    drag = null;
+    handle.classList.remove('is-dragging');
+    document.body.classList.remove('is-resizing', 'is-resizing-row');
+    if (!Number.isFinite(size)) return;
+    if (vertical) {
+      store.set('chatListHeight', size);
+      rememberPane({ chat_list_height: size });
+    } else {
+      store.set('chatListWidth', size);
+      rememberPane({ chat_list_width: size });
+    }
+  };
+
+  const onPointerMove = (event) => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const delta = (drag.vertical ? event.clientY : event.clientX) - drag.start;
+    const total = drag.vertical ? chat.clientHeight : chat.clientWidth;
+    const min = drag.vertical ? LIST_HEIGHT_MIN : LIST_MIN;
+    const reserve = drag.vertical ? 240 : MAIN_MIN;
+    const max = Math.max(min, total - reserve - 10);
+    const size = Math.round(Math.min(max, Math.max(min, drag.size + delta)));
+    chat.style.setProperty(drag.vertical ? '--chat-list-h' : '--chat-list', `${size}px`);
+    handle.ariaValueNow = String(size);
+  };
+
+  const endDrag = (event) => {
+    if (event && drag && event.pointerId !== drag.pointerId) return;
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', endDrag);
+    window.removeEventListener('pointercancel', endDrag);
+    finish();
+  };
+
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || drag) return;
+    event.preventDefault();
+    const vertical = stacked();
+    drag = {
+      pointerId: event.pointerId,
+      vertical,
+      start: vertical ? event.clientY : event.clientX,
+      size: vertical ? pane.getBoundingClientRect().height : pane.getBoundingClientRect().width,
+    };
+    handle.classList.add('is-dragging');
+    document.body.classList.add('is-resizing');
+    document.body.classList.toggle('is-resizing-row', vertical);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // Синтетический указатель не захватывается. Слушатели на окне всё равно ведут жест.
+    }
+  });
+  handle.addEventListener('dblclick', () => {
+    const vertical = stacked();
+    if (vertical) {
+      store.set('chatListHeight', 200);
+      rememberPane({ chat_list_height: 200 });
+    } else {
+      store.set('chatListWidth', 240);
+      rememberPane({ chat_list_width: 240 });
+    }
+  });
+  handle.addEventListener('keydown', (event) => {
+    const vertical = stacked();
+    const grow = vertical ? event.key === 'ArrowDown' : event.key === 'ArrowRight';
+    const shrink = vertical ? event.key === 'ArrowUp' : event.key === 'ArrowLeft';
+    if (!grow && !shrink) return;
+    event.preventDefault();
+    const current = vertical ? pane.getBoundingClientRect().height : pane.getBoundingClientRect().width;
+    const min = vertical ? LIST_HEIGHT_MIN : LIST_MIN;
+    const total = vertical ? chat.clientHeight : chat.clientWidth;
+    const reserve = vertical ? 240 : MAIN_MIN;
+    const max = Math.max(min, total - reserve - 10);
+    const size = Math.round(Math.min(max, Math.max(min, current + (grow ? 24 : -24))));
+    chat.style.setProperty(vertical ? '--chat-list-h' : '--chat-list', `${size}px`);
+    handle.ariaValueNow = String(size);
+    if (vertical) {
+      store.set('chatListHeight', size);
+      rememberPane({ chat_list_height: size });
+    } else {
+      store.set('chatListWidth', size);
+      rememberPane({ chat_list_width: size });
+    }
+  });
 }
 
 function field(label, control, help) {

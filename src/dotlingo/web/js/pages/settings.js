@@ -15,6 +15,15 @@ import {
 } from '../components.js';
 import { downloadFlow } from './models.js';
 import {
+  applyMetrics,
+  clampPercent,
+  SCALE_DEFAULT,
+  TEXT_SCALE_MAX,
+  TEXT_SCALE_MIN,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+} from '../appearance.js';
+import {
   formatGb,
   gpuSummary,
   placementBlocked,
@@ -611,6 +620,23 @@ function appearancePanel() {
     );
   }
 
+  const scaleMetric = metricField(
+    'Масштаб',
+    'Увеличивает или уменьшает всё окно: кнопки, поля, панель и буквы. 100% это обычный размер.',
+    'uiScale',
+    'ui_scale',
+    UI_SCALE_MIN,
+    UI_SCALE_MAX,
+  );
+  const textMetric = metricField(
+    'Размер текста',
+    'Меняет только буквы. Кнопки и отступы остаются такими, как задал масштаб.',
+    'textScale',
+    'text_scale',
+    TEXT_SCALE_MIN,
+    TEXT_SCALE_MAX,
+  );
+
   const reduceMotion = el('input', {
     class: 'st-checkbox',
     type: 'checkbox',
@@ -635,8 +661,85 @@ function appearancePanel() {
         reduceMotion,
         el('span', { class: 'st-check-row__label', text: 'Уменьшить движение и переходы' }),
       ]),
+      scaleMetric.element,
+      textMetric.element,
+      el('div', { class: 'st-metric__reset' }, [
+        button({
+          label: 'Сбросить',
+          variant: 'ghost',
+          size: 'sm',
+          onClick: () => resetMetrics(scaleMetric, textMetric),
+        }),
+        el('span', {
+          class: 'st-metric__reset-note',
+          text: 'Вернёт масштаб и размер текста к 100%.',
+        }),
+      ]),
     ]),
   ]);
+}
+
+/** Оба регулятора сразу к 100% и одна запись в настройках. */
+function resetMetrics(scaleMetric, textMetric) {
+  scaleMetric.setValue(SCALE_DEFAULT, false);
+  textMetric.setValue(SCALE_DEFAULT, false);
+  applyMetrics(SCALE_DEFAULT, SCALE_DEFAULT);
+  call('setPreferences', { ui_scale: SCALE_DEFAULT, text_scale: SCALE_DEFAULT }).catch(() => {});
+}
+
+/** Ползунок и число: шаг 1%, значение сразу применяется и сохраняется. */
+function metricField(label, help, storeKey, prefKey, min, max) {
+  const current = clampPercent(store.get(storeKey), min, max, SCALE_DEFAULT);
+  const readout = el('span', { class: 'st-metric__readout', text: `${current}%` });
+  const range = el('input', {
+    class: 'st-metric__range',
+    type: 'range',
+    min: String(min),
+    max: String(max),
+    step: '1',
+    value: String(current),
+    ariaLabel: label,
+  });
+  const number = el('input', {
+    class: 'input st-metric__number',
+    type: 'number',
+    min: String(min),
+    max: String(max),
+    step: '1',
+    value: String(current),
+    ariaLabel: `${label}, проценты`,
+  });
+
+  const publish = (raw, save = true) => {
+    const next = clampPercent(raw, min, max, current);
+    range.value = String(next);
+    number.value = String(next);
+    readout.textContent = `${next}%`;
+    store.set(storeKey, next);
+    if (!save) return;
+    applyMetrics(
+      clampPercent(store.get('uiScale'), UI_SCALE_MIN, UI_SCALE_MAX, SCALE_DEFAULT),
+      clampPercent(store.get('textScale'), TEXT_SCALE_MIN, TEXT_SCALE_MAX, SCALE_DEFAULT),
+    );
+    call('setPreferences', { [prefKey]: next }).catch(() => {});
+  };
+
+  range.addEventListener('input', () => publish(range.value));
+  number.addEventListener('change', () => publish(number.value));
+
+  return {
+    setValue: (value, save = true) => publish(value, save),
+    element: el('div', { class: 'field' }, [
+    el('div', { class: 'st-metric__head' }, [
+      el('span', { class: 'field__label field__label--with-help' }, [
+        label,
+        helpMark(help),
+      ]),
+      readout,
+    ]),
+    el('div', { class: 'st-metric__controls' }, [range, number]),
+  ]),
+  };
 }
 
 /* -------------------------------------------------------------------------

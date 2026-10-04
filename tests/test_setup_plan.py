@@ -1,5 +1,5 @@
 from dotlingo.api import Api
-from dotlingo.hardware import HardwareSnapshot, plan_setup
+from dotlingo.hardware import HardwareSnapshot, assess_model, plan_setup
 
 
 def _snapshot(**overrides: object) -> HardwareSnapshot:
@@ -41,14 +41,39 @@ def test_plan_picks_the_largest_model_that_fits() -> None:
     assert "8.0" in str(plan["reason"])
 
 
-def test_plan_falls_back_to_a_smaller_model() -> None:
+def test_plan_ignores_low_free_ram_when_the_device_has_enough() -> None:
     plan = plan_setup(
-        _snapshot(ram_available_gb=5.0),
+        _snapshot(ram_total_gb=16.0, ram_available_gb=2.0),
+        [_model("small", 3), _model("big", 8)],
+        set(),
+    )
+    assert plan["action"] == "download"
+    assert plan["modelId"] == "big"
+
+
+def test_plan_falls_back_when_total_ram_is_small() -> None:
+    plan = plan_setup(
+        _snapshot(ram_total_gb=6.0, ram_available_gb=5.5),
         [_model("big", 12), _model("small", 3)],
         set(),
     )
     assert plan["action"] == "download"
     assert plan["modelId"] == "small"
+
+
+def test_assess_model_compares_total_ram() -> None:
+    fits, _reason = assess_model(
+        _snapshot(ram_total_gb=16.0, ram_available_gb=1.0),
+        _model("mid", 8),
+    )
+    assert fits != "no"
+    blocked, reason = assess_model(
+        _snapshot(ram_total_gb=8.0, ram_available_gb=7.5),
+        _model("big", 12),
+    )
+    assert blocked == "no"
+    assert "8.0" in reason
+    assert "12.0" in reason
 
 
 def test_plan_skips_when_nothing_fits() -> None:

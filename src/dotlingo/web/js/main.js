@@ -9,8 +9,17 @@ import * as components from './components.js';
 import { icon } from './icons.js';
 import { refreshCatalog } from './device.js';
 import { mountDownloadDock } from './download-ui.js';
+import {
+  applyMetrics,
+  clampPercent,
+  SCALE_DEFAULT,
+  TEXT_SCALE_MAX,
+  TEXT_SCALE_MIN,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+} from './appearance.js';
 
-/** Порядок страниц для Ctrl+1..8 (совпадает с навигацией в index.html). */
+/** Порядок страниц для клавиш 1..8 (совпадает с навигацией в index.html). */
 const PAGE_ORDER = ['chat', 'projects', 'documents', 'review', 'queue', 'models', 'glossary', 'settings'];
 
 const DEFAULT_PAGE = 'projects';
@@ -41,8 +50,8 @@ function dismissLaunch() {
   launch.addEventListener('animationend', (event) => {
     if (event.target === launch && event.animationName === 'launch-fade') hide();
   });
-  // Дольше кадра заставки (2.5 с), чтобы запасной таймер не оборвал листание.
-  setTimeout(hide, 2900);
+  // Дольше кадра заставки (0.92 с), чтобы запасной таймер не оборвал листание.
+  setTimeout(hide, 1150);
 }
 
 /** Книга захлопывается, затем окно отпускается. Повторный вызов ничего не делает. */
@@ -69,10 +78,12 @@ function playClose() {
     finish.done = true;
     requestWindowClose();
   };
+  const book = launch.querySelector('.launch__book');
   launch.addEventListener('animationend', (event) => {
-    if (event.animationName === 'close-sit') finish();
+    if (event.target === book && event.animationName === 'close-sit') finish();
   });
-  setTimeout(finish, 2400);
+  // Запас, если animationend не придёт. Сам кадр close-sit длится 0.56 с.
+  setTimeout(finish, 600);
 }
 
 window.DL = { playClose };
@@ -239,8 +250,21 @@ async function initBridgeData() {
   // tryCall возвращает пару [data, error], не сам ответ.
   const [prefs] = await tryCall('getPreferences');
   const theme = prefs?.theme === 'light' ? 'light' : 'dark';
-  store.patch({ theme, reduceMotion: Boolean(prefs?.reduce_motion) });
+  const sidebarCollapsed = Boolean(prefs?.sidebar_collapsed);
+  store.patch({
+    theme,
+    reduceMotion: Boolean(prefs?.reduce_motion),
+    sidebarCollapsed,
+    sidebarWidth: paneSize(prefs?.sidebar_width, SIDEBAR_RAIL, SIDEBAR_MAX, SIDEBAR_DEFAULT),
+    chatListWidth: paneSize(prefs?.chat_list_width, 168, 1200, 240),
+    chatListHeight: paneSize(prefs?.chat_list_height, 120, 800, 200),
+    chatListHidden: Boolean(prefs?.chat_list_hidden),
+    uiScale: clampPercent(prefs?.ui_scale, UI_SCALE_MIN, UI_SCALE_MAX, SCALE_DEFAULT),
+    textScale: clampPercent(prefs?.text_scale, TEXT_SCALE_MIN, TEXT_SCALE_MAX, SCALE_DEFAULT),
+  });
+  applySidebar(sidebarCollapsed);
   applyTheme(theme);
+  applyMetrics(store.get('uiScale'), store.get('textScale'));
   document.documentElement.dataset.reduceMotion = prefs?.reduce_motion ? 'true' : 'false';
   if (prefs?.reduce_motion) dismissLaunch();
 
@@ -348,6 +372,13 @@ function wireShell() {
     call('setPreferences', { theme: next }).catch(() => {});
   });
 
+  document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
+    const collapsed = document.documentElement.dataset.sidebar !== 'collapsed';
+    setSidebarCollapsed(collapsed);
+  });
+  applySidebar(false);
+  bindSidebarResize();
+
   // Первичное состояние индикатора устройства.
   renderDeviceStatus(null);
   const footer = document.querySelector('.sidebar__footer');
@@ -362,11 +393,187 @@ function wireShell() {
   renderActiveProject();
 }
 
+function paneSize(value, low, high, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(high, Math.max(low, Math.round(number)));
+}
+
+const SIDEBAR_MAX = 480;
+const SIDEBAR_DEFAULT = 252;
+const SIDEBAR_RAIL = 80;
+// Ниже этой ширины имя вкладки уже не читается: колонка остаётся рельсом значков.
+const SIDEBAR_TEXT_MIN = 82;
+
+function sidebarLimit() {
+  const room = Math.max(SIDEBAR_RAIL, window.innerWidth - 360);
+  return Math.min(SIDEBAR_MAX, room);
+}
+
+function clampSidebar(width) {
+  return Math.min(sidebarLimit(), Math.max(SIDEBAR_RAIL, Math.round(width)));
+}
+
+function sidebarOpenWidth() {
+  const limit = sidebarLimit();
+  const width = paneSize(store.get('sidebarWidth'), SIDEBAR_RAIL, limit, SIDEBAR_DEFAULT);
+  if (width < SIDEBAR_TEXT_MIN) return Math.min(limit, SIDEBAR_DEFAULT);
+  return width;
+}
+
+function paintSidebarWidth(width) {
+  const app = document.getElementById('app');
+  if (!app) return;
+  app.style.setProperty('--sidebar-w', `${width}px`);
+  syncSidebarHandle(width);
+}
+
+function syncSidebarHandle(width) {
+  const handle = document.getElementById('sidebar-resize');
+  if (!handle) return;
+  handle.ariaValueMin = String(SIDEBAR_RAIL);
+  handle.ariaValueMax = String(sidebarLimit());
+  handle.ariaValueNow = String(width);
+}
+
+function collapsedNow() {
+  return document.documentElement.dataset.sidebar === 'collapsed';
+}
+
+function setSidebarMode(collapsed) {
+  document.documentElement.dataset.sidebar = collapsed ? 'collapsed' : 'open';
+  const toggle = document.getElementById('sidebar-toggle');
+  if (toggle) {
+    const label = collapsed ? 'Показать вкладки' : 'Скрыть вкладки';
+    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    toggle.title = label;
+    toggle.setAttribute('aria-label', label);
+  }
+  document.querySelectorAll('.nav-item').forEach((button) => {
+    const name = button.querySelector('.nav-item__label')?.textContent?.trim() || '';
+    if (collapsed && name) button.title = name;
+    else button.removeAttribute('title');
+  });
+}
+
+function applySidebar(collapsed) {
+  setSidebarMode(collapsed);
+  paintSidebarWidth(collapsed ? SIDEBAR_RAIL : sidebarOpenWidth());
+}
+
+function rememberSidebar(width) {
+  store.set('sidebarCollapsed', false);
+  store.set('sidebarWidth', width);
+  applySidebar(false);
+  call('setPreferences', { sidebar_collapsed: false, sidebar_width: width }).catch(() => {});
+}
+
+function collapseSidebar() {
+  applySidebar(true);
+  store.set('sidebarCollapsed', true);
+  call('setPreferences', { sidebar_collapsed: true }).catch(() => {});
+}
+
+function setSidebarCollapsed(collapsed) {
+  if (collapsed) collapseSidebar();
+  else {
+    store.set('sidebarCollapsed', false);
+    applySidebar(false);
+    call('setPreferences', { sidebar_collapsed: false }).catch(() => {});
+  }
+}
+
+function commitSidebar(width) {
+  if (width < SIDEBAR_TEXT_MIN) collapseSidebar();
+  else rememberSidebar(width);
+}
+
+function bindSidebarResize() {
+  const handle = document.getElementById('sidebar-resize');
+  const app = document.getElementById('app');
+  if (!handle || !app) return;
+  let drag = null;
+
+  const endDrag = (event) => {
+    if (event && drag && event.pointerId !== drag.pointerId) return;
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', endDrag);
+    window.removeEventListener('pointercancel', endDrag);
+    if (!drag) return;
+    const moved = drag.moved;
+    const width = Number(handle.ariaValueNow);
+    drag = null;
+    handle.classList.remove('is-dragging');
+    document.documentElement.classList.remove('is-sidebar-resizing');
+    document.body.classList.remove('is-resizing');
+    if (!moved || !Number.isFinite(width)) return;
+    commitSidebar(width);
+  };
+
+  const onPointerMove = (event) => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    drag.moved = true;
+    const size = clampSidebar(drag.startWidth + (event.clientX - drag.startX));
+    const atRail = size < SIDEBAR_TEXT_MIN;
+    if (atRail !== collapsedNow()) setSidebarMode(atRail);
+    paintSidebarWidth(size);
+  };
+
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || drag) return;
+    event.preventDefault();
+    const sidebar = document.querySelector('.sidebar');
+    const openWidth = collapsedNow() ? SIDEBAR_RAIL : sidebarOpenWidth();
+    drag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: sidebar?.getBoundingClientRect().width || openWidth,
+      moved: false,
+    };
+    handle.classList.add('is-dragging');
+    document.documentElement.classList.add('is-sidebar-resizing');
+    document.body.classList.add('is-resizing');
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // Синтетический указатель не захватывается. Слушатели на окне всё равно ведут жест.
+    }
+  });
+
+  handle.addEventListener('dblclick', () => {
+    rememberSidebar(SIDEBAR_DEFAULT);
+  });
+
+  handle.addEventListener('keydown', (event) => {
+    const grow = event.key === 'ArrowRight';
+    const shrink = event.key === 'ArrowLeft';
+    if (!grow && !shrink && event.key !== 'Home') return;
+    event.preventDefault();
+    if (event.key === 'Home') {
+      rememberSidebar(SIDEBAR_DEFAULT);
+      return;
+    }
+    const current = collapsedNow() ? SIDEBAR_RAIL : sidebarOpenWidth();
+    commitSidebar(clampSidebar(current + (grow ? 16 : -16)));
+  });
+
+  window.addEventListener('resize', () => {
+    if (drag) return;
+    paintSidebarWidth(collapsedNow() ? SIDEBAR_RAIL : sidebarOpenWidth());
+  });
+}
+
 function renderActiveProject() {
   const label = document.getElementById('active-project-label');
+  const button = document.getElementById('active-project');
   if (!label) return;
   const project = store.get('activeProject');
-  label.textContent = project?.title || 'Не выбран';
+  const title = project?.title || 'Не выбран';
+  label.textContent = title;
+  if (button) button.title = title;
 }
 
 /** Применяет тему к <html data-theme> и обновляет кнопку-переключатель. */
@@ -395,6 +602,7 @@ function renderDeviceStatus(hw) {
   if (!hw) {
     status.dataset.state = 'unknown';
     label.textContent = isDemo() ? 'demo data' : 'Проверка устройства…';
+    status.title = label.textContent;
     return;
   }
 
@@ -405,11 +613,40 @@ function renderDeviceStatus(hw) {
 
   status.dataset.state = hw.llamaRuntimeAvailable ? 'ok' : 'warn';
   label.textContent = parts.join(' · ') || 'Готово';
+  status.title = label.textContent;
 }
 
 /* -------------------------------------------------------------------------
- * Клавиатура: Ctrl+1..7, Esc для модалок
+ * Клавиатура: 1..8 и Ctrl+1..8, Esc для модалок
  * ------------------------------------------------------------------------- */
+
+function typingTarget(target) {
+  if (!(target instanceof Element)) return false;
+  const field = target.closest('input, textarea, select, [contenteditable="true"]');
+  if (!field) return false;
+  if (field instanceof HTMLInputElement) {
+    const inert = ['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'file', 'color'];
+    if (inert.includes(field.type)) return false;
+  }
+  return true;
+}
+
+function pageIndexFromKey(event) {
+  const key = event.key;
+  if (key.length !== 1 || key < '1' || key > '8') return null;
+  const index = Number(key) - 1;
+  if (index >= PAGE_ORDER.length) return null;
+  return index;
+}
+
+/** Цифра без Ctrl не уводит со страницы, пока человек печатает или открыт слой. */
+function bareDigitBlocked(event) {
+  if (event.ctrlKey) return false;
+  if (event.repeat || event.isComposing) return true;
+  if (typingTarget(event.target)) return true;
+  if (document.body.classList.contains('has-modal')) return true;
+  return Boolean(document.querySelector('.setup, .select-menu'));
+}
 
 function wireKeyboard() {
   document.addEventListener('keydown', (e) => {
@@ -418,10 +655,9 @@ function wireKeyboard() {
       components.handleEscape();
       return;
     }
-    // Ctrl+1..8 - быстрый переход по страницам.
-    if (!e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
-    const index = Number(e.key) - 1;
-    if (!Number.isInteger(index) || index < 0 || index >= PAGE_ORDER.length) return;
+    if (e.altKey || e.shiftKey || e.metaKey) return;
+    const index = pageIndexFromKey(e);
+    if (index == null || bareDigitBlocked(e)) return;
     e.preventDefault();
     void openPage(PAGE_ORDER[index]);
   });

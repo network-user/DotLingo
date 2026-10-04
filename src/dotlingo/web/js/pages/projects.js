@@ -1,6 +1,6 @@
 /**
- * Страница «Проекты»: четыре листа (проект, языки, модель, проверка).
- * Листание вперёд и назад повторяет переворот страницы с заставки.
+ * Страница «Проекты»: четыре шага (проект, языки, модель, проверка).
+ * Переход между шагами - короткий слайд, не переворот страницы.
  * openCreateProjectModal остаётся точкой входа с экрана документов.
  */
 
@@ -71,6 +71,45 @@ let intent = 'active';
 let wantNew = false;
 
 let draft = emptyDraft();
+let localeHints = { keyboard: '', interface: '' };
+/** @type {{ source: string, targets: string[], kind: string, reason: string }|null} */
+let suggestion = null;
+let stopStore = null;
+
+/** Часовые пояса, по которым язык читается однозначно. Смешанные зоны не используем. */
+const ZONE_LANGUAGE = {
+  'Europe/Kaliningrad': 'ru',
+  'Europe/Moscow': 'ru',
+  'Europe/Simferopol': 'ru',
+  'Europe/Kirov': 'ru',
+  'Europe/Astrakhan': 'ru',
+  'Europe/Volgograd': 'ru',
+  'Europe/Saratov': 'ru',
+  'Europe/Ulyanovsk': 'ru',
+  'Europe/Samara': 'ru',
+  'Asia/Yekaterinburg': 'ru',
+  'Asia/Omsk': 'ru',
+  'Asia/Novosibirsk': 'ru',
+  'Asia/Barnaul': 'ru',
+  'Asia/Tomsk': 'ru',
+  'Asia/Novokuznetsk': 'ru',
+  'Asia/Krasnoyarsk': 'ru',
+  'Asia/Irkutsk': 'ru',
+  'Asia/Chita': 'ru',
+  'Asia/Yakutsk': 'ru',
+  'Asia/Khandyga': 'ru',
+  'Asia/Vladivostok': 'ru',
+  'Asia/Ust-Nera': 'ru',
+  'Asia/Magadan': 'ru',
+  'Asia/Sakhalin': 'ru',
+  'Asia/Srednekolymsk': 'ru',
+  'Asia/Kamchatka': 'ru',
+  'Asia/Anadyr': 'ru',
+  'Asia/Tokyo': 'ja',
+  'Asia/Seoul': 'ko',
+};
+
+const SLIDE_FALLBACK_MS = 420;
 
 function emptyDraft() {
   return {
@@ -89,7 +128,7 @@ function emptyDraft() {
 }
 
 function langLabel(code) {
-  if (code === 'auto') return 'Авто';
+  if (code === 'auto') return 'Автоопределение';
   const languages = store.get('languages') || {};
   return languages[code] || String(code || '').toUpperCase();
 }
@@ -102,6 +141,79 @@ function formatDate(iso) {
   const hh = String(date.getHours()).padStart(2, '0');
   const mm = String(date.getMinutes()).padStart(2, '0');
   return `${date.getDate()} ${month} ${date.getFullYear()}, ${hh}:${mm}`;
+}
+
+function relativeDate(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const start = (value) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  const day = Math.round((start(new Date()) - start(date)) / 86400000);
+  if (day === 0) return 'сегодня';
+  if (day === 1) return 'вчера';
+  if (day > 1 && day < 7) return `${day} дн. назад`;
+  return formatDate(iso);
+}
+
+function normalizeLocale(value) {
+  const raw = String(value || '').trim().replace(/_/g, '-');
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+  if (lower === 'zh-tw' || lower === 'zh-hk' || lower === 'zh-mo' || lower === 'zh-hant') {
+    return 'zh-Hant';
+  }
+  if (lower === 'zh' || lower.startsWith('zh-')) return 'zh';
+  if (lower === 'nb' || lower === 'nn' || lower === 'no'
+    || lower.startsWith('nb-') || lower.startsWith('nn-') || lower.startsWith('no-')) {
+    return 'no';
+  }
+  if (lower === 'fil' || lower === 'tl' || lower.startsWith('fil-') || lower.startsWith('tl-')) {
+    return 'tl';
+  }
+  return lower.split('-')[0];
+}
+
+function timezoneLanguage() {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    return ZONE_LANGUAGE[zone] || '';
+  } catch {
+    return '';
+  }
+}
+
+function readingLanguage(allowed) {
+  const keyboard = normalizeLocale(localeHints.keyboard);
+  const ui = normalizeLocale(localeHints.interface) || normalizeLocale(navigator.language || '');
+  const zone = timezoneLanguage();
+  const take = (code, kind) => (code && allowed.has(code) ? { code, kind } : null);
+  if (keyboard && keyboard !== 'en') {
+    const found = take(keyboard, 'keyboard');
+    if (found) return found;
+  }
+  if (ui && ui !== 'en') {
+    const found = take(ui, 'interface');
+    if (found) return found;
+  }
+  if (keyboard) {
+    const found = take(keyboard, 'keyboard');
+    if (found) return found;
+  }
+  if (ui) {
+    const found = take(ui, 'interface');
+    if (found) return found;
+  }
+  return take(zone, 'timezone');
+}
+
+function suggestionText() {
+  if (!suggestion || !suggestionMatches()) return '';
+  if (suggestion.kind === 'history') return suggestion.reason;
+  const name = langLabel(suggestion.targets[0] || '');
+  if (suggestion.kind === 'keyboard') return `${name} по раскладке клавиатуры`;
+  if (suggestion.kind === 'interface') return `${name} по языку системы`;
+  if (suggestion.kind === 'timezone') return `${name} по часовому поясу`;
+  return '';
 }
 
 function plural(n) {
@@ -224,17 +336,73 @@ function applyProject(project) {
   };
 }
 
+function suggestionMatches() {
+  if (!suggestion) return false;
+  if (draft.sourceLang !== suggestion.source) return false;
+  if (draft.targetLangs.length !== suggestion.targets.length) return false;
+  return draft.targetLangs.every((code, index) => code === suggestion.targets[index]);
+}
+
+function suggestForNew() {
+  const allowed = new Set(languageCodes());
+  const recent = projects.find((project) => (project.targetLangs || []).length > 0);
+  if (recent) {
+    let source = recent.sourceLang || 'auto';
+    if (source !== 'auto' && !allowed.has(source)) source = 'auto';
+    const targets = [];
+    (recent.targetLangs || []).forEach((code) => {
+      if (allowed.has(code) && code !== source && !targets.includes(code)) targets.push(code);
+    });
+    if (targets.length) {
+      draft.sourceLang = source;
+      draft.targetLangs = targets;
+      suggestion = {
+        source,
+        targets: [...targets],
+        kind: 'history',
+        reason: `Как в проекте «${recent.title || 'без названия'}»`,
+      };
+      return;
+    }
+  }
+  const reading = readingLanguage(allowed);
+  if (reading) {
+    draft.sourceLang = 'auto';
+    draft.targetLangs = [reading.code];
+    suggestion = { source: 'auto', targets: [reading.code], kind: reading.kind, reason: '' };
+    return;
+  }
+  draft.sourceLang = 'auto';
+  draft.targetLangs = [];
+  suggestion = null;
+}
+
+function applyNewDraft(title) {
+  draft = emptyDraft();
+  draft.title = title;
+  draft.modelId = defaultModelId();
+  suggestForNew();
+}
+
+function alignLanguagesToModel() {
+  const allowed = new Set(languageCodes());
+  if (draft.sourceLang !== 'auto' && !allowed.has(draft.sourceLang)) draft.sourceLang = 'auto';
+  draft.targetLangs = draft.targetLangs.filter(
+    (code) => allowed.has(code) && code !== draft.sourceLang,
+  );
+  if (draft.mode === 'new' && draft.targetLangs.length === 0) suggestForNew();
+}
+
 function applyIntent() {
   if (intent === 'new' || projects.length === 0) {
     const title = intent === 'new' ? draft.title : '';
-    draft = emptyDraft();
-    draft.title = title;
-    draft.modelId = defaultModelId();
+    applyNewDraft(title);
     step = 0;
     return;
   }
   const activeId = store.get('activeProject')?.id;
   applyProject(projectById(activeId) || projects[0]);
+  suggestion = null;
   step = 0;
 }
 
@@ -256,8 +424,24 @@ function render(host) {
   busy = false;
   projectFilter = '';
   targetFilter = '';
+  localeHints = { keyboard: '', interface: '' };
+  suggestion = null;
   draft = emptyDraft();
   step = 0;
+  stopStore?.();
+  stopStore = store.subscribe((key, value, prev) => {
+    if (key !== 'languages' || !ready || !hostEl?.isConnected || turning || busy) return;
+    const wasEmpty = !prev || Object.keys(prev).length === 0;
+    const hasNames = value && Object.keys(value).length > 0;
+    if (!wasEmpty || !hasNames) return;
+    const typing = document.activeElement;
+    const caret = typing?.classList?.contains('deck-title') ? typing.selectionStart : null;
+    turn('none');
+    if (caret == null) return;
+    const input = hostEl?.querySelector('.deck-title');
+    input?.focus();
+    input?.setSelectionRange(caret, caret);
+  });
   host.append(shell());
   void load();
 }
@@ -266,6 +450,8 @@ function destroy() {
   loadGeneration += 1;
   turning = false;
   busy = false;
+  stopStore?.();
+  stopStore = null;
   hostEl = null;
 }
 
@@ -312,9 +498,20 @@ async function load() {
   }
   paintChrome();
 
-  const [projectData, projectErr] = await tryCall('listProjects');
-  const [modelData, modelErr] = await tryCall('listModels');
+  const [
+    [projectData, projectErr],
+    [modelData, modelErr],
+    [hintData],
+  ] = await Promise.all([
+    tryCall('listProjects'),
+    tryCall('listModels'),
+    tryCall('getLocaleHints'),
+  ]);
   if (generation !== loadGeneration || !hostEl?.isConnected) return;
+  localeHints = {
+    keyboard: typeof hintData?.keyboard === 'string' ? hintData.keyboard : '',
+    interface: typeof hintData?.interface === 'string' ? hintData.interface : '',
+  };
   if (projectErr) {
     ready = true;
     models = [];
@@ -376,7 +573,7 @@ function paintChrome() {
 
   const showNext = ready && step < 3;
   const showOpen = ready && (step === 3 || (draft.mode === 'existing' && furthestValid() === 3));
-  nav.replaceChildren(
+  const controls = [
     button({
       label: 'Назад',
       variant: 'ghost',
@@ -399,7 +596,8 @@ function paintChrome() {
         onClick: () => { void finish(); },
       })
       : null,
-  );
+  ].filter(Boolean);
+  nav.replaceChildren(...controls);
 }
 
 function openLabel() {
@@ -442,36 +640,33 @@ function turn(direction) {
 
   turning = true;
   paintChrome();
-  const turnName = direction === 'forward' ? 'deck-turn-forward' : 'deck-turn-back';
-  if (direction === 'forward') {
-    next.classList.add('is-arrive');
-    stage.insertBefore(next, current);
-    current.classList.add('is-turn-forward');
-  } else {
-    current.classList.add('is-sink');
-    next.classList.add('is-turn-back');
-    stage.append(next);
-  }
-  const moving = direction === 'forward' ? current : next;
+  const forward = direction === 'forward';
+  const leaveName = forward ? 'deck-leave-forward' : 'deck-leave-back';
+  stage.append(next);
+  const height = Math.max(current.offsetHeight, next.offsetHeight);
+  if (height > 0) stage.style.height = `${height}px`;
+  stage.classList.add('is-sliding');
+  current.classList.add(forward ? 'is-leave-forward' : 'is-leave-back');
+  next.classList.add(forward ? 'is-enter-forward' : 'is-enter-back');
 
   const finishTurn = () => {
     if (!turning) return;
     turning = false;
+    stage.classList.remove('is-sliding');
+    stage.style.height = '';
     if (!hostEl?.isConnected) return;
     current.remove();
-    next.classList.remove('is-turn-back', 'is-arrive');
+    next.classList.remove('is-enter-forward', 'is-enter-back');
     paintChrome();
-    if (direction !== 'none') {
-      const title = next.querySelector('h2');
-      title?.setAttribute('tabindex', '-1');
-      title?.focus({ preventScroll: true });
-    }
+    const title = next.querySelector('h2');
+    title?.setAttribute('tabindex', '-1');
+    title?.focus({ preventScroll: true });
   };
-  moving.addEventListener('animationend', (event) => {
-    if (event.target !== moving || event.animationName !== turnName) return;
+  current.addEventListener('animationend', (event) => {
+    if (event.target !== current || event.animationName !== leaveName) return;
     finishTurn();
   });
-  setTimeout(finishTurn, 780);
+  setTimeout(finishTurn, SLIDE_FALLBACK_MS);
 }
 
 function buildPage() {
@@ -491,7 +686,7 @@ function slideHead(title, lead) {
 }
 
 /* -------------------------------------------------------------------------
- * Лист 1. Проект
+ * Шаг 1. Проект
  * ------------------------------------------------------------------------- */
 
 function projectSlide() {
@@ -524,10 +719,11 @@ function projectSlide() {
     })
     : null;
 
+  const hint = suggestionText();
   return el('div', { class: 'stack stack--lg' }, [
     slideHead(
       'Проект',
-      'Выберите существующий или начните новый. Языки и модель на следующих листах.',
+      'Выберите существующий или начните новый. Дальше языки и модель.',
     ),
     el('div', { class: 'field' }, [
       el('label', { class: 'field__label', htmlFor: 'deck-title', text: 'Название' }),
@@ -535,15 +731,17 @@ function projectSlide() {
     ]),
     filter,
     el('div', { class: 'deck__list' }, projectRows()),
-    el('div', { class: 'deck__tools' }, [
-      button({
-        label: 'Удалить',
-        variant: 'danger',
-        size: 'sm',
-        disabled: draft.mode !== 'existing',
-        onClick: () => { void deleteSelected(); },
-      }),
-    ]),
+    el('p', { class: 'deck__hint', text: hint }),
+    draft.mode === 'existing'
+      ? el('div', { class: 'deck__tools' }, [
+        button({
+          label: 'Удалить',
+          variant: 'danger',
+          size: 'sm',
+          onClick: () => { void deleteSelected(); },
+        }),
+      ])
+      : null,
   ]);
 }
 
@@ -553,7 +751,7 @@ function projectRows() {
     pickButton({
       selected: draft.mode === 'new',
       title: 'Новый проект',
-      meta: 'Пустой проект, без документов',
+      meta: newProjectMeta(),
       onClick: () => selectNew({ keepTitle: true }),
     }),
   ];
@@ -562,10 +760,12 @@ function projectRows() {
     if (needle && !title.toLowerCase().includes(needle)) return;
     const targets = (project.targetLangs || []).map((code) => langLabel(code)).join(', ');
     const docs = `${project.documentCount ?? 0} ${plural(project.documentCount ?? 0)}`;
+    const when = relativeDate(project.updatedAt);
+    const pair = `${langLabel(project.sourceLang || 'auto')} → ${targets || 'языки не заданы'}`;
     rows.push(pickButton({
       selected: draft.mode === 'existing' && draft.projectId === project.id,
       title,
-      meta: `${langLabel(project.sourceLang || 'auto')} → ${targets || 'языки не заданы'} · ${docs}`,
+      meta: [pair, docs, when].filter(Boolean).join(' · '),
       onClick: () => selectExisting(project),
     }));
   });
@@ -590,11 +790,17 @@ function pickButton({ selected, title, meta, onClick }) {
   ]);
 }
 
+function newProjectMeta() {
+  if (!suggestionMatches() || draft.targetLangs.length === 0) {
+    return 'Пустой проект, без документов';
+  }
+  const targets = draft.targetLangs.map((code) => langLabel(code)).join(', ');
+  return `${langLabel(draft.sourceLang)} → ${targets}`;
+}
+
 function selectNew({ keepTitle = false } = {}) {
   const title = keepTitle && draft.mode === 'new' ? draft.title : '';
-  draft = emptyDraft();
-  draft.title = title;
-  draft.modelId = defaultModelId();
+  applyNewDraft(title);
   step = 0;
   targetFilter = '';
   showError('');
@@ -604,6 +810,7 @@ function selectNew({ keepTitle = false } = {}) {
 
 function selectExisting(project) {
   applyProject(project);
+  suggestion = null;
   targetFilter = '';
   showError('');
   turn('none');
@@ -636,18 +843,18 @@ async function deleteSelected() {
 }
 
 /* -------------------------------------------------------------------------
- * Лист 2. Языки
+ * Шаг 2. Языки
  * ------------------------------------------------------------------------- */
 
 function languageSlide() {
   const model = currentModel();
   const lead = model
-    ? `Языки модели «${model.name}». Саму модель можно сменить на следующем листе.`
-    : 'Список языков общий: модель ещё не выбрана.';
+    ? `Языки из списка «${model.name}». Сменить модель можно на следующем шаге.`
+    : 'Модель ещё не выбрана, поэтому список общий.';
   const codes = languageCodes();
   const sourceOptions = [
-    el('option', { value: 'auto', text: 'Авто' }),
-    ...codes.map((code) => el('option', { value: code, text: langLabel(code) })),
+    el('option', { value: 'auto', text: 'Автоопределение' }),
+    ...sortedCodes(codes).map((code) => el('option', { value: code, text: langLabel(code) })),
   ];
   if (draft.sourceLang !== 'auto' && !codes.includes(draft.sourceLang)) {
     sourceOptions.push(el('option', {
@@ -669,10 +876,14 @@ function languageSlide() {
 
   return el('div', { class: 'stack stack--lg' }, [
     slideHead('Языки', lead),
+    el('p', {
+      class: 'deck__hint',
+      text: suggestionText(),
+    }),
     el('div', { class: 'field' }, [
       el('label', { class: 'field__label field__label--with-help', htmlFor: 'deck-source' }, [
         'Исходный язык',
-        helpMark('«Авто» не фиксирует язык. Перед переводом модель смотрит образец документа и выбирает код из своего списка. Если язык известен, укажите его сами.'),
+        helpMark('«Автоопределение» не фиксирует язык. Перед переводом модель смотрит образец документа и выбирает код из своего списка. Если язык известен, укажите его сами.'),
       ]),
       source,
     ]),
@@ -714,29 +925,68 @@ function chosenNodes() {
   }));
 }
 
+function sortedCodes(codes) {
+  return [...codes].sort((left, right) => langLabel(left).localeCompare(langLabel(right), 'ru'));
+}
+
+function matchesLanguage(code, needle) {
+  if (!needle) return true;
+  return langLabel(code).toLowerCase().includes(needle) || code.toLowerCase().includes(needle);
+}
+
+function frequentCodes(codes) {
+  const allowed = new Set(codes);
+  const picked = [];
+  const add = (code) => {
+    if (!code || code === draft.sourceLang || !allowed.has(code) || picked.includes(code)) return;
+    if (picked.length >= 8) return;
+    picked.push(code);
+  };
+  (suggestion?.targets || []).forEach(add);
+  projects.forEach((project) => {
+    (project.targetLangs || []).forEach(add);
+  });
+  add(readingLanguage(allowed)?.code);
+  return picked;
+}
+
+function languageChip(code) {
+  const selected = draft.targetLangs.includes(code);
+  return el('button', {
+    class: `lang-chip${selected ? ' is-selected' : ''}`,
+    type: 'button',
+    ariaPressed: selected ? 'true' : 'false',
+    onClick: () => toggleTarget(code),
+  }, [
+    el('span', { class: 'lang-chip__dot' }),
+    el('span', { class: 'lang-chip__label', text: langLabel(code) }),
+    el('span', { class: 'lang-chip__code', text: code }),
+  ]);
+}
+
 function targetChips() {
   const codes = languageCodes().filter((code) => code !== draft.sourceLang);
   const needle = targetFilter;
-  const filtered = needle
-    ? codes.filter((code) => langLabel(code).toLowerCase().includes(needle) || code.includes(needle))
-    : codes;
-  if (filtered.length === 0) {
-    const text = needle ? 'Ничего не найдено.' : 'У этой модели нет списка языков.';
-    return [el('span', { class: 'text-tertiary', text })];
+  if (needle) {
+    const filtered = sortedCodes(codes.filter((code) => matchesLanguage(code, needle)));
+    if (filtered.length === 0) {
+      return [el('span', { class: 'text-tertiary', text: 'Ничего не найдено.' })];
+    }
+    return filtered.map(languageChip);
   }
-  return filtered.map((code) => {
-    const selected = draft.targetLangs.includes(code);
-    return el('button', {
-      class: `lang-chip${selected ? ' is-selected' : ''}`,
-      type: 'button',
-      ariaPressed: selected ? 'true' : 'false',
-      onClick: () => toggleTarget(code),
-    }, [
-      el('span', { class: 'lang-chip__dot' }),
-      el('span', { class: 'lang-chip__label', text: langLabel(code) }),
-      el('span', { class: 'lang-chip__code text-tertiary', text: code }),
-    ]);
-  });
+  if (codes.length === 0) {
+    return [el('span', { class: 'text-tertiary', text: 'У этой модели нет списка языков.' })];
+  }
+  const sorted = sortedCodes(codes);
+  const frequent = sorted.length > 12 ? frequentCodes(codes) : [];
+  if (frequent.length === 0) return sorted.map(languageChip);
+  const rest = sorted.filter((code) => !frequent.includes(code));
+  return [
+    el('span', { class: 'deck__group', text: 'Частые' }),
+    ...frequent.map(languageChip),
+    el('span', { class: 'deck__group', text: 'Все языки' }),
+    ...rest.map(languageChip),
+  ];
 }
 
 function toggleTarget(code) {
@@ -749,27 +999,29 @@ function toggleTarget(code) {
 }
 
 function refreshLanguageLists() {
-  const page = hostEl?.querySelector('.deck__page:not(.is-turn-forward)');
+  const page = hostEl?.querySelector('.deck__page:not(.is-leave-forward):not(.is-leave-back)');
   if (!page) return;
   const chosen = page.querySelector('.deck__chosen');
   const tray = page.querySelector('.deck__tray');
   const count = page.querySelector('.deck__count');
+  const hint = page.querySelector('.deck__hint');
   if (chosen) chosen.replaceChildren(...chosenNodes());
   if (tray) tray.replaceChildren(...targetChips());
   if (count) count.textContent = countLabel();
+  if (hint) hint.textContent = suggestionText();
   showError('');
   paintChrome();
 }
 
 /* -------------------------------------------------------------------------
- * Лист 3. Модель
+ * Шаг 3. Модель
  * ------------------------------------------------------------------------- */
 
 function modelSlide() {
   const unsupported = unsupportedCodes();
   const body = [slideHead(
     'Модель',
-    'От неё зависит, какие языки можно сохранить в проекте.',
+    'От списка модели зависит, какие языки можно сохранить.',
   )];
   if (modelsError) {
     body.push(el('p', { class: 'field__hint field__hint--error', text: modelsError }));
@@ -792,7 +1044,7 @@ function modelSlide() {
     const names = unsupported.map((code) => langLabel(code)).join(', ');
     body.push(el('p', {
       class: 'deck__note',
-      text: `Эта модель не перечисляет: ${names}. Уберите их на листе языков или выберите другую модель.`,
+      text: `Эта модель не перечисляет: ${names}. Уберите их на шаге «Языки» или выберите другую модель.`,
     }));
   }
   const verdict = currentModel()?.compatibility;
@@ -804,13 +1056,18 @@ function modelSlide() {
 
 function modelOption(model) {
   const selected = model.id === draft.modelId;
-  const meta = [model.sizeLabel, model.quantization].filter(Boolean).join(' · ');
+  const meta = [
+    model.sizeLabel,
+    model.quantization,
+    model.id === recommendationId ? 'рекомендуется' : '',
+  ].filter(Boolean).join(' · ');
   return el('button', {
     class: `model-option${selected ? ' is-selected' : ''}`,
     type: 'button',
     ariaPressed: selected ? 'true' : 'false',
     onClick: () => {
       draft.modelId = model.id;
+      alignLanguagesToModel();
       showError('');
       turn('none');
     },
@@ -827,7 +1084,7 @@ function modelOption(model) {
 }
 
 /* -------------------------------------------------------------------------
- * Лист 4. Проверка
+ * Шаг 4. Проверка
  * ------------------------------------------------------------------------- */
 
 function reviewSlide() {
@@ -852,7 +1109,7 @@ function reviewSlide() {
   }
   if (draft.mode === 'existing') {
     rows.push(reviewRow('Документы', `${draft.documentCount} ${plural(draft.documentCount)}`));
-    if (draft.updatedAt) rows.push(reviewRow('Изменён', formatDate(draft.updatedAt)));
+    if (draft.updatedAt) rows.push(reviewRow('Изменён', relativeDate(draft.updatedAt)));
     const tasks = Object.entries(draft.taskSummary || {});
     if (tasks.length) {
       rows.push(reviewNode(

@@ -14,6 +14,13 @@ DEFAULTS: dict[str, Any] = {
     "reduce_motion": False,
     "theme": "dark",
     "last_project": "",
+    "sidebar_collapsed": False,
+    "sidebar_width": 252,
+    "chat_list_width": 240,
+    "chat_list_height": 200,
+    "chat_list_hidden": False,
+    "ui_scale": 100,
+    "text_scale": 100,
 }
 
 

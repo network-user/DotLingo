@@ -18,7 +18,6 @@ import {
   modal,
   spinner,
   icon,
-  helpMark,
   closeHelpMarks,
 } from '../components.js';
 
@@ -69,6 +68,20 @@ let loaded = false;
 let marketPayload = { fetchedAt: null, stale: false, errors: [], offers: [] };
 /** @type {boolean} идёт обновление рынка */
 let marketRefreshing = false;
+/** @type {object|null} файл рынка, выбранный для «Добавить модель» */
+let pickedOffer = null;
+/** @type {HTMLElement|null} тело открытого окна рынка */
+let marketBody = null;
+/** @type {{close: () => void, root: HTMLElement}|null} */
+let marketDialog = null;
+/** @type {boolean} после выбора на рынке вернуться к окну ссылки */
+let resumeLink = false;
+/** @type {HTMLElement|null} меню «Добавить модель» */
+let addMenu = null;
+/** @type {HTMLElement|null} */
+let addAnchor = null;
+/** @type {(() => void)|null} */
+let addMenuOff = null;
 
 const MARKET_INTRO = [
   'Закреплённый список переводческих GGUF с Hugging Face.',
@@ -139,7 +152,7 @@ function paint(host, { loading = false } = {}) {
         : emptyState({
             iconName: 'chip',
             title: 'В каталоге пока нет моделей',
-            text: 'Скачайте файл с рынка ниже или добавьте свой GGUF кнопкой «Добавить модель».',
+            text: 'Откройте рынок кнопкой «+» или добавьте свой GGUF через «Добавить модель».',
           })
     );
   } else {
@@ -150,11 +163,11 @@ function paint(host, { loading = false } = {}) {
     el('div', { class: 'stack stack--lg' }, [
       ...top,
       grid,
+      loading ? null : el('div', { class: 'model-plus-row' }, [marketPlus()]),
       el('p', {
         class: 'model-shop-note',
-        text: 'Свой файл GGUF добавляется кнопкой «Добавить модель». Качество отдельных языковых пар каталог не проверяет.',
+        text: '«+» открывает рынок. Свой файл и ссылка из закреплённого списка добавляются через «Добавить модель». Качество пар каталог не проверяет.',
       }),
-      marketBlock(),
     ])
   );
 }
@@ -180,11 +193,22 @@ async function refresh(host) {
   loaded = true;
   const [market] = await tryCall('listMarket');
   if (hostRef !== host || !host.isConnected) return;
-  if (market) marketPayload = market;
+  if (market) {
+    marketPayload = market;
+    const offers = market.offers || [];
+    if (pickedOffer && !offers.some((item) => item.id === pickedOffer.id)) pickedOffer = null;
+  }
   paint(host);
+  paintMarket();
 }
 
-/** Блок рынка: список с Hugging Face появляется только после кнопки. */
+/** Перерисовать открытое окно рынка, не трогая список установленных. */
+function paintMarket() {
+  if (!marketBody) return;
+  marketBody.replaceChildren(marketBlock());
+}
+
+/** Содержимое окна рынка. */
 function marketBlock() {
   const offers = marketPayload.offers || [];
   const groups = [];
@@ -223,12 +247,9 @@ function marketBlock() {
     ]);
   });
 
-  return el('section', { class: 'stack' }, [
-    el('div', { class: 'model-card__head' }, [
-      el('div', { class: 'title-with-help' }, [
-        el('h2', { class: 'hw-panel__title', text: 'Рынок моделей' }),
-        helpMark('Закреплённый список с Hugging Face. «Обновить» только читает карточки. Файл скачивается отдельно, после согласия.'),
-      ]),
+  return el('div', { class: 'stack' }, [
+    el('div', { class: 'model-market__bar' }, [
+      el('p', { class: 'model-shop-note', text: MARKET_INTRO }),
       button({
         label: marketRefreshing ? 'Обновление…' : 'Обновить с Hugging Face',
         variant: 'ghost',
@@ -236,7 +257,6 @@ function marketBlock() {
         onClick: () => void refreshMarketList(),
       }),
     ]),
-    el('p', { class: 'model-shop-note', text: MARKET_INTRO }),
     marketPayload.fetchedAt
       ? el('p', { class: 'model-shop-note', text: `Список от ${marketPayload.fetchedAt}` })
       : null,
@@ -255,6 +275,16 @@ function marketCard(offer) {
     disabled: true,
     onClick: () => void downloadFlow({ id: offer.id, name: offer.name, market: true }),
   });
+  const picked = pickedOffer?.id === offer.id;
+  const pickBtn = offer.installed
+    ? null
+    : button({
+        label: picked ? 'Выбрано' : 'Выбрать',
+        variant: 'ghost',
+        size: 'sm',
+        onClick: () => pickOffer(offer),
+      });
+  if (pickBtn) pickBtn.setAttribute('aria-pressed', picked ? 'true' : 'false');
   const consent = offer.installed
     ? el('p', { class: 'model-card__status-note', text: 'Этот файл уже есть в каталоге.' })
     : el('label', { class: 'consent-check' }, [
@@ -271,7 +301,7 @@ function marketCard(offer) {
           text: `Ознакомился с лицензией ${offer.license || 'Не указана'} и согласен скачать ${offer.sizeLabel}`,
         }),
       ]);
-  return el('article', { class: 'model-card panel' }, [
+  return el('article', { class: `model-card panel${picked ? ' is-picked' : ''}` }, [
     el('div', { class: 'model-card__head' }, [
       el('h3', { class: 'model-card__name ellipsis', title: offer.name, text: offer.name }),
       badge({
@@ -282,7 +312,10 @@ function marketCard(offer) {
     el('p', { class: 'model-meta__row', text: [offer.quantization, offer.sizeLabel, offer.license].filter(Boolean).join(' · ') }),
     offer.caveat ? el('p', { class: 'model-shop-note', text: offer.caveat }) : null,
     consent,
-    offer.installed ? null : downloadBtn,
+    el('div', { class: 'model-card__actions row row--wrap' }, [
+      offer.installed ? null : downloadBtn,
+      pickBtn,
+    ]),
     offer.cardUrl
       ? el('a', { class: 'model-link', href: offer.cardUrl, target: '_blank', rel: 'noreferrer', text: 'Карточка на Hugging Face' })
       : null,
@@ -293,18 +326,18 @@ function marketCard(offer) {
 async function refreshMarketList() {
   if (marketRefreshing) return;
   marketRefreshing = true;
-  if (hostRef) paint(hostRef);
+  paintMarket();
   try {
     const data = await call('refreshMarket');
     if (!data?.started) {
       marketRefreshing = false;
       toast('Обновление рынка доступно в окне приложения', 'error');
-      if (hostRef) paint(hostRef);
+      paintMarket();
     }
   } catch (e) {
     marketRefreshing = false;
     toast(e.message, 'error');
-    if (hostRef) paint(hostRef);
+    paintMarket();
   }
 }
 
@@ -326,7 +359,7 @@ function noHardwarePanel() {
       el('h3', { class: 'hw-panel__title', text: 'Проверка устройства ещё не запускалась.' }),
       el('p', {
         class: 'hw-panel__text',
-        text: 'Подбор учитывает доступную RAM, свободное место и CPU.',
+        text: 'Подбор учитывает всю память устройства, свободное место и CPU.',
       }),
     ]),
     button({ label: 'Проверить устройство', variant: 'primary', onClick: () => void runDetect() }),
@@ -396,7 +429,7 @@ function modelCard(model) {
           el('span', { class: 'model-compat__reason', text: compat.reason || '' }),
         ])
       : null,
-    model.testedOnWindows === false
+    model.testedOnWindows === false && model.installState !== 'installed'
       ? el('div', { class: 'model-warn', text: 'Запуск этой сборки на Windows не проверен' })
       : null,
     model.uiDetails
@@ -570,8 +603,401 @@ async function runDetect() {
 export { downloadFlow };
 
 /* -------------------------------------------------------------------------
+ * Рынок и добавление
+ * ------------------------------------------------------------------------- */
+
+/** Кнопка под списком: не карточка модели, открывает рынок. */
+function marketPlus() {
+  return el('button', {
+    class: 'model-plus',
+    type: 'button',
+    title: 'Рынок моделей',
+    'aria-label': 'Открыть рынок моделей',
+    onClick: () => openMarket(),
+  }, [
+    icon('plus'),
+    el('span', { class: 'model-plus__label', text: 'Рынок' }),
+  ]);
+}
+
+/** Окно закреплённого списка. Скачивание остаётся на карточке, после согласия. */
+function openMarket() {
+  closeAddMenu();
+  if (marketDialog?.root?.isConnected) {
+    paintMarket();
+    return;
+  }
+  marketDialog = modal({
+    title: 'Рынок моделей',
+    subtitle: 'Закреплённый список. Файл скачивается только после согласия, с повторной проверкой ревизии и SHA-256.',
+    panelClass: 'modal--market',
+    render: (body) => {
+      marketBody = body;
+      paintMarket();
+    },
+    actions: [{ label: 'Закрыть', onClick: () => marketDialog?.close() }],
+    onClose: () => {
+      marketBody = null;
+      marketDialog = null;
+      resumeLink = false;
+    },
+  });
+}
+
+/** Запомнить файл для пункта «По ссылке или с рынка». */
+function pickOffer(offer) {
+  pickedOffer = offer;
+  const back = resumeLink;
+  resumeLink = false;
+  if (back) {
+    marketDialog?.close();
+    linkModal();
+    return;
+  }
+  paintMarket();
+  toast(`Выбрано: ${offer.name}. Добавить можно через «Добавить модель».`);
+}
+
+/** Кнопка шапки с двумя способами добавления. */
+function addModelButton() {
+  const trigger = button({
+    label: 'Добавить модель',
+    variant: 'primary',
+    iconName: 'plus',
+    onClick: (event) => openAddMenu(event.currentTarget),
+  });
+  trigger.setAttribute('aria-haspopup', 'menu');
+  trigger.setAttribute('aria-expanded', 'false');
+  return trigger;
+}
+
+function closeAddMenu() {
+  addMenu?.remove();
+  addMenu = null;
+  addAnchor?.setAttribute('aria-expanded', 'false');
+  addAnchor = null;
+  addMenuOff?.();
+  addMenuOff = null;
+}
+
+function openAddMenu(anchor) {
+  if (addMenu) {
+    closeAddMenu();
+    return;
+  }
+  addAnchor = anchor;
+  anchor.setAttribute('aria-expanded', 'true');
+  const menu = el('div', { class: 'add-menu', role: 'menu' }, [
+    addChoice(
+      'С компьютера',
+      'Локальный файл GGUF. Копия проверяется по размеру и SHA-256.',
+      () => {
+        closeAddMenu();
+        importModal();
+      },
+    ),
+    addChoice(
+      'По ссылке или с рынка',
+      'Ссылка на файл из закреплённого списка или модель, выбранная на рынке.',
+      () => {
+        closeAddMenu();
+        linkModal();
+      },
+    ),
+  ]);
+  document.body.append(menu);
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(320, window.innerWidth - 16);
+  menu.style.width = `${width}px`;
+  menu.style.top = `${rect.bottom + 6}px`;
+  menu.style.left = `${Math.max(8, rect.right - width)}px`;
+  const onDoc = (event) => {
+    if (menu.contains(event.target) || anchor.contains(event.target)) return;
+    closeAddMenu();
+  };
+  const onKey = (event) => {
+    if (event.key === 'Escape') {
+      closeAddMenu();
+      anchor.focus();
+    }
+  };
+  setTimeout(() => document.addEventListener('click', onDoc), 0);
+  document.addEventListener('keydown', onKey);
+  addMenu = menu;
+  addMenuOff = () => {
+    document.removeEventListener('click', onDoc);
+    document.removeEventListener('keydown', onKey);
+  };
+  menu.querySelector('button')?.focus();
+}
+
+function addChoice(title, hint, onClick) {
+  return el('button', {
+    class: 'add-menu__item',
+    type: 'button',
+    role: 'menuitem',
+    onClick,
+  }, [
+    el('span', { class: 'add-menu__title', text: title }),
+    el('span', { class: 'add-menu__hint', text: hint }),
+  ]);
+}
+
+/**
+ * Второй пункт «Добавить модель»: ссылка только выбирает файл из кэша рынка.
+ * Скачивание идёт тем же путём, что и кнопка «Скачать» на карточке.
+ */
+function linkModal() {
+  let dialog;
+  let linkInput;
+  let errorText;
+  let preview;
+  let previewName;
+  let previewMeta;
+  let choiceBox;
+  let consentRow;
+  let consentInput;
+  let consentLabel;
+  let addBtn;
+  let current = pickedOffer;
+  let agreed = false;
+
+  const syncAdd = () => {
+    if (!addBtn) return;
+    addBtn.disabled = !current || current.installed || !agreed;
+  };
+
+  const setCurrent = (offer) => {
+    current = offer || null;
+    if (current) pickedOffer = current;
+    agreed = false;
+    if (consentInput) consentInput.checked = false;
+    if (preview) preview.hidden = !current;
+    if (current && previewName && previewMeta && consentLabel) {
+      previewName.textContent = current.name;
+      previewMeta.textContent = [current.repo, current.filename, current.quantization, current.sizeLabel]
+        .filter(Boolean)
+        .join(' · ');
+      consentLabel.textContent = current.installed
+        ? 'Этот файл уже есть в каталоге.'
+        : `Ознакомился с лицензией ${current.license || 'Не указана'} и согласен скачать ${current.sizeLabel}`;
+    }
+    if (consentRow) consentRow.hidden = !current;
+    if (consentInput) consentInput.disabled = Boolean(current?.installed);
+    choiceBox?.querySelectorAll('.model-link-choice').forEach((node) => {
+      node.classList.toggle('is-selected', node.dataset.id === current?.id);
+    });
+    syncAdd();
+  };
+
+  const showError = (text) => {
+    if (!errorText) return;
+    errorText.textContent = text ?? '';
+    errorText.classList.toggle('is-visible', Boolean(text));
+  };
+
+  dialog = modal({
+    title: 'По ссылке или с рынка',
+    subtitle: 'Ссылка только выбирает файл из закреплённого списка. Произвольный адрес не скачивается.',
+    render: (body) => {
+      linkInput = el('input', {
+        class: 'input',
+        type: 'url',
+        placeholder: 'https://huggingface.co/…/file.gguf',
+        spellcheck: false,
+      });
+      errorText = el('div', { class: 'field-error' });
+      previewName = el('div', { class: 'model-link-pick__name' });
+      previewMeta = el('div', { class: 'model-link-pick__meta' });
+      preview = el('div', { class: 'model-link-pick', hidden: !current }, [
+        previewName,
+        previewMeta,
+        button({
+          label: 'Убрать',
+          variant: 'ghost',
+          size: 'sm',
+          onClick: () => {
+            pickedOffer = null;
+            current = null;
+            setCurrent(null);
+          },
+        }),
+      ]);
+      choiceBox = el('div', { class: 'model-link-choices' });
+      consentLabel = el('span', { class: 'consent-check__label' });
+      consentInput = el('input', {
+        class: 'consent-check__input',
+        type: 'checkbox',
+        onChange: (event) => {
+          agreed = event.target.checked;
+          syncAdd();
+        },
+      });
+      consentRow = el('label', { class: 'consent-check', hidden: true }, [
+        consentInput,
+        el('span', { class: 'consent-check__box' }),
+        consentLabel,
+      ]);
+      body.append(
+        el('div', { class: 'field' }, [
+          el('label', { class: 'field__label', text: 'Ссылка Hugging Face' }),
+          linkInput,
+          el('p', {
+            class: 'field__hint',
+            text: 'Репозиторий должен быть в рынке DotLingo, а файл — в уже загруженном списке.',
+          }),
+        ]),
+        el('div', { class: 'row row--wrap' }, [
+          button({ label: 'Найти по ссылке', variant: 'ghost', size: 'sm', onClick: () => void lookup() }),
+          button({
+            label: 'Выбрать на рынке',
+            variant: 'ghost',
+            size: 'sm',
+            onClick: () => {
+              resumeLink = true;
+              dialog.close();
+              openMarket();
+            },
+          }),
+        ]),
+        preview,
+        choiceBox,
+        consentRow,
+        errorText,
+      );
+      setCurrent(current);
+    },
+    actions: [
+      { label: 'Отмена', onClick: () => dialog.close() },
+      { label: 'Добавить', variant: 'primary', onClick: () => void submit() },
+    ],
+  });
+  addBtn = dialog.root.querySelector('.modal__footer .btn--primary');
+  syncAdd();
+
+  async function lookup() {
+    showError('');
+    const url = linkInput.value.trim();
+    if (!url) {
+      showError('Вставьте ссылку или выберите файл на рынке.');
+      return;
+    }
+    try {
+      const data = await call('resolveMarketLink', url);
+      const offers = data?.offers || [];
+      if (!offers.length) {
+        showError('В текущем списке нет такого файла. Откройте рынок и обновите его.');
+        return;
+      }
+      if (data.offerId) {
+        choiceBox.replaceChildren();
+        setCurrent(offers.find((item) => item.id === data.offerId) || offers[0]);
+        return;
+      }
+      setCurrent(null);
+      choiceBox.replaceChildren(
+        el('p', {
+          class: 'field__hint',
+          text: 'В ссылке нет файла. Выберите один из текущего списка этого репозитория.',
+        }),
+        ...offers.map((offer) => el('button', {
+          class: 'model-link-choice',
+          type: 'button',
+          dataset: { id: offer.id },
+          onClick: () => setCurrent(offer),
+        }, [
+          el('span', { class: 'model-link-choice__name', text: offer.name }),
+          el('span', {
+            class: 'model-link-choice__meta',
+            text: [offer.quantization, offer.sizeLabel, offer.license].filter(Boolean).join(' · '),
+          }),
+        ])),
+      );
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+
+  async function submit() {
+    showError('');
+    if (!current) {
+      showError('Вставьте ссылку или выберите файл на рынке.');
+      return;
+    }
+    if (current.installed) {
+      showError('Этот файл уже есть в каталоге.');
+      return;
+    }
+    if (!agreed) {
+      showError('Подтвердите лицензию и размер файла.');
+      return;
+    }
+    const offer = current;
+    await downloadFlow({
+      id: offer.id,
+      name: offer.name,
+      market: true,
+      sizeBytes: offer.sizeBytes,
+    });
+    if (store.get('download')?.modelId === offer.id) dialog.close();
+  }
+}
+
+/* -------------------------------------------------------------------------
  * Модалка импорта своей модели
  * ------------------------------------------------------------------------- */
+
+/**
+ * Перетаскивание .gguf на поле. WebView2 отдаёт путь только после FilesDropped.
+ * @param {HTMLElement} zone
+ * @param {(path: string) => void} onPath
+ * @param {(text: string) => void} onError
+ */
+function bindModelDrop(zone, onPath, onError) {
+  const arm = (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    zone.classList.add('is-drop');
+  };
+  zone.addEventListener('dragenter', arm);
+  zone.addEventListener('dragover', arm);
+  zone.addEventListener('dragleave', (event) => {
+    if (zone.contains(event.relatedTarget)) return;
+    zone.classList.remove('is-drop');
+  });
+  zone.addEventListener('drop', (event) => {
+    event.preventDefault();
+    zone.classList.remove('is-drop');
+    void acceptDroppedModel(event).then((path) => {
+      if (path) onPath(path);
+    }).catch((error) => onError(error.message || 'Не удалось принять файл.'));
+  });
+}
+
+function hasFiles(event) {
+  const types = event.dataTransfer?.types;
+  return Boolean(types && [...types].includes('Files'));
+}
+
+/** @param {DragEvent} event @returns {Promise<string>} */
+async function acceptDroppedModel(event) {
+  const files = [...(event.dataTransfer?.files || [])];
+  const file = files.find((item) => item.name.toLowerCase().endsWith('.gguf')) || files[0];
+  if (!file) throw new Error('Файл не попал в поле.');
+  if (!file.name.toLowerCase().endsWith('.gguf')) {
+    throw new Error('Нужен файл с расширением .gguf.');
+  }
+  const webviewHost = window.chrome?.webview;
+  if (!webviewHost?.postMessageWithAdditionalObjects) {
+    throw new Error('Перетаскивание работает в окне приложения. Иначе откройте проводник кнопкой.');
+  }
+  webviewHost.postMessageWithAdditionalObjects('FilesDropped', event.dataTransfer.files);
+  const [path, err] = await tryCall('claimDroppedFile', file.name);
+  if (err) throw err;
+  if (!path) throw new Error('Путь файла не прочитался. Выберите его кнопкой.');
+  return String(path);
+}
 
 /** Модалка «Добавить свою модель»: выбор GGUF, метаданные, импорт. */
 function importModal() {
@@ -598,16 +1024,22 @@ function importModal() {
       contextSelect.value = String(DEFAULT_CONTEXT);
       errorText = el('div', { class: 'field-error' });
 
+      const fileRow = el('div', { class: 'model-import__file-row' }, [
+        pathInput,
+        button({ label: 'Выбрать файл', variant: 'ghost', size: 'sm', onClick: () => void pickFile() }),
+      ]);
+      pathInput.addEventListener('click', () => void pickFile());
+      bindModelDrop(fileRow, (path) => {
+        pathInput.value = path;
+        showError('');
+      }, showError);
       body.append(
         el('div', { class: 'field' }, [
           el('label', { class: 'field__label', text: 'Файл GGUF' }),
-          el('div', { class: 'model-import__file-row' }, [
-            pathInput,
-            button({ label: 'Выбрать файл', variant: 'ghost', size: 'sm', onClick: () => void pickFile() }),
-          ]),
+          fileRow,
           el('p', {
             class: 'field__hint',
-            text: 'Файл будет скопирован в хранилище DotLingo и проверен по SHA-256.',
+            text: 'Кнопка открывает проводник. Сюда же можно перетащить файл .gguf. Копия проверяется по SHA-256.',
           }),
         ]),
         el('div', { class: 'field' }, [
@@ -654,9 +1086,13 @@ function importModal() {
     }
   });
 
-  /** Выбор GGUF-файла через нативный диалог. */
+  /** Выбор GGUF-файла через проводник. Отмена диалога путь не меняет. */
   async function pickFile() {
-    const [path] = await tryCall('resolveGGUFPath');
+    const [path, err] = await tryCall('resolveGGUFPath');
+    if (err) {
+      showError(err.message);
+      return;
+    }
     if (path) {
       pathInput.value = String(path);
       showError('');
@@ -732,12 +1168,7 @@ function actions() {
       variant: 'ghost',
       onClick: () => void runDetect(),
     }),
-    button({
-      label: 'Добавить модель',
-      variant: 'primary',
-      iconName: 'plus',
-      onClick: () => importModal(),
-    }),
+    addModelButton(),
   ];
 }
 
@@ -763,16 +1194,21 @@ function wireEvents() {
       if (payload && payload.ok === false) toast(payload.error || 'Рынок не обновился', 'error');
       else if (payload?.stale) toast('Список прежний: Hugging Face не ответил');
       else toast('Рынок обновлён');
+      paintMarket();
       rerender();
     }),
   ];
 }
 
 function destroy() {
+  closeAddMenu();
   unsubs.forEach((unsub) => unsub());
   unsubs = [];
   hostRef = null;
   loaded = false;
+  marketBody = null;
+  marketDialog = null;
+  resumeLink = false;
 }
 
 /* -------------------------------------------------------------------------
@@ -782,7 +1218,7 @@ function destroy() {
 router.registerPage('models', {
   title: 'Модели',
   subtitle: 'Файлы перевода на этом компьютере',
-  help: 'Каталог - файлы, которые уже на диске. Рынок показывает закреплённый список с Hugging Face и ничего не качает, пока вы не нажмёте «Скачать». Свой GGUF копируется в каталог и проверяется по размеру и SHA-256. Подбор смотрит память и место, не качество перевода.',
+  help: 'Каталог - файлы на диске. «+» внизу списка открывает рынок: закреплённый список с Hugging Face, скачивание только после согласия. «Добавить модель» копирует локальный GGUF или берёт файл из этого списка по ссылке. Подбор смотрит память и место, не качество перевода.',
   render,
   destroy,
   actions,

@@ -4,36 +4,55 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-# Акцентный монохром: тёмная пластина и светлая закрытая книга.
+# Акцентный монохром: тёмная пластина и светлый открытый разворот.
+# Те же кривые, что в app_icon.svg и у .brand__mark.
 _BG = "#0B0B0E"
 _INK = "#F5F5F7"
 
 
-def _draw_icon(size: int) -> Image.Image:
+def _quad(start, control, end, steps: int = 18) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
+    for step in range(steps + 1):
+        t = step / steps
+        u = 1 - t
+        points.append(
+            (
+                u * u * start[0] + 2 * u * t * control[0] + t * t * end[0],
+                u * u * start[1] + 2 * u * t * control[1] + t * t * end[1],
+            )
+        )
+    return points
+
+
+def _page(unit, mirror: bool = False) -> list[tuple[float, float]]:
+    def point(x: float, y: float) -> tuple[float, float]:
+        return (unit(16 - x if mirror else x), unit(y))
+
+    top = _quad(point(2.15, 4.35), point(4.55, 3.55), point(7.05, 5.85))
+    bottom = _quad(point(7.05, 11.55), point(4.45, 11.35), point(2.15, 12.35))
+    return top + bottom[1:]
+
+
+def _render(size: int) -> Image.Image:
     image = Image.new("RGBA", (size, size), _BG)
     draw = ImageDraw.Draw(image)
-    plate = max(2, round(size * 0.22))
+
+    def unit(value: float) -> float:
+        return size * value / 16
+
+    plate = max(2, round(unit(3.5)))
     draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=plate, fill=_BG)
-    radius = max(2, round(size * 0.05))
-    draw.rounded_rectangle(
-        (round(size * 0.34), round(size * 0.26), round(size * 0.78), round(size * 0.76)),
-        radius=radius,
-        fill=_INK,
-    )
-    cover = (round(size * 0.24), round(size * 0.20), round(size * 0.68), round(size * 0.80))
-    draw.rounded_rectangle(cover, radius=max(2, round(size * 0.06)), fill=_INK)
-    inset = max(2, round(size * 0.08))
-    spine = cover[0] + max(2, round(size * 0.07))
-    draw.line(
-        (spine, cover[1] + inset, spine, cover[3] - inset),
-        fill=_BG,
-        width=max(1, round(size * 0.04)),
-    )
-    edge = max(1, round(size * 0.018))
-    for step in (0.045, 0.075):
-        x = cover[2] + round(size * step)
-        draw.line((x, cover[1] + inset, x, cover[3] - inset), fill=_BG, width=edge)
+    draw.polygon(_page(unit), fill=_INK)
+    draw.polygon(_page(unit, mirror=True), fill=_INK)
     return image
+
+
+def _draw_icon(size: int) -> Image.Image:
+    # Мелкий изгиб в Pillow ломается. Рисуем крупнее и уменьшаем.
+    if size >= 128:
+        return _render(size)
+    image = _render(size * 8)
+    return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def main() -> None:

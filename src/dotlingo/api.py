@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import webview
+from webview.dom import _dnd_state
 
 from dotlingo.dialogs import delete_dialog, list_dialogs, load_dialog, read_attachment, save_dialog
 from dotlingo.formats import export_document
@@ -32,10 +33,13 @@ from dotlingo.languages import (
     supported_languages,
     supports_language,
 )
+from dotlingo.locale_hints import interface_language, keyboard_language
 from dotlingo.market import (
+    MarketError,
     confirm_offer,
     find_cached_offer,
     load_market_cache,
+    match_market_link,
     refresh_market,
     register_offer,
 )
@@ -70,6 +74,25 @@ EXPORT_ALLOWED = {
     "epub": (".epub", ".txt", ".md"),
     "pdf": (".txt", ".md"),
 }
+
+
+def _layout_span(value: Any, low: int, high: int, fallback: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(high, max(low, number))
+
+
+# Формат фильтра жёсткий: «описание (*.ext)». Дефис в описании pywebview отвергает,
+# и диалог тогда не открывается.
+GGUF_FILE_TYPES = ("GGUF (*.gguf)", "Все файлы (*.*)")
+
+
+def _arm_webview_file_drop() -> None:
+    """Разрешить WebView2 запомнить путь файла, который бросили в окно."""
+    if int(_dnd_state.get("num_listeners") or 0) < 1:
+        _dnd_state["num_listeners"] = 1
 
 
 def _ok(data: Any = None) -> dict[str, Any]:
@@ -277,6 +300,7 @@ class Api:
         self._window_closer: Callable[[], None] | None = None
         self.hardware, self._hardware_detected_at = _load_hardware_cache(self.data_dir)
         self._scratch = ScratchTranslator(self.models_dir, self._push, self._document_busy)
+        _arm_webview_file_drop()
         preferences = load_preferences(self.preferences_root)
         self._preferences = preferences
         last = preferences.get("last_project") or ""
@@ -420,6 +444,29 @@ class Api:
         for key in ("theme", "reduce_motion", "last_project", "setup_seen"):
             if key in prefs:
                 self._set_preference(key, prefs[key])
+        if "sidebar_collapsed" in prefs:
+            self._set_preference("sidebar_collapsed", bool(prefs["sidebar_collapsed"]))
+        if "sidebar_width" in prefs:
+            self._set_preference(
+                "sidebar_width",
+                _layout_span(prefs["sidebar_width"], 80, 480, 252),
+            )
+        if "chat_list_width" in prefs:
+            self._set_preference(
+                "chat_list_width",
+                _layout_span(prefs["chat_list_width"], 168, 1200, 240),
+            )
+        if "chat_list_height" in prefs:
+            self._set_preference(
+                "chat_list_height",
+                _layout_span(prefs["chat_list_height"], 120, 800, 200),
+            )
+        if "chat_list_hidden" in prefs:
+            self._set_preference("chat_list_hidden", bool(prefs["chat_list_hidden"]))
+        if "ui_scale" in prefs:
+            self._set_preference("ui_scale", _layout_span(prefs["ui_scale"], 75, 160, 100))
+        if "text_scale" in prefs:
+            self._set_preference("text_scale", _layout_span(prefs["text_scale"], 75, 180, 100))
         return _ok(dict(self._preferences))
 
     # ------------------------------------------------------------------ projects
@@ -925,6 +972,13 @@ class Api:
         """Словарь код → русское название для UI."""
         return _ok(dict(LANGUAGES))
 
+    def getLocaleHints(self) -> dict[str, Any]:
+        """Раскладка и язык системы. Пустые строки значат, что сигнала нет."""
+        return _ok({
+            "keyboard": keyboard_language(),
+            "interface": interface_language(),
+        })
+
     def detectHardware(self) -> dict[str, Any]:
         """Локальная проверка устройства; результат кэшируется до явного повтора."""
 
@@ -1019,6 +1073,35 @@ class Api:
                 "stale": cache["stale"],
                 "errors": cache["errors"],
                 "offers": [_public_offer(offer, offer.get("sha256", "").lower() in known) for offer in cache["offers"]],
+            }
+        )
+
+    def resolveMarketLink(self, url: str) -> dict[str, Any]:
+        """Выбрать файл закреплённого рынка по ссылке. Веса не скачиваются."""
+        if not isinstance(url, str) or not url.strip():
+            return _err("Вставьте ссылку.", "invalid")
+        cache = load_market_cache(self.models_dir)
+        try:
+            matched = match_market_link(url, cache["offers"])
+        except MarketError as exc:
+            return _err(str(exc), "invalid")
+        known = {
+            str(model.get("sha256") or "").lower()
+            for model in all_models(self.models_dir)
+            if model.get("sha256")
+        }
+        wanted = set(matched["offer_ids"])
+        offers = [
+            _public_offer(offer, str(offer.get("sha256") or "").lower() in known)
+            for offer in cache["offers"]
+            if offer.get("id") in wanted
+        ]
+        return _ok(
+            {
+                "offerId": matched["offer_id"],
+                "repo": matched["repo"],
+                "filename": matched["filename"],
+                "offers": offers,
             }
         )
 
@@ -1231,18 +1314,29 @@ class Api:
     def resolveGGUFPath(self) -> dict[str, Any]:
         """Нативный диалог выбора локального GGUF-файла."""
         if self._window is None:
-            return _ok(None)
+            return _err("Окно приложения ещё не готово.", "no_window")
         try:
             paths = self._window.create_file_dialog(
                 webview.OPEN_DIALOG,
                 allow_multiple=False,
-                file_types=("GGUF-модели (*.gguf)", "Все файлы (*.*)"),
+                file_types=GGUF_FILE_TYPES,
             )
-        except Exception:
-            return _ok(None)
+        except Exception as exc:
+            return _err(f"Не удалось открыть проводник: {exc}")
         if not paths:
             return _ok(None)
         return _ok(str(paths[0]) if isinstance(paths, (list, tuple)) else str(paths))
+
+    def claimDroppedFile(self, name: str) -> dict[str, Any]:
+        """Путь файла, который только что перетащили в окно. Совпадение по имени."""
+        wanted = str(name or "")
+        paths = _dnd_state.get("paths") or []
+        for item in list(paths):
+            base, full = item
+            if str(base) == wanted or Path(str(full)).name == wanted:
+                paths.remove(item)
+                return _ok(str(full))
+        return _ok(None)
 
     def resolveExportPath(self, default_name: str, allowed_extensions: list[str]) -> dict[str, Any]:
         if self._window is None:

@@ -2,24 +2,53 @@
    DotLingo - каркас: sidebar + main, glass-эффекты, шапка, страницы, банер.
    ========================================================================== */
 
+@property --sidebar-w {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 252px;
+}
+
 /* --------------------------------------------------------------------------
    Каркас приложения
    -------------------------------------------------------------------------- */
 #app {
+  position: relative;
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   height: 100%;
   min-height: 0;
+  transition: --sidebar-w var(--dur-base) var(--ease);
 }
 
 /* --------------------------------------------------------------------------
    Sidebar - стеклянная колонка
    -------------------------------------------------------------------------- */
+html.is-sidebar-resizing #app {
+  transition: none;
+}
+
+html.is-sidebar-resizing .brand__mark,
+html.is-sidebar-resizing .nav-item__icon .icon,
+html.is-sidebar-resizing .sidebar-toggle__icon .icon,
+html.is-sidebar-resizing .theme-toggle__icon .icon,
+html.is-sidebar-resizing .active-project__icon .icon,
+html.is-sidebar-resizing .download-dock__icon .icon {
+  transition: none;
+}
+
+html[data-sidebar="collapsed"] {
+  --sidebar-w: 80px;
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
+  width: var(--sidebar-w);
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   padding: var(--sp-4) 12px var(--sp-3);
+  container: side / inline-size;
   /* Непрозрачная подложка: стекло не должно оставлять дыру, если размытие не нарисовалось. */
   background-color: var(--surface-solid);
   background-image: linear-gradient(var(--surface), var(--surface));
@@ -43,28 +72,26 @@
 }
 
 .brand__mark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
   width: 27px;
   height: 27px;
+  transition: width var(--dur-base) var(--ease), height var(--dur-base) var(--ease);
   border-radius: 8px;
   background: var(--bg-bottom);
   color: var(--accent);
   border: 1px solid var(--hairline);
   flex-shrink: 0;
+  /* Те же кривые, что у app_icon.svg. */
+  --brand-book: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='white' d='M2.15 4.35Q4.55 3.55 7.05 5.85V11.55Q4.45 11.35 2.15 12.35Z'/%3E%3Cpath fill='white' d='M13.85 4.35Q11.45 3.55 8.95 5.85V11.55Q11.55 11.35 13.85 12.35Z'/%3E%3C/svg%3E");
 }
 
 .brand__mark::before {
   content: "";
-  width: 12px;
-  height: 16px;
-  border-radius: 2px 3px 3px 2px;
+  position: absolute;
+  inset: 0;
   background: currentColor;
-  box-shadow:
-    inset 3px 0 0 var(--bg-bottom),
-    2px 0 0 var(--bg-bottom),
-    3px 0 0 currentColor;
+  -webkit-mask: var(--brand-book) center / 100% 100% no-repeat;
+  mask: var(--brand-book) center / 100% 100% no-repeat;
 }
 
 .brand__text {
@@ -75,9 +102,12 @@
 }
 
 .brand__name {
+  overflow: hidden;
   font-size: var(--fs-heading);
   font-weight: 600;
   letter-spacing: -0.01em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .brand__sub {
@@ -86,6 +116,84 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.sidebar-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-toggle__icon {
+  display: flex;
+}
+
+.sidebar-toggle__icon .icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* Линия на границе панели. Тянется мышью и с клавиатуры. */
+.sidebar-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--sidebar-w) - 6px);
+  z-index: 5;
+  width: 12px;
+  touch-action: none;
+  cursor: col-resize;
+}
+
+.sidebar-resize::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 5px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--text-tertiary);
+}
+
+.sidebar-resize::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 4px;
+  height: 40px;
+  margin-top: -20px;
+  border-radius: 4px;
+  background: var(--text-secondary);
+}
+
+.sidebar-resize:hover::before,
+.sidebar-resize.is-dragging::before,
+.sidebar-resize:focus-visible::before,
+.sidebar-resize:hover::after,
+.sidebar-resize.is-dragging::after,
+.sidebar-resize:focus-visible::after {
+  background: var(--text);
+}
+
+.sidebar-resize:focus-visible {
+  outline: none;
+}
+
+.sidebar-resize:focus-visible::after {
+  box-shadow: 0 0 0 3px var(--focus-halo);
 }
 
 /* --------------------------------------------------------------------------
@@ -109,11 +217,14 @@
 .nav-group__label {
   padding: 0 10px;
   margin-bottom: 6px;
-  font-size: 10.5px;
+  overflow: hidden;
+  font-size: calc(10.5px * var(--text-scale));
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-tertiary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -164,6 +275,7 @@
   width: 17px;
   height: 17px;
   opacity: 0.9;
+  transition: width var(--dur-base) var(--ease), height var(--dur-base) var(--ease);
 }
 
 .nav-item__label {
@@ -175,8 +287,9 @@
 }
 
 .nav-item__hint {
+  flex-shrink: 0;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--text-scale));
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
   transition: color var(--dur-fast) var(--ease);
@@ -184,6 +297,130 @@
 
 .nav-item.is-active .nav-item__hint {
   color: var(--text-secondary);
+}
+
+/* Узкая колонка: подписи уходят из вёрстки, остаются значок и цифра. */
+html[data-sidebar="collapsed"] .brand {
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+html[data-sidebar="collapsed"] .sidebar-toggle {
+  margin-left: 0;
+}
+
+html[data-sidebar="collapsed"] .sidebar-toggle__icon {
+  transform: scaleX(-1);
+}
+
+html[data-sidebar="collapsed"] .nav {
+  gap: var(--sp-3);
+  align-items: stretch;
+}
+
+html[data-sidebar="collapsed"] .nav-item {
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 4px;
+}
+
+html[data-sidebar="collapsed"] .nav-item__icon {
+  width: 24px;
+  height: 24px;
+}
+
+html[data-sidebar="collapsed"] .nav-item__icon .icon {
+  width: 20px;
+  height: 20px;
+}
+
+html[data-sidebar="collapsed"] .brand__mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+}
+
+html[data-sidebar="collapsed"] .sidebar-toggle {
+  width: 32px;
+  height: 32px;
+}
+
+html[data-sidebar="collapsed"] .sidebar-toggle__icon .icon {
+  width: 18px;
+  height: 18px;
+}
+
+html[data-sidebar="collapsed"] .theme-toggle {
+  height: 40px;
+}
+
+html[data-sidebar="collapsed"] .theme-toggle__icon {
+  width: 24px;
+  height: 24px;
+}
+
+html[data-sidebar="collapsed"] .theme-toggle__icon .icon,
+html[data-sidebar="collapsed"] .active-project__icon .icon,
+html[data-sidebar="collapsed"] .download-dock__icon .icon {
+  width: 18px;
+  height: 18px;
+}
+
+html[data-sidebar="collapsed"] .device-status__dot {
+  width: 8px;
+  height: 8px;
+}
+
+html[data-sidebar="collapsed"] .nav-item__hint,
+html[data-sidebar="collapsed"] .nav-item.is-active .nav-item__hint {
+  display: inline;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+html[data-sidebar="collapsed"] .brand__text,
+html[data-sidebar="collapsed"] .nav-group__label,
+html[data-sidebar="collapsed"] .nav-item__label,
+html[data-sidebar="collapsed"] .active-project__kicker,
+html[data-sidebar="collapsed"] .active-project__label,
+html[data-sidebar="collapsed"] .theme-toggle__label,
+html[data-sidebar="collapsed"] .device-status__label,
+html[data-sidebar="collapsed"] .download-dock__copy {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+html[data-sidebar="collapsed"] .active-project,
+html[data-sidebar="collapsed"] .theme-toggle,
+html[data-sidebar="collapsed"] .device-status,
+html[data-sidebar="collapsed"] .download-dock {
+  align-items: center;
+  justify-content: center;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.active-project__icon {
+  display: none;
+}
+
+html[data-sidebar="collapsed"] .active-project__icon {
+  display: flex;
+}
+
+html[data-sidebar="collapsed"] .download-dock {
+  min-height: 40px;
 }
 
 /* --------------------------------------------------------------------------
@@ -318,6 +555,14 @@
   height: 16px;
 }
 
+.theme-toggle__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .device-status {
   display: flex;
   align-items: center;
@@ -349,9 +594,78 @@
 }
 
 .device-status__label {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* Узкая, но ещё текстовая колонка. Контент-бокс уже внешней ширины на 25px:
+   поля 12+12 и правая граница. Подписи ужимаются многоточием, второстепенное уходит. */
+.sidebar__footer,
+.brand,
+.nav-group,
+.nav-item,
+.theme-toggle,
+.active-project,
+.download-dock,
+.device-status {
+  min-width: 0;
+}
+
+@container side (max-width: 150px) {
+  .brand__sub,
+  .nav-group__label,
+  .active-project__kicker,
+  .download-dock__meta {
+    display: none;
+  }
+}
+
+@container side (max-width: 120px) {
+  .nav-item {
+    gap: 8px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .nav-item__hint,
+  .device-status__label {
+    display: none;
+  }
+
+  .brand {
+    gap: 8px;
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+}
+
+@container side (max-width: 80px) {
+  .brand {
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .brand__text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .sidebar-toggle {
+    margin-left: 0;
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -363,21 +677,26 @@
   min-width: 0;
   min-height: 0;
   background-color: var(--bg-bottom);
+  container: main / inline-size;
 }
 
 .main-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--sp-4);
+  flex-wrap: wrap;
+  gap: var(--sp-3) var(--sp-4);
+  min-width: 0;
   min-height: var(--header-h);
   padding: calc(var(--sp-4) + 2px) var(--sp-5) var(--sp-3);
 }
 
 .main-header__titles {
   display: flex;
+  flex: 1 1 12rem;
   flex-direction: column;
   min-width: 0;
+  max-width: 100%;
 }
 
 .main-header__title-row {
@@ -398,7 +717,7 @@
 
 .main-header__titles h1 {
   min-width: 0;
-  font-size: 21px;
+  font-size: calc(21px * var(--text-scale));
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.2;
@@ -419,8 +738,16 @@
 .main-header__actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--sp-2);
-  flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.main-header__actions .btn {
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* --------------------------------------------------------------------------
@@ -439,6 +766,15 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 0;
+}
+
+@container main (max-width: 720px) {
+  .main-header,
+  .page-scroll {
+    padding-right: var(--sp-3);
+    padding-left: var(--sp-3);
+  }
 }
 
 .page--chat {
@@ -464,7 +800,7 @@
 
 .boot__title {
   margin: 0;
-  font-size: 21px;
+  font-size: calc(21px * var(--text-scale));
   font-weight: 700;
   letter-spacing: -0.02em;
 }
@@ -518,14 +854,12 @@
   height: 30px;
   padding: 0 var(--sp-4);
   border-radius: var(--r-pill);
-  border: 1px solid var(--hairline);
-  background: var(--surface-raised);
-  -webkit-backdrop-filter: var(--blur);
-  backdrop-filter: var(--blur);
+  border: 1px solid var(--overlay-edge);
+  background-color: var(--overlay);
   box-shadow: var(--shadow-md);
   font-size: var(--fs-small);
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--overlay-text);
   user-select: none;
   -webkit-user-select: none;
 }
@@ -542,12 +876,6 @@
 @keyframes demo-pulse {
   50% {
     opacity: 0.35;
-  }
-}
-
-@supports not (backdrop-filter: blur(1px)) {
-  .demo-banner {
-    background: var(--surface-raised-solid);
   }
 }
 

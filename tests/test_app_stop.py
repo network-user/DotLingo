@@ -1,4 +1,33 @@
-from dotlingo.app import _ask_window_to_close, _closing_result, _console_should_stop
+from dotlingo.app import (
+    _ask_window_to_close,
+    _closing_result,
+    _console_should_stop,
+    _install_webview_browser_arguments,
+    _release_webview_without_waiting,
+)
+
+
+def test_webview_cache_release_does_not_wait_for_the_browser() -> None:
+    from webview import _state
+    from webview.platforms import edgechromium
+
+    class WebView:
+        def __init__(self) -> None:
+            self.disposed = False
+
+        def Dispose(self) -> None:
+            self.disposed = True
+
+    previous = _state["private_mode"]
+    _state["private_mode"] = True
+    try:
+        _install_webview_browser_arguments()
+        view = WebView()
+        _release_webview_without_waiting(type("Browser", (), {"webview": view})())
+    finally:
+        _state["private_mode"] = previous
+    assert edgechromium.EdgeChrome.clear_user_data is _release_webview_without_waiting
+    assert view.disposed is False
 
 
 def test_closing_keeps_the_window_until_the_book_shuts() -> None:

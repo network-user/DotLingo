@@ -110,6 +110,8 @@
    -------------------------------------------------------------------------- */
 .panel {
   position: relative;
+  min-width: 0;
+  max-width: 100%;
   padding: var(--sp-4);
   border-radius: var(--r-lg);
   border: 1px solid var(--hairline);
@@ -127,7 +129,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--sp-3);
+  min-width: 0;
   padding-bottom: var(--sp-3);
   margin-bottom: var(--sp-3);
   border-bottom: 1px solid var(--hairline);
@@ -148,7 +152,10 @@
 .panel__actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-2);
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* Списки: под ними плоский фон, размытие каждой строки только грузит композитор. */
@@ -246,11 +253,25 @@
 
 .field__label--with-help,
 .title-with-help {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   max-width: 100%;
+}
+
+.title-with-help {
+  flex: 1 1 12rem;
+}
+
+.field__label--with-help {
+  flex-wrap: wrap;
+}
+
+.title-with-help > :first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .field__hint {
@@ -331,10 +352,13 @@
   gap: 2px;
   overflow: auto;
   border-radius: var(--r-sm);
-  border: 1px solid var(--hairline-strong);
-  background: var(--surface-solid);
-  color: var(--text);
-  box-shadow: var(--shadow-md);
+  border: 1px solid var(--overlay-edge);
+  background-color: var(--overlay);
+  color: var(--overlay-text);
+  box-shadow: var(--shadow-lg);
+  --text: var(--overlay-text);
+  --text-secondary: var(--overlay-muted);
+  --text-tertiary: var(--overlay-quiet);
 }
 
 .select-menu__item {
@@ -461,8 +485,8 @@
   justify-content: center;
   padding: var(--sp-4);
   background: var(--scrim);
-  -webkit-backdrop-filter: blur(var(--blur-modal, 8px)) saturate(120%);
-  backdrop-filter: blur(var(--blur-modal, 8px)) saturate(120%);
+  -webkit-backdrop-filter: blur(var(--blur-modal, 8px));
+  backdrop-filter: blur(var(--blur-modal, 8px));
   opacity: 0;
   animation: modal-scrim-in var(--dur-base) var(--ease) forwards;
 }
@@ -493,15 +517,22 @@
   display: flex;
   flex-direction: column;
   border-radius: var(--r-xl);
-  border: 1px solid var(--hairline);
-  background: var(--surface-raised);
-  -webkit-backdrop-filter: var(--blur);
-  backdrop-filter: var(--blur);
+  border: 1px solid var(--overlay-edge);
+  background-color: var(--overlay);
+  color: var(--overlay-text);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
   opacity: 0;
   transform: translateY(12px) scale(0.98);
   animation: modal-in 200ms var(--ease) forwards;
+  /* Дети читают эти токены: стекло страницы больше не подмешивается в текст. */
+  --text: var(--overlay-text);
+  --text-secondary: var(--overlay-muted);
+  --text-tertiary: var(--overlay-quiet);
+}
+
+.modal--market {
+  max-width: 920px;
 }
 
 @keyframes modal-in {
@@ -530,20 +561,24 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-shrink: 0;
   gap: var(--sp-3);
-  padding: var(--sp-4) var(--sp-5) 0;
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+  border-bottom: 1px solid var(--overlay-edge);
 }
 
 .modal__title {
   font-size: var(--fs-subtitle);
   font-weight: 600;
   letter-spacing: -0.015em;
+  color: var(--overlay-text);
 }
 
 .modal__subtitle {
   margin-top: 4px;
   font-size: var(--fs-small);
-  color: var(--text-secondary);
+  line-height: 1.45;
+  color: var(--overlay-muted);
 }
 
 .modal__close {
@@ -554,7 +589,7 @@
   height: 28px;
   margin: -2px -6px 0 0;
   border-radius: var(--r-pill);
-  color: var(--text-tertiary);
+  color: var(--overlay-muted);
   transition: background var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease);
 }
@@ -570,27 +605,40 @@
 }
 
 .modal__body {
-  padding: var(--sp-3) var(--sp-5);
+  min-height: 0;
+  padding: var(--sp-4) var(--sp-5);
   overflow-y: auto;
   font-size: var(--fs-body);
+  color: var(--overlay-text);
+}
+
+.modal .input,
+.modal .select,
+.modal .textarea {
+  background-color: var(--overlay-sink);
+  border-color: var(--overlay-edge);
+  color: var(--overlay-text);
+}
+
+.modal .btn:not(.btn--primary):not(.btn--danger) {
+  border-color: var(--overlay-edge);
+  color: var(--overlay-text);
 }
 
 .modal__footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-shrink: 0;
   gap: var(--sp-2);
-  padding: var(--sp-3) var(--sp-5) var(--sp-5);
+  flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-5) var(--sp-4);
+  border-top: 1px solid var(--overlay-edge);
+  background-color: var(--overlay);
 }
 
 .modal__footer--danger {
   justify-content: flex-start;
-}
-
-@supports not (backdrop-filter: blur(1px)) {
-  .modal {
-    background: var(--surface-raised-solid);
-  }
 }
 
 /* --------------------------------------------------------------------------
@@ -603,27 +651,44 @@
   z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: var(--sp-2);
-  max-width: 360px;
+  width: min(380px, calc(100vw - 2 * var(--sp-4)));
+  pointer-events: none;
 }
 
 .toast {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 12px 14px;
+  width: 100%;
+  padding: 12px 14px 12px 16px;
+  overflow: hidden;
   border-radius: var(--r-md);
-  border: 1px solid var(--hairline);
-  background: var(--surface-raised);
-  -webkit-backdrop-filter: var(--blur);
-  backdrop-filter: var(--blur);
-  box-shadow: var(--shadow-md);
-  font-size: var(--fs-small);
-  color: var(--text);
+  border: 1px solid var(--overlay-edge);
+  background-color: var(--overlay);
+  color: var(--overlay-text);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--fs-body);
+  line-height: 1.45;
   opacity: 0;
   transform: translateY(10px);
   animation: toast-in var(--dur-base) var(--ease) forwards;
   pointer-events: auto;
+  --text: var(--overlay-text);
+  --text-secondary: var(--overlay-muted);
+  --text-tertiary: var(--overlay-quiet);
+}
+
+.toast::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--overlay-muted);
 }
 
 @keyframes toast-in {
@@ -660,26 +725,22 @@
   height: 16px;
 }
 
-.toast--error .toast__icon {
-  color: var(--error);
-}
+.toast--error::before { background: var(--error); }
+.toast--error .toast__icon { color: var(--error); }
 
-.toast--success .toast__icon {
-  color: var(--success);
-}
+.toast--success::before { background: var(--success); }
+.toast--success .toast__icon { color: var(--success); }
 
-.toast--warning .toast__icon {
-  color: var(--warning);
-}
+.toast--warning::before { background: var(--warning); }
+.toast--warning .toast__icon { color: var(--warning); }
 
-.toast--info .toast__icon {
-  color: var(--info);
-}
+.toast--info .toast__icon { color: var(--overlay-text); }
 
 .toast__message {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+  color: var(--overlay-text);
 }
 
 .toast__close {
@@ -691,7 +752,7 @@
   height: 20px;
   margin: -2px -4px 0 0;
   border-radius: var(--r-pill);
-  color: var(--text-tertiary);
+  color: var(--overlay-muted);
   transition: color var(--dur-fast) var(--ease),
     background var(--dur-fast) var(--ease);
 }
@@ -704,12 +765,6 @@
 .toast__close .icon {
   width: 11px;
   height: 11px;
-}
-
-@supports not (backdrop-filter: blur(1px)) {
-  .toast {
-    background: var(--surface-raised-solid);
-  }
 }
 
 /* --------------------------------------------------------------------------
@@ -802,6 +857,9 @@
   margin-top: var(--sp-2);
 }
 
+/* --------------------------------------------------------------------------
+   Знак «?»: пояснение, пока курсор удерживают на знаке
+   -------------------------------------------------------------------------- */
 .help {
   display: inline-flex;
   align-items: center;
@@ -879,7 +937,7 @@
   border-bottom-width: 2px;
   background: var(--surface);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   line-height: 1;
   color: var(--text-secondary);
   box-shadow: 0 1px 0 var(--hairline);
