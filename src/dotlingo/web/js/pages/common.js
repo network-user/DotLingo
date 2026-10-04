@@ -101,9 +101,9 @@ export function requireProject(host, text) {
       title: 'Нет открытого проекта',
       text,
       action: button({
-        label: 'К проектам',
+        label: 'К переводу',
         variant: 'primary',
-        onClick: () => router.showPage('projects'),
+        onClick: () => router.showPage('chat'),
       }),
     }),
   );

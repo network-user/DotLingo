@@ -179,9 +179,9 @@ function noProjectPanel() {
     el('p', { class: 'st-muted', text: 'Проект не открыт. Языки, контекст и правила задаются у него.' }),
     el('div', { class: 'row' }, [
       button({
-        label: 'К проектам',
+        label: 'К переводу',
         variant: 'ghost',
-        onClick: () => router.showPage('projects'),
+        onClick: () => router.showPage('chat'),
       }),
     ]),
   ]);

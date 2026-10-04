@@ -138,7 +138,7 @@ function noProjectState() {
     iconName: 'folder',
     title: 'Сначала откройте проект',
     text: 'Правка идёт по переведённым фрагментам открытого проекта.',
-    action: button({ label: 'К проектам', variant: 'ghost', onClick: () => router.showPage('projects') }),
+    action: button({ label: 'К переводу', variant: 'ghost', onClick: () => router.showPage('chat') }),
   });
 }
 

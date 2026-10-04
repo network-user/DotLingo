@@ -69,6 +69,15 @@ let loadGeneration = 0;
 /** 'active' подставляет последний проект, 'new' начинает пустой черновик. */
 let intent = 'active';
 let wantNew = false;
+/** Колода открыта внутри «Перевод», а не отдельной страницей. */
+let embedded = false;
+let pendingEditId = '';
+/** @type {{ mode: string, projectId: string }|null} */
+let pendingDeck = null;
+/** @type {((project: object) => void)|null} */
+let onDeckSaved = null;
+/** @type {(() => void)|null} */
+let onDeckCancel = null;
 
 let draft = emptyDraft();
 let localeHints = { keyboard: '', interface: '' };
@@ -394,6 +403,16 @@ function alignLanguagesToModel() {
 }
 
 function applyIntent() {
+  if (pendingEditId) {
+    const project = projectById(pendingEditId);
+    pendingEditId = '';
+    if (project) {
+      applyProject(project);
+      suggestion = null;
+      step = 0;
+      return;
+    }
+  }
   if (intent === 'new' || projects.length === 0) {
     const title = intent === 'new' ? draft.title : '';
     applyNewDraft(title);
@@ -573,12 +592,19 @@ function paintChrome() {
 
   const showNext = ready && step < 3;
   const showOpen = ready && (step === 3 || (draft.mode === 'existing' && furthestValid() === 3));
+  const atStart = step === 0;
   const controls = [
     button({
-      label: 'Назад',
+      label: embedded && atStart ? 'Закрыть' : 'Назад',
       variant: 'ghost',
-      disabled: !ready || busy || turning || step === 0,
-      onClick: () => goTo(step - 1),
+      disabled: !ready || busy || turning || (atStart && !embedded),
+      onClick: () => {
+        if (embedded && atStart) {
+          onDeckCancel?.();
+          return;
+        }
+        goTo(step - 1);
+      },
     }),
     showNext
       ? button({
@@ -602,6 +628,12 @@ function paintChrome() {
 
 function openLabel() {
   if (busy) return 'Сохраняем…';
+  if (embedded) {
+    if (draft.mode === 'new') return 'Создать';
+    const project = projectById(draft.projectId);
+    if (titleDirty(project) || settingsDirty(project)) return 'Сохранить';
+    return 'Готово';
+  }
   if (draft.mode === 'new') return 'Создать и открыть документы';
   const project = projectById(draft.projectId);
   if (titleDirty(project) || settingsDirty(project)) return 'Сохранить и открыть документы';
@@ -1165,14 +1197,15 @@ async function finish() {
   busy = true;
   paintChrome();
   try {
+    let savedProject;
     if (draft.mode === 'new') {
-      const data = await call('createProject', {
+      savedProject = await call('createProject', {
         title: draft.title.trim(),
         modelId: draft.modelId,
         sourceLang: draft.sourceLang,
         targetLangs: [...draft.targetLangs],
       });
-      store.set('activeProject', data);
+      store.set('activeProject', savedProject);
       toast('Проект создан', 'success');
     } else {
       const project = projectById(draft.projectId);
@@ -1189,8 +1222,17 @@ async function finish() {
           rules: project?.rules || '',
         });
       }
-      store.set('activeProject', current);
+      savedProject = current;
+      store.set('activeProject', savedProject);
       if (titleDirty(project) || settingsDirty(project)) toast('Проект сохранён', 'success');
+    }
+    if (embedded && onDeckSaved) {
+      const handler = onDeckSaved;
+      embedded = false;
+      onDeckSaved = null;
+      onDeckCancel = null;
+      handler(savedProject);
+      return;
     }
     router.showPage('documents');
   } catch (error) {
@@ -1214,18 +1256,58 @@ function actions() {
 }
 
 /**
+ * Просит страницу «Перевод» открыть колоду. Если её ещё нет на экране,
+ * запрос забирает следующий показ.
+ * @param {{ mode?: string, projectId?: string }} [request]
+ */
+export function requestProjectDeck(request = {}) {
+  pendingDeck = {
+    mode: request.mode === 'existing' ? 'existing' : 'new',
+    projectId: request.projectId || '',
+  };
+  if (router.currentPage() === 'chat') {
+    store.emit('open-project-deck');
+    return;
+  }
+  router.showPage('chat');
+}
+
+/** @returns {{ mode: string, projectId: string }|null} */
+export function consumeDeckRequest() {
+  const value = pendingDeck;
+  pendingDeck = null;
+  return value;
+}
+
+/**
+ * Рисует колоду в контейнере страницы «Перевод».
+ * @param {HTMLElement} container
+ * @param {{ mode?: string, projectId?: string }} request
+ * @param {{ onSaved?: (project: object) => void, onCancel?: () => void }} [handlers]
+ */
+export function mountProjectDeck(container, request, handlers = {}) {
+  embedded = true;
+  onDeckSaved = handlers.onSaved || null;
+  onDeckCancel = handlers.onCancel || null;
+  wantNew = request?.mode !== 'existing';
+  pendingEditId = request?.mode === 'existing' ? (request.projectId || '') : '';
+  render(container);
+}
+
+export function releaseProjectDeck() {
+  const inside = Boolean(hostEl?.closest?.('.chat'));
+  embedded = false;
+  onDeckSaved = null;
+  onDeckCancel = null;
+  if (inside) destroy();
+}
+
+/**
  * Открывает колоду проектов на пустом черновике.
  * Имя сохранено: его вызывает страница документов.
  */
 export function openCreateProjectModal() {
-  wantNew = true;
-  if (router.currentPage() === 'projects' && hostEl?.isConnected) {
-    intent = 'new';
-    wantNew = false;
-    selectNew();
-    return;
-  }
-  router.showPage('projects');
+  requestProjectDeck({ mode: 'new' });
 }
 
 router.registerPage('projects', {

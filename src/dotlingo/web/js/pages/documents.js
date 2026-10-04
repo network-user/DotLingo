@@ -47,7 +47,7 @@ function render(host) {
 /** Пустое состояние «нет проекта». */
 function noProjectState() {
   const actionRow = el('div', { class: 'row row--wrap', style: { justifyContent: 'center' } }, [
-    button({ label: 'К проектам', variant: 'ghost', onClick: () => router.showPage('projects') }),
+    button({ label: 'К переводу', variant: 'ghost', onClick: () => router.showPage('chat') }),
     button({
       label: 'Новый проект',
       variant: 'primary',

@@ -89,9 +89,9 @@ function noProjectState() {
     title: 'Сначала откройте проект',
     text: 'Термины лежат в проекте, отдельно для каждого языка перевода.',
     action: button({
-      label: 'К проектам',
+      label: 'К переводу',
       variant: 'ghost',
-      onClick: () => router.showPage('projects'),
+      onClick: () => router.showPage('chat'),
     }),
   });
 }

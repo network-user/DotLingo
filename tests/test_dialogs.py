@@ -15,9 +15,23 @@ def test_dialogs_roundtrip_and_reject_a_bad_id(tmp_path: Path) -> None:
         },
     )
     assert saved["title"] == "Первый"
-    assert list_dialogs(tmp_path)[0]["id"] == "a" * 32
+    assert saved["projectId"] == ""
+    bound = save_dialog(
+        tmp_path,
+        {"id": "b" * 32, "title": "В проекте", "projectId": "proj/../x", "messages": []},
+    )
+    assert bound["projectId"] == ""
+    kept = save_dialog(
+        tmp_path,
+        {"id": "c" * 32, "title": "Связан", "projectId": "abc-123", "messages": []},
+    )
+    assert kept["projectId"] == "abc-123"
+    listed = {item["id"]: item for item in list_dialogs(tmp_path)}
+    assert listed["c" * 32]["projectId"] == "abc-123"
     assert load_dialog(tmp_path, "a" * 32)["messages"][0]["text"] == "Привет"
     delete_dialog(tmp_path, "a" * 32)
+    delete_dialog(tmp_path, "b" * 32)
+    delete_dialog(tmp_path, "c" * 32)
     assert list_dialogs(tmp_path) == []
     try:
         save_dialog(tmp_path, {"id": "../escape", "messages": []})

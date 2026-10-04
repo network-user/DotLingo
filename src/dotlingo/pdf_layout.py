@@ -1,0 +1,501 @@
+"""Укладка перевода в текстовый PDF без перерисовки иллюстраций.
+
+Строки книги закрываются цветом бумаги и набираются заново шрифтом
+Old Standard (OFL, Alexey Kryukov) в те же полосы. Режим ``book`` не
+трогает интерфейс и служебные шрифты. Режим ``all`` переводит весь текст.
+"""
+
+from __future__ import annotations
+
+import re
+import statistics
+from dataclasses import dataclass
+from pathlib import Path
+
+FONT_DIR = Path(__file__).resolve().parent / "assets" / "fonts"
+REGULAR_FONT = FONT_DIR / "OldStandard-Regular.ttf"
+FONT_NAME = "OldStandard"
+
+_BOOK_FONT = "ModernMT"
+_CHROME_FONTS = ("Berkeley", "Courier")
+_APOSTROPHE = re.compile(r"(?<=\w)\s+['’]\s*(?=\w)")
+_BEFORE_PUNCT = re.compile(r"\s+([,.;:!?])")
+_AFTER_QUOTE = re.compile(r"([«“\"])\s+")
+_LIGATURES = str.maketrans({"ﬁ": "fi", "ﬂ": "fl", "ﬀ": "ff", "ﬃ": "ffi", "ﬄ": "ffl"})
+
+
+class LayoutError(Exception):
+    """Текст не помещается в полосу или PDF нельзя собрать."""
+
+
+@dataclass(frozen=True)
+class GlyphLine:
+    page: int
+    text: str
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    baseline: float
+    size: float
+    font: str
+    page_width: float
+
+    @property
+    def center(self) -> float:
+        return (self.x0 + self.x1) / 2
+
+
+@dataclass
+class Paragraph:
+    page: int
+    index: int
+    lines: list[GlyphLine]
+    source: str
+    kind: str
+    measure_right: float = 0.0
+    fitted_size: float = 0.0
+
+    @property
+    def key(self) -> tuple[int, int]:
+        return (self.page, self.index)
+
+
+def normalize_text(text: str) -> str:
+    """Склеивает разрядку старого набора в обычную строку."""
+    cleaned = text.translate(_LIGATURES).replace("\u00a0", " ")
+    cleaned = _APOSTROPHE.sub("'", cleaned)
+    cleaned = _BEFORE_PUNCT.sub(r"\1", cleaned)
+    cleaned = _AFTER_QUOTE.sub(r"\1", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def join_line_texts(parts: list[str]) -> str:
+    """Собирает абзац и снимает переносы на конце строки."""
+    joined: list[str] = []
+    for raw in parts:
+        piece = re.sub(r"\s+", " ", raw).strip()
+        if not piece:
+            continue
+        if joined and joined[-1].endswith("-") and piece[:1].islower():
+            joined[-1] = joined[-1][:-1] + piece
+        else:
+            joined.append(piece)
+    return normalize_text(" ".join(joined))
+
+
+def _walk_lines(container):
+    from pdfminer.layout import LTTextLine
+
+    if isinstance(container, LTTextLine):
+        yield container
+        return
+    if isinstance(container, (str, bytes)):
+        return
+    try:
+        children = iter(container)
+    except TypeError:
+        return
+    for child in children:
+        yield from _walk_lines(child)
+
+
+def _line_from_layout(page: int, layout_line, page_width: float) -> GlyphLine | None:
+    from pdfminer.layout import LTChar
+
+    chars = [item for item in layout_line if isinstance(item, LTChar)]
+    text = layout_line.get_text().replace("\n", " ").strip()
+    if not text or not chars:
+        return None
+    fonts = [char.fontname.split("+")[-1] for char in chars]
+    font = max(set(fonts), key=fonts.count)
+    baselines = [char.matrix[5] for char in chars]
+    return GlyphLine(
+        page=page,
+        text=text,
+        x0=float(layout_line.x0),
+        y0=float(layout_line.y0),
+        x1=float(layout_line.x1),
+        y1=float(layout_line.y1),
+        baseline=float(statistics.median(baselines)),
+        size=float(statistics.median(char.size for char in chars)),
+        font=font,
+        page_width=page_width,
+    )
+
+
+def extract_lines(path: Path, pages: list[int]) -> list[GlyphLine]:
+    from pdfminer.high_level import extract_pages
+
+    selected = [page - 1 for page in pages]
+    lines: list[GlyphLine] = []
+    for index, layout in enumerate(extract_pages(str(path), page_numbers=selected)):
+        page_no = pages[index]
+        for layout_line in _walk_lines(layout):
+            parsed = _line_from_layout(page_no, layout_line, float(layout.width))
+            if parsed is not None:
+                lines.append(parsed)
+    return lines
+
+
+def is_translatable(line: GlyphLine, scope: str) -> bool:
+    if scope == "all":
+        return True
+    if any(marker in line.font for marker in _CHROME_FONTS):
+        return False
+    if _BOOK_FONT not in line.font:
+        return False
+    compact = re.sub(r"\s+", "", line.text)
+    return not compact.isdigit()
+
+
+def _column(line: GlyphLine) -> int:
+    return 0 if line.center < line.page_width / 2 else 1
+
+
+def _merge_fragments(lines: list[GlyphLine]) -> list[GlyphLine]:
+    ordered = sorted(lines, key=lambda item: (-item.baseline, item.x0))
+    merged: list[GlyphLine] = []
+    for line in ordered:
+        if not merged:
+            merged.append(line)
+            continue
+        previous = merged[-1]
+        same_row = abs(previous.baseline - line.baseline) < 1.4
+        gap = line.x0 - previous.x1
+        if same_row and -1.0 <= gap <= 16.0:
+            text = f"{previous.text} {line.text}".strip()
+            merged[-1] = GlyphLine(
+                page=previous.page,
+                text=text,
+                x0=min(previous.x0, line.x0),
+                y0=min(previous.y0, line.y0),
+                x1=max(previous.x1, line.x1),
+                y1=max(previous.y1, line.y1),
+                baseline=(previous.baseline + line.baseline) / 2,
+                size=max(previous.size, line.size),
+                font=previous.font,
+                page_width=previous.page_width,
+            )
+            continue
+        merged.append(line)
+    return merged
+
+
+def _split_column(lines: list[GlyphLine]) -> list[list[GlyphLine]]:
+    if not lines:
+        return []
+    body = [item for item in lines if item.size >= 11.5]
+    column_left = min(item.x0 for item in (body or lines))
+    gaps = [lines[i].baseline - lines[i + 1].baseline for i in range(len(lines) - 1)]
+    ordinary = [gap for gap in gaps if 0 < gap < 30]
+    median_gap = statistics.median(ordinary) if ordinary else 16.0
+    groups: list[list[GlyphLine]] = [[lines[0]]]
+    for index, line in enumerate(lines[1:], start=1):
+        previous = lines[index - 1]
+        gap = previous.baseline - line.baseline
+        indent = line.x0 - previous.x0
+        both_indented = line.x0 > column_left + 8 and previous.x0 > column_left + 8
+        new_paragraph = gap > median_gap * 1.35 or 8.0 <= indent <= 26.0 or both_indented
+        if new_paragraph:
+            groups.append([line])
+        else:
+            groups[-1].append(line)
+    return groups
+
+
+def group_paragraphs(lines: list[GlyphLine]) -> list[Paragraph]:
+    """Группирует строки в абзацы: колонка, абзацный отступ, крупный зазор."""
+    by_page: dict[int, list[GlyphLine]] = {}
+    for line in lines:
+        by_page.setdefault(line.page, []).append(line)
+    paragraphs: list[Paragraph] = []
+    for page in sorted(by_page):
+        page_lines = by_page[page]
+        columns: dict[int, list[GlyphLine]] = {}
+        for line in page_lines:
+            columns.setdefault(_column(line), []).append(line)
+        page_index = 0
+        body_by_column: dict[int, list[GlyphLine]] = {}
+        built: list[Paragraph] = []
+        for column in sorted(columns):
+            merged = _merge_fragments(columns[column])
+            for group in _split_column(merged):
+                kind = "header" if max(item.size for item in group) < 11.4 else "body"
+                source = join_line_texts([item.text for item in group])
+                if not source:
+                    continue
+                paragraph = Paragraph(page, page_index, group, source, kind)
+                built.append(paragraph)
+                page_index += 1
+                if kind == "body":
+                    body_by_column.setdefault(column, []).extend(group)
+        for paragraph in built:
+            if paragraph.kind == "header":
+                paragraph.measure_right = max(item.x1 for item in paragraph.lines)
+            else:
+                column = _column(paragraph.lines[0])
+                mates = body_by_column.get(column) or paragraph.lines
+                paragraph.measure_right = max(item.x1 for item in mates)
+        paragraphs.extend(built)
+    return paragraphs
+
+
+def extract_paragraphs(path: Path, pages: list[int], scope: str = "book") -> list[Paragraph]:
+    lines = [line for line in extract_lines(path, pages) if is_translatable(line, scope)]
+    return group_paragraphs(lines)
+
+
+def _text_width(text: str, font: str, size: float) -> float:
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    return stringWidth(text, font, size) if text else 0.0
+
+
+def fit_words(text: str, widths: list[float], font: str, size: float) -> list[str] | None:
+    """Раскладывает слова по готовым ширинам строк. None, если не влезло."""
+    words = text.split()
+    if not words:
+        return [""] * len(widths)
+    lines: list[str] = []
+    cursor = 0
+    for width in widths:
+        if cursor >= len(words):
+            lines.append("")
+            continue
+        chosen: list[str] = []
+        while cursor < len(words):
+            trial = " ".join([*chosen, words[cursor]])
+            if _text_width(trial, font, size) <= width + 0.6:
+                chosen.append(words[cursor])
+                cursor += 1
+                continue
+            break
+        if not chosen:
+            return None
+        lines.append(" ".join(chosen))
+    if cursor < len(words):
+        return None
+    return lines
+
+
+def choose_layout(text: str, widths: list[float], font: str, start: float, floor: float) -> tuple[float, list[str]]:
+    size = start
+    while size >= floor - 0.01:
+        fitted = fit_words(text, widths, font, round(size, 2))
+        if fitted is not None:
+            return round(size, 2), fitted
+        size -= 0.25
+    raise LayoutError("Текст не помещается в отведённые строки.")
+
+
+def _register_font() -> None:
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    if FONT_NAME not in pdfmetrics.getRegisteredFontNames():
+        if not REGULAR_FONT.is_file():
+            raise LayoutError(f"Нет файла шрифта: {REGULAR_FONT}")
+        pdfmetrics.registerFont(TTFont(FONT_NAME, str(REGULAR_FONT)))
+
+
+def _slot_widths(paragraph: Paragraph) -> list[float]:
+    return [max(12.0, paragraph.measure_right - line.x0) for line in paragraph.lines]
+
+
+def _header_limits(line: GlyphLine, kept: list[GlyphLine]) -> tuple[float, float]:
+    """Ширина колонтитула: до номера страницы и до корешка, не до соседней полосы."""
+    center = line.center
+    gutter = line.page_width / 2
+    left = 28.0
+    right = line.page_width - 28.0
+    if center < gutter:
+        right = min(right, gutter - 16.0)
+    else:
+        left = max(left, gutter + 16.0)
+    for obstacle in kept:
+        if obstacle.page != line.page:
+            continue
+        if obstacle.y1 < line.y0 - 3 or obstacle.y0 > line.y1 + 3:
+            continue
+        if obstacle.center < center:
+            left = max(left, obstacle.x1 + 8.0)
+        else:
+            right = min(right, obstacle.x0 - 8.0)
+    half = max(12.0, min(center - left, right - center))
+    return center - half, center + half
+
+
+def _sample_paper(image) -> tuple[float, float, float]:
+    """Медиана светлых малонасыщенных пикселей: цвет бумаги, без чернил и синей плашки."""
+    pixels = image.load()
+    step_x = max(1, image.width // 160)
+    step_y = max(1, image.height // 120)
+    samples: list[tuple[int, int, int]] = []
+    for y in range(0, image.height, step_y):
+        for x in range(0, image.width, step_x):
+            red, green, blue = pixels[x, y][:3]
+            if min(red, green, blue) > 205 and max(red, green, blue) - min(red, green, blue) < 16:
+                samples.append((red, green, blue))
+    if len(samples) < 30:
+        return (224 / 255, 218 / 255, 220 / 255)
+    return tuple(statistics.median(item[channel] for item in samples) / 255 for channel in range(3))
+
+
+def _draw_fitted(canvas, text: str, x: float, baseline: float, width: float, size: float, mode: str) -> None:
+    canvas.setFillColorRGB(0.08, 0.07, 0.06)
+    canvas.setFont(FONT_NAME, size)
+    if not text:
+        return
+    if mode == "center":
+        canvas.drawCentredString(x + width / 2, baseline, text)
+        return
+    words = text.split(" ")
+    raw = _text_width(text, FONT_NAME, size)
+    extra = width - raw
+    justify = mode == "justify" and len(words) > 1 and 0.8 < extra < width * 0.34
+    if not justify:
+        canvas.drawString(x, baseline, text)
+        return
+    gap = extra / (len(words) - 1)
+    space = _text_width(" ", FONT_NAME, size)
+    cursor = x
+    for index, word in enumerate(words):
+        canvas.drawString(cursor, baseline, word)
+        cursor += _text_width(word, FONT_NAME, size)
+        if index != len(words) - 1:
+            cursor += space + gap
+
+
+def _cover(canvas, x: float, y: float, width: float, height: float, paper: tuple[float, float, float]) -> None:
+    if width <= 0 or height <= 0:
+        return
+    canvas.setFillColorRGB(*paper)
+    canvas.rect(x, y, width, height, fill=1, stroke=0)
+
+
+def _plan_paragraph(paragraph: Paragraph, translation: str, kept: list[GlyphLine]) -> tuple[float, list[str], float, float]:
+    try:
+        if paragraph.kind == "header":
+            left, right = _header_limits(paragraph.lines[0], kept)
+            size, lines = choose_layout(translation, [max(12.0, right - left)], FONT_NAME, 11.0, 7.5)
+            return size, lines, left, right
+        widths = _slot_widths(paragraph)
+        start = min(paragraph.lines[0].size, 12.0)
+        size, lines = choose_layout(translation, widths, FONT_NAME, start, 7.5)
+    except LayoutError as exc:
+        preview = paragraph.source[:70]
+        raise LayoutError(f"Стр. {paragraph.page}, абзац {paragraph.index}: {preview}") from exc
+    return size, lines, 0.0, 0.0
+
+
+def _paint_page(
+    canvas,
+    paragraphs: list[Paragraph],
+    translations: dict[tuple[int, int], str],
+    kept: list[GlyphLine],
+    paper: tuple[float, float, float],
+) -> None:
+    plans: list[tuple[Paragraph, float, list[str], float, float]] = []
+    for paragraph in paragraphs:
+        text = translations.get(paragraph.key)
+        if text is None:
+            preview = paragraph.source[:80]
+            raise LayoutError(f"Нет перевода для стр. {paragraph.page}, абзац {paragraph.index}: {preview}")
+        size, lines, left, right = _plan_paragraph(paragraph, normalize_text(text), kept)
+        paragraph.fitted_size = size
+        plans.append((paragraph, size, lines, left, right))
+
+    for paragraph, size, lines, left, right in plans:
+        if paragraph.kind == "header":
+            line = paragraph.lines[0]
+            text_width = _text_width(lines[0], FONT_NAME, size)
+            origin = line.center - text_width / 2
+            origin = min(max(origin, left), right - text_width)
+            pad_y = 1.0
+            cover_left = min(line.x0, origin) - 1.0
+            cover_right = max(line.x1, origin + text_width) + 1.0
+            _cover(canvas, cover_left, line.y0 - pad_y, cover_right - cover_left, line.y1 - line.y0 + pad_y * 2, paper)
+            continue
+        for line in paragraph.lines:
+            _cover(
+                canvas,
+                line.x0 - 0.8,
+                line.y0 - 1.0,
+                line.x1 - line.x0 + 1.6,
+                line.y1 - line.y0 + 2.0,
+                paper,
+            )
+
+    for paragraph, size, lines, left, right in plans:
+        if paragraph.kind == "header":
+            line = paragraph.lines[0]
+            text_width = _text_width(lines[0], FONT_NAME, size)
+            origin = min(max(line.center - text_width / 2, left), right - text_width)
+            _draw_fitted(canvas, lines[0], origin, line.baseline, text_width, size, "left")
+            continue
+        last = max((index for index, value in enumerate(lines) if value), default=0)
+        for index, (line, value) in enumerate(zip(paragraph.lines, lines, strict=True)):
+            mode = "justify" if index != last and value else "left"
+            _draw_fitted(canvas, value, line.x0, line.baseline, paragraph.measure_right - line.x0, size, mode)
+
+
+def _open_reader(path: Path):
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path))
+    if reader.is_encrypted:
+        opened = reader.decrypt("")
+        if opened == 0:
+            raise LayoutError("PDF закрыт паролем. Для укладки нужен файл без пароля пользователя.")
+    return reader
+
+
+def place_translations(
+    source: Path,
+    destination: Path,
+    translations: dict[tuple[int, int], str],
+    *,
+    pages: list[int],
+    scope: str = "book",
+) -> list[Paragraph]:
+    """Собирает PDF из выбранных страниц, подменяя текст переводом."""
+    import io
+
+    import pypdfium2 as pdfium
+    from pypdf import PdfReader, PdfWriter
+    from reportlab.pdfgen import canvas
+
+    if scope not in {"book", "all"}:
+        raise LayoutError("Режим укладки: book или all.")
+    _register_font()
+    source = Path(source)
+    paragraphs = extract_paragraphs(source, pages, scope)
+    kept = [line for line in extract_lines(source, pages) if not is_translatable(line, scope)]
+    reader = _open_reader(source)
+    document = pdfium.PdfDocument(str(source))
+    overlay_buffer = io.BytesIO()
+    first = reader.pages[pages[0] - 1]
+    width = float(first.mediabox.width)
+    height = float(first.mediabox.height)
+    overlay = canvas.Canvas(overlay_buffer, pagesize=(width, height))
+    by_page = {page: [item for item in paragraphs if item.page == page] for page in pages}
+    for page_no in pages:
+        bitmap = document[page_no - 1].render(scale=1)
+        paper = _sample_paper(bitmap.to_pil())
+        _paint_page(overlay, by_page[page_no], translations, kept, paper)
+        overlay.showPage()
+    overlay.save()
+    document.close()
+    overlay_buffer.seek(0)
+    stamps = PdfReader(overlay_buffer)
+    writer = PdfWriter()
+    for index, page_no in enumerate(pages):
+        # Страница должна уже лежать в writer, иначе pypdf 6 теряет шрифт наложения.
+        writer.add_page(reader.pages[page_no - 1])
+        writer.pages[-1].merge_page(stamps.pages[index])
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("wb") as handle:
+        writer.write(handle)
+    return paragraphs

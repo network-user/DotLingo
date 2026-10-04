@@ -186,6 +186,25 @@ def test_project_crud(tmp_path: Path) -> None:
     assert list((tmp_path / "projects").iterdir()) == []
 
 
+def test_ensure_work_project_reuses_the_quick_shelf(tmp_path: Path) -> None:
+    model = _available_model()
+    api = _make_api(tmp_path)
+    first = api.ensureWorkProject(
+        {"modelId": model["id"], "sourceLang": "auto", "targetLangs": ["ru"]}
+    )
+    assert first["ok"] is True
+    assert first["data"]["title"] == "Быстрые"
+    second = api.ensureWorkProject(
+        {"modelId": model["id"], "sourceLang": "en", "targetLangs": ["ru"]}
+    )
+    assert second["ok"] is True
+    assert second["data"]["id"] == first["data"]["id"]
+    named = _create_project(api, model["id"], targets=["en"])
+    opened = api.ensureWorkProject({"projectId": named["data"]["id"]})
+    assert opened["data"]["id"] == named["data"]["id"]
+    assert opened["data"]["title"] == "Тестовый проект"
+
+
 def test_project_validation(tmp_path: Path) -> None:
     model = _available_model()
     api = _make_api(tmp_path)
@@ -246,6 +265,18 @@ def test_document_import_edit_export(tmp_path: Path) -> None:
     spectrum = api.listDocuments()["data"][0]["spectrumByTarget"]["ru"]
     assert any(value == 1.0 for value in spectrum) is True
 
+    published = api.publishTranslation(doc_id, "ru")
+    assert published["ok"] is True
+    assert published["data"]["suffix"] == ".txt"
+    assert published["data"]["reused"] is False
+    output = Path(published["data"]["path"])
+    assert output.parent.name == "output"
+    assert output.name.endswith(".ru.txt")
+    assert "Исправленный перевод." in output.read_text(encoding="utf-8")
+    again = api.publishTranslation(doc_id, "ru")
+    assert again["data"]["reused"] is True
+    assert again["data"]["path"] == str(output)
+
     destination = tmp_path / "export" / "sample.translated-ru.txt"
     destination.parent.mkdir(exist_ok=True)
     exported = api.exportDocument(doc_id, "ru", str(destination))
@@ -296,6 +327,7 @@ def test_enqueue_success_and_actions(tmp_path: Path, monkeypatch: pytest.MonkeyP
     tasks = api.listTasks()["data"]
     assert len(tasks) == 2
     assert {task["status"] for task in tasks} == {"queued"}
+    assert {task["documentId"] for task in tasks} == {doc_id}
 
     task_id = result["data"]["taskIds"][0]
     assert api.pauseTask(task_id)["ok"] is True

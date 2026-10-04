@@ -255,7 +255,7 @@ async function finish(note) {
   void refreshCatalog().catch(() => {});
   if (note) toast(note, 'info');
   try {
-    router.showPage('projects');
+    router.showPage('chat');
   } catch (error) {
     console.error('[setup] не удалось открыть проекты', error);
   }

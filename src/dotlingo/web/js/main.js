@@ -19,10 +19,10 @@ import {
   UI_SCALE_MIN,
 } from './appearance.js';
 
-/** Порядок страниц для клавиш 1..8 (совпадает с навигацией в index.html). */
-const PAGE_ORDER = ['chat', 'projects', 'documents', 'review', 'queue', 'models', 'glossary', 'settings'];
+/** Порядок страниц для клавиш 1..7 (совпадает с навигацией в index.html). */
+const PAGE_ORDER = ['chat', 'documents', 'review', 'queue', 'models', 'glossary', 'settings'];
 
-const DEFAULT_PAGE = 'projects';
+const DEFAULT_PAGE = 'chat';
 const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая' };
 
 /* -------------------------------------------------------------------------
@@ -103,13 +103,12 @@ async function boot() {
     store.set('theme', 'dark');
     applyTheme('dark');
 
-    // Сначала только «Проекты», чтобы первый кадр не ждал весь граф страниц.
+    // Сначала «Перевод»: в этом модуле же живёт колода проекта.
     try {
-      await import('./pages/projects.js');
+      await loadPage('chat');
     } catch (e) {
-      console.error('[pages] не удалось открыть проекты', e);
+      console.error('[pages] не удалось открыть перевод', e);
     }
-    await loadPage('projects');
     router.showPage(DEFAULT_PAGE);
   } catch (error) {
     console.error('[boot]', error);
@@ -385,7 +384,13 @@ function wireShell() {
   if (footer) mountDownloadDock(footer);
 
   document.getElementById('active-project')?.addEventListener('click', () => {
-    router.showPage('projects');
+    const project = store.get('activeProject');
+    if (project?.id && router.currentPage() === 'chat') {
+      window.dispatchEvent(new CustomEvent('dl-focus-project', { detail: project.id }));
+      return;
+    }
+    if (window.DL) window.DL.focusProjectId = project?.id || '';
+    void openPage('chat');
   });
   store.subscribe((key) => {
     if (key === 'activeProject') renderActiveProject();
@@ -617,7 +622,7 @@ function renderDeviceStatus(hw) {
 }
 
 /* -------------------------------------------------------------------------
- * Клавиатура: 1..8 и Ctrl+1..8, Esc для модалок
+ * Клавиатура: 1..7 и Ctrl+1..7, Esc для модалок
  * ------------------------------------------------------------------------- */
 
 function typingTarget(target) {

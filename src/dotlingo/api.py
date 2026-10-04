@@ -75,6 +75,18 @@ EXPORT_ALLOWED = {
     "pdf": (".txt", ".md"),
 }
 
+# Быстрый перевод без выбранного проекта живёт в одном локальном проекте.
+QUICK_PROJECT_TITLE = "Быстрые"
+
+# Тот же контейнер, что у оригинала. PDF в PDF не пишется.
+SAME_FORMAT_SUFFIX = {
+    "txt": ".txt",
+    "markdown": ".md",
+    "docx": ".docx",
+    "epub": ".epub",
+    "pdf": ".md",
+}
+
 
 def _layout_span(value: Any, low: int, high: int, fallback: int) -> int:
     try:
@@ -101,6 +113,32 @@ def _ok(data: Any = None) -> dict[str, Any]:
 
 def _err(message: str, code: str = "error") -> dict[str, Any]:
     return {"ok": False, "error": str(message), "code": code}
+
+
+def _safe_stem(name: str) -> str:
+    stem = Path(name).stem
+    cleaned = "".join("-" if char in '<>:"/\\|?*' else char for char in stem).strip(" .")
+    return cleaned[:80] or "translation"
+
+
+def _write_translation(
+    store: ProjectStore,
+    doc_id: str,
+    target_lang: str,
+    destination: Path,
+) -> None:
+    store.verify_source(doc_id)
+    translations = store.translations(doc_id, target_lang=target_lang)
+    export_document(
+        store.document(doc_id).source_path,
+        destination,
+        store.parsed(doc_id),
+        translations,
+    )
+    try:
+        store.record_export(doc_id, destination, target_lang=target_lang)
+    except Exception:
+        pass
 
 
 def _public_offer(offer: dict[str, Any], installed_sha: bool) -> dict[str, Any]:
@@ -520,6 +558,35 @@ class Api:
         self._set_preference("last_project", store.project["id"])
         return _ok(_serialize_project(store, with_counts=True))
 
+    def ensureWorkProject(self, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Открыть выбранный проект или один повторно используемый «Быстрые»."""
+        payload = data if isinstance(data, dict) else {}
+        project_id = str(payload.get("projectId") or "").strip()
+        if project_id:
+            return self.openProject(project_id)
+        self._sync_projects()
+        matches = [
+            store
+            for store in self.projects
+            if (store.project.get("title") or "") == QUICK_PROJECT_TITLE
+        ]
+        if matches:
+            matches.sort(key=lambda store: store.project.get("updated_at") or "", reverse=True)
+            store = matches[0]
+            with self._lock:
+                self.active_project_id = store.project["id"]
+            self._set_preference("last_project", store.project["id"])
+            return _ok(_serialize_project(store, with_counts=True))
+        targets = payload.get("targetLangs") or ["ru"]
+        return self.createProject(
+            {
+                "title": QUICK_PROJECT_TITLE,
+                "modelId": payload.get("modelId") or "",
+                "sourceLang": payload.get("sourceLang") or AUTO_LANGUAGE,
+                "targetLangs": targets,
+            }
+        )
+
     def openProject(self, project_id: str) -> dict[str, Any]:
         store = self._store_by_id(project_id)
         if store is None:
@@ -741,22 +808,65 @@ class Api:
             return _err("Сначала выберите проект.", "no_project")
         destination = Path(dest_path)
         try:
-            store.verify_source(doc_id)
-            translations = store.translations(doc_id, target_lang=str(target_lang))
-            export_document(
-                store.document(doc_id).source_path,
-                destination,
-                store.parsed(doc_id),
-                translations,
-            )
+            _write_translation(store, str(doc_id), str(target_lang), destination)
         except Exception as exc:
             return _err(f"Не удалось экспортировать: {exc}", "export_failed")
-        try:
-            store.record_export(doc_id, destination, target_lang=str(target_lang))
-        except Exception:
-            pass
         self._push("export_done", {"ok": True, "path": str(destination), "error": None})
         return _ok({"path": str(destination)})
+
+    def publishTranslation(
+        self,
+        doc_id: str,
+        target_lang: str,
+        project_id: str = "",
+    ) -> dict[str, Any]:
+        """Собрать перевод в каталог output проекта, не трогая оригинал."""
+        if project_id:
+            store = self._store_by_id(str(project_id))
+        else:
+            store = self._active_store()
+        if store is None:
+            return _err("Сначала выберите проект.", "no_project")
+        try:
+            record = store.document(str(doc_id))
+        except KeyError:
+            return _err("Документ не найден.", "not_found")
+        lang = str(target_lang or "").strip()
+        if not lang:
+            return _err("Не выбран язык перевода.", "no_target")
+        suffix = SAME_FORMAT_SUFFIX.get(record.format, ".txt")
+        note = ""
+        if record.format == "pdf":
+            note = "PDF возвращается как Markdown: запись PDF в PDF в программе нет."
+        for item in store.exports(str(doc_id)):
+            if str(item.get("target_lang") or "") != lang:
+                continue
+            existing = Path(str(item.get("path") or ""))
+            if existing.is_file() and existing.suffix.lower() == suffix:
+                return _ok(
+                    {
+                        "path": str(existing),
+                        "format": record.format,
+                        "suffix": suffix,
+                        "note": note,
+                        "reused": True,
+                    }
+                )
+        destination = store.root / "output" / f"{_safe_stem(record.name)}.{lang}{suffix}"
+        try:
+            _write_translation(store, str(doc_id), lang, destination)
+        except Exception as exc:
+            return _err(f"Не удалось собрать файл: {exc}", "export_failed")
+        self._push("export_done", {"ok": True, "path": str(destination), "error": None})
+        return _ok(
+            {
+                "path": str(destination),
+                "format": record.format,
+                "suffix": suffix,
+                "note": note,
+                "reused": False,
+            }
+        )
 
     # ------------------------------------------------------------------ translation
 
@@ -841,6 +951,7 @@ class Api:
                         "taskId": task["id"],
                         "projectId": store.project["id"],
                         "projectTitle": title,
+                        "documentId": task["document_id"],
                         "documentName": documents.get(task["document_id"], ""),
                         "sourceLang": task.get("source_lang") or AUTO_LANGUAGE,
                         "targetLang": task.get("target_lang") or "",
@@ -1409,7 +1520,8 @@ class Api:
             return _err("Введите текст.", "empty")
         if len(text) > SCRATCH_LIMIT:
             return _err(
-                f"Фрагмент длиннее {SCRATCH_LIMIT} знаков. Для большого текста создайте проект.",
+                f"Фрагмент длиннее {SCRATCH_LIMIT} знаков. "
+                "Бросьте файл в перевод: он вернётся отдельным документом.",
                 "too_long",
             )
         model_id = str(data.get("modelId") or "").strip()

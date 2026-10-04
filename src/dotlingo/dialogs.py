@@ -70,6 +70,13 @@ def _clean_message(raw: Any) -> dict[str, Any] | None:
     return item
 
 
+def _project_id(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or any(mark in text for mark in ("/", "\\", "..")):
+        return ""
+    return text[:40]
+
+
 def _clean(raw: dict[str, Any]) -> dict[str, Any]:
     dialog_id = _safe_id(str(raw.get("id") or ""))
     messages = []
@@ -88,6 +95,7 @@ def _clean(raw: dict[str, Any]) -> dict[str, Any]:
         "title": title,
         "updatedAt": updated,
         "mode": mode,
+        "projectId": _project_id(raw.get("projectId")),
         "modelId": str(raw.get("modelId") or "")[:80],
         "sourceLang": str(raw.get("sourceLang") or "auto")[:16],
         "targetLang": str(raw.get("targetLang") or "")[:16],
@@ -115,6 +123,7 @@ def list_dialogs(root: Path) -> list[dict[str, Any]]:
                 "title": dialog["title"],
                 "updatedAt": dialog["updatedAt"],
                 "mode": dialog["mode"],
+                "projectId": dialog["projectId"],
                 "messages": len(dialog["messages"]),
             }
         )
