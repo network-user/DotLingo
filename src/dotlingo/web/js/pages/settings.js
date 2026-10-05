@@ -88,7 +88,7 @@ function markDirty() {
 }
 
 /** Сохранение настроек проекта. */
-async function saveProjectSettings() {
+async function saveProjectSettings(withToast = true) {
   if (form.targetLangs.length === 0) {
     toast('Выберите хотя бы один целевой язык.', 'error');
     return;
@@ -101,7 +101,7 @@ async function saveProjectSettings() {
       context: form.context,
       rules: form.rules,
     });
-    toast('Настройки проекта сохранены', 'success');
+    if (withToast) toast('Настройки проекта сохранены', 'success');
     store.set('activeProject', data);
     snapshot = formSnapshot();
     markDirty();
@@ -804,6 +804,10 @@ function actions() {
  * ------------------------------------------------------------------------- */
 
 function destroy() {
+  if (store.get('activeProject') && formSnapshot() !== snapshot) {
+    if (form.targetLangs.length > 0) void saveProjectSettings(false);
+    else toast('Целевой язык не выбран, настройки проекта не сохранились.', 'error');
+  }
   unsubs.forEach((off) => off());
   unsubs = [];
   pageHost = null;

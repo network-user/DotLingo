@@ -303,6 +303,17 @@ const pushHandlers = {
   task_event(payload) {
     store.pushTaskEvent(payload);
     store.emit('task_event', payload);
+    const status = payload?.task?.status;
+    const name = payload?.documentName || 'Документ';
+    if (status === 'failed') {
+      components.toast(
+        payload?.task?.message || `${name}: перевод остановился с ошибкой`,
+        'error',
+        7000,
+      );
+    } else if (status === 'complete') {
+      components.toast(`${name}: перевод сохранён`, 'success');
+    }
   },
   hardware_detected(payload) {
     store.set('hardware', payload);

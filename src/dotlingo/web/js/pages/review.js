@@ -24,6 +24,8 @@ import {
  * ------------------------------------------------------------------------- */
 
 let docId = null;
+/** @type {Array<{id: string, name?: string}>} */
+let documents = [];
 let docName = '';
 let docFormat = '';
 let blocks = [];
@@ -45,6 +47,7 @@ let currentOrder = null;
 let searchFilter = '';
 let dirty = false;
 let unsubExternal = null;
+let reloadTimer = 0;
 /** @type {HTMLElement|null} корень страницы текущего рендера */
 let root = null;
 /** @type {{root: HTMLElement, setCurrent: Function, update: Function}|null} карта перевода */
@@ -66,20 +69,19 @@ async function render(host) {
 
   host.append(el('div', { class: 'page-loading' }, [spinner('lg')]));
 
-  // Документ: выбранный ранее или первый в проекте.
+  const [listed, listErr] = await tryCall('listDocuments');
+  if (!host.isConnected) return;
+  if (listErr) {
+    host.replaceChildren(
+      emptyState({ iconName: 'error', title: 'Не удалось загрузить документы', text: listErr.message })
+    );
+    return;
+  }
+  documents = Array.isArray(listed) ? listed : [];
   let targetId = store.get('selectedDocId');
-  if (!targetId) {
-    const [documents, listErr] = await tryCall('listDocuments');
-    if (!host.isConnected) return;
-    if (listErr) {
-      host.replaceChildren(
-        emptyState({ iconName: 'error', title: 'Не удалось загрузить документы', text: listErr.message })
-      );
-      return;
-    }
-    const first = (documents ?? [])[0];
-    targetId = first?.id ?? null;
-    if (targetId) store.set('selectedDocId', targetId);
+  if (!documents.some((item) => item.id === targetId)) {
+    targetId = documents[0]?.id ?? null;
+    store.set('selectedDocId', targetId || '');
   }
 
   if (!targetId) {
@@ -114,7 +116,11 @@ async function render(host) {
 
 /** Сброс состояния страницы. */
 function resetState() {
+  unsubExternal?.();
+  unsubExternal = null;
+  clearTimeout(reloadTimer);
   docId = null;
+  documents = [];
   docName = '';
   docFormat = '';
   blocks = [];
@@ -188,6 +194,7 @@ function buildLayout(host) {
   const body = el('div', { class: 'review-editor__body' });
 
   const nav = el('aside', { class: 'review-nav panel' }, [
+    documentField(),
     el('div', { class: 'review-nav__search' }, [
       el('div', { class: 'review-nav__tools' }, [
         el('div', { class: 'review-filters' }),
@@ -228,8 +235,36 @@ function buildLayout(host) {
 
   paintFilters();
   renderTree();
+  watchTranslation();
   const first = visibleBlocks()[0];
   selectBlock(first ? String(first.order) : null);
+}
+
+function documentField() {
+  if (documents.length < 2) return null;
+  return el('label', { class: 'field review-doc' }, [
+    el('span', { class: 'field__label', text: 'Документ' }),
+    el('select', {
+      class: 'select',
+      ariaLabel: 'Документ',
+      onChange: (event) => void switchDocument(event.target.value),
+    }, documents.map((item) => el('option', {
+      value: item.id,
+      text: item.name || 'Документ',
+      selected: item.id === docId,
+    }))),
+  ]);
+}
+
+async function switchDocument(nextId) {
+  if (!nextId || nextId === docId) return;
+  if (dirty && !(await autoSave())) {
+    const select = root?.querySelector('.review-doc select');
+    if (select) select.value = docId;
+    return;
+  }
+  store.set('selectedDocId', nextId);
+  if (root) await render(root);
 }
 
 /* -------------------------------------------------------------------------
@@ -428,7 +463,7 @@ function blockRow(block) {
 /** Выбрать блок (с автосохранением предыдущего при dirty). */
 async function selectBlock(order) {
   if (order === currentOrder && order != null) return;
-  if (dirty) await autoSave();
+  if (dirty && !(await autoSave())) return;
   currentOrder = order;
   dirty = false;
 
@@ -496,7 +531,10 @@ function renderEditor() {
   const langSelect = el('select', {
     class: 'select review-lang-select',
     onChange: async (e) => {
-      if (dirty) await autoSave();
+      if (dirty && !(await autoSave())) {
+        e.target.value = reviewLang;
+        return;
+      }
       reviewLang = e.target.value;
       store.set('reviewTargetLang', reviewLang);
       dirty = false;
@@ -713,11 +751,11 @@ async function saveEdit(withToast) {
   }
 }
 
-/** Молчаливое автосохранение (смена блока/языка/поиска, destroy). */
+/** Автосохранение перед сменой блока, языка или уходом. false - правка остаётся. */
 async function autoSave() {
   const block = currentOrder != null ? blockByKey(currentOrder) : null;
   const textarea = root?.querySelector('.review-translation');
-  if (!block || !textarea || !reviewLang) return;
+  if (!block || !textarea || !reviewLang) return true;
   try {
     await call('saveEdit', docId, block.order, textarea.value, reviewLang);
     if (!translations[reviewLang]) translations[reviewLang] = {};
@@ -726,9 +764,46 @@ async function autoSave() {
     editedFlags[reviewLang][String(block.order)] = true;
     dirty = false;
     updateUnsavedBar(textarea);
-  } catch {
-    // Тихо: пользователь не просил сохранять.
+    return true;
+  } catch (error) {
+    toast(error?.message || 'Правка не сохранилась.', 'error');
+    return false;
   }
+}
+
+function watchTranslation() {
+  unsubExternal?.();
+  unsubExternal = store.on('task_event', (payload) => {
+    const event = payload?.task;
+    if (!event || !docId || dirty) return;
+    if (payload?.projectId && payload.projectId !== store.get('activeProject')?.id) return;
+    const name = event.document_name || payload?.documentName;
+    if (name && docName && name !== docName) return;
+    if (event.status !== 'running' && event.status !== 'complete') return;
+    clearTimeout(reloadTimer);
+    reloadTimer = window.setTimeout(() => void reloadQuiet(), 400);
+  });
+}
+
+async function reloadQuiet() {
+  if (!docId || dirty || !root?.isConnected) return;
+  const [doc, err] = await tryCall('getDocument', docId);
+  if (err || !doc || dirty || !root?.isConnected) return;
+  const order = currentOrder;
+  translations = doc.translations ?? {};
+  editedFlags = doc.editedFlags ?? {};
+  machineDrafts = doc.machineDrafts ?? {};
+  renderTree();
+  docMap?.update({ translations, lang: reviewLang });
+  const textarea = root.querySelector('.review-translation');
+  const block = order != null ? blockByKey(order) : null;
+  if (textarea && block && !dirty) {
+    const next = translations[reviewLang]?.[String(block.order)] ?? '';
+    if (textarea.value !== next) textarea.value = next;
+    paintMissing(textarea);
+  }
+  updateStatusBar();
+  markActiveRow();
 }
 
 /* -------------------------------------------------------------------------
@@ -738,7 +813,7 @@ async function autoSave() {
 /** Полный флоу экспорта текущего документа. */
 async function exportFlow() {
   if (!docId || !reviewLang) return;
-  if (dirty) await autoSave();
+  if (dirty && !(await autoSave())) return;
 
   const [extensions, extErr] = await tryCall('getExportExtensions', docId);
   if (extErr) {

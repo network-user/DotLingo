@@ -999,6 +999,16 @@ function waitImport(paths) {
   });
 }
 
+function targetsForRun(project, target, codes) {
+  const known = new Set(codes || []);
+  const existing = (project?.targetLangs || []).filter((code) => (
+    code && (!known.size || known.has(code))
+  ));
+  const primary = !known.size || known.has(target) ? target : (existing[0] || '');
+  if (!primary) return [];
+  return [primary, ...existing.filter((code) => code !== primary)];
+}
+
 async function startFiles(paths, explicitProjectId) {
   if (isDemo()) {
     toast('Перевод файла запускается в окне приложения.', 'info');
@@ -1039,10 +1049,11 @@ async function startFiles(paths, explicitProjectId) {
     toast(error?.message || 'Проект не открылся.', 'error');
     return;
   }
+  const targets = targetsForRun(project, target, codes);
   const [updated, updateError] = await tryCall('updateProjectSettings', {
     modelId: model.id,
     sourceLang: sourceLang || 'auto',
-    targetLangs: [target],
+    targetLangs: targets,
     context: project.context || '',
     rules: project.rules || '',
   });
@@ -1109,10 +1120,11 @@ async function startExisting(repeat) {
     toast(error?.message || 'Проект не открылся.', 'error');
     return;
   }
+  const targets = targetsForRun(project, target, codes);
   const [updated, updateError] = await tryCall('updateProjectSettings', {
     modelId: model.id,
     sourceLang: sourceLang || 'auto',
-    targetLangs: [target],
+    targetLangs: targets,
     context: project.context || '',
     rules: project.rules || '',
   });
@@ -1769,6 +1781,12 @@ function settingsSheet() {
     ariaLabel: 'Куда сохранить',
     onChange: (event) => {
       destinationProjectId = event.target.value;
+      const chosen = destinationProjectId
+        ? projects.find((item) => item.id === destinationProjectId)
+        : projects.find((item) => item.title === 'Быстрые');
+      if (chosen?.sourceLang) sourceLang = chosen.sourceLang;
+      const nextTarget = (chosen?.targetLangs || [])[0];
+      if (nextTarget) targetLang = nextTarget;
       stageKey = '';
       paintStage();
     },
@@ -2015,6 +2033,20 @@ function openTask(task) {
   }
 }
 
+async function openReview(task) {
+  if (task?.projectId && store.get('activeProject')?.id !== task.projectId) {
+    const [project, error] = await tryCall('openProject', task.projectId);
+    if (error || !project) {
+      toast(error?.message || 'Проект не открылся.', 'error');
+      return;
+    }
+    store.set('activeProject', project);
+  }
+  if (task?.documentId) store.set('selectedDocId', task.documentId);
+  if (task?.targetLang) store.set('reviewTargetLang', task.targetLang);
+  router.showPage('review');
+}
+
 function taskActions(task, { navigate = false } = {}) {
   const file = taskFile(task);
   const real = isRealTask(task);
@@ -2053,7 +2085,12 @@ function taskActions(task, { navigate = false } = {}) {
   const review = button({
     label: 'Проверка',
     size: 'sm',
-    onClick: () => router.showPage('review'),
+    onClick: () => void openReview(task),
+  });
+  const pause = button({
+    label: 'Пауза',
+    size: 'sm',
+    onClick: () => void pauseJob({ taskId: task.taskId }),
   });
   if (!navigate || !waiting) {
     if (file?.path) actions.push(...resultFileActions(file));
@@ -2067,6 +2104,7 @@ function taskActions(task, { navigate = false } = {}) {
     }
   }
   if (navigate) actions.push(go);
+  if (real && (task.status === 'running' || task.status === 'queued')) actions.push(pause);
   if (real && waiting) actions.push(stop);
   if (real && ['paused', 'interrupted', 'failed', 'cancelled'].includes(task.status)) {
     actions.push(resume);

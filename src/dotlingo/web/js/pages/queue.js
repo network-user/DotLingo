@@ -305,6 +305,7 @@ function onTaskEvent(payload, host) {
   if (!taskId) return;
 
   const task = allTasks.find((item) => item.taskId === taskId);
+  const previous = task?.status;
   if (task) {
     if (event.completed != null) task.completed = event.completed;
     if (event.total != null) task.total = event.total;
@@ -312,12 +313,7 @@ function onTaskEvent(payload, host) {
   }
 
   const card = host.querySelector(`.task-card[data-task-id="${CSS.escape(taskId)}"]`);
-  if (!card) {
-    void refresh(host);
-    return;
-  }
-
-  if (event.status === 'complete' || event.status === 'failed') {
+  if (!card || (event.status && event.status !== previous)) {
     void refresh(host);
     return;
   }

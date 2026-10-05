@@ -966,6 +966,11 @@
   }
 }
 
+.review-doc {
+  width: 100%;
+  min-width: 0;
+}
+
 .review-nav {
   position: sticky;
   top: 0;
