@@ -68,6 +68,7 @@ let wired = false;
 let stick = true;
 let booted = false;
 let incognito = false;
+let textTuneOpen = false;
 let listHidden = false;
 let meterShort = '';
 /** @type {{taskId: string, signature: string, root: HTMLElement, body: HTMLElement}|null} */
@@ -182,8 +183,8 @@ function syncModelChrome() {
   }
   shownInstalled = next;
   normalizeModel();
-  if (surface === 'text' && form?.firstElementChild) {
-    form.firstElementChild.replaceWith(textSettings(host));
+  if (surface === 'text' && form) {
+    refreshTextTune(host);
     return;
   }
   stageKey = '';
@@ -570,6 +571,7 @@ async function openDialog(id) {
   attachments = [];
   draft = '';
   stick = true;
+  textTuneOpen = false;
   const host = document.getElementById('page-host');
   if (host) render(host);
 }
@@ -643,6 +645,7 @@ function setIncognito(next) {
     return;
   }
   incognito = next;
+  refreshTuneSummary();
   const box = document.querySelector('.text-incognito');
   if (box instanceof HTMLInputElement) box.checked = incognito;
   const note = document.querySelector('.chat-private');
@@ -664,6 +667,7 @@ async function startNew() {
   attachments = [];
   draft = '';
   stick = true;
+  textTuneOpen = false;
   const host = document.getElementById('page-host');
   if (host) render(host);
 }
@@ -721,6 +725,7 @@ async function send() {
     toast(`Сообщение длиннее ${TEXT_LIMIT} знаков. Большой текст бросьте файлом.`, 'error');
     return;
   }
+  closeTextTune();
   if (!dialogId) dialogId = newId();
   const shown = [text, ...attachments.map((file) => `Файл «${file.name}»`)].filter(Boolean).join('\n');
   const files = attachmentPayload();
@@ -745,7 +750,11 @@ async function send() {
   stick = true;
   sending = true;
   const field = document.querySelector('.chat-input');
-  if (field) field.value = '';
+  if (field instanceof HTMLTextAreaElement) {
+    field.value = '';
+    fitComposer(field);
+    field.focus();
+  }
   paintLog();
   paintSend();
   paintFiles();
@@ -2503,18 +2512,74 @@ function surfaceButton(value, label, host) {
   }, [label]);
 }
 
+function textTuneSummary() {
+  const extra = [];
+  if (context.trim()) extra.push('тон задан');
+  if (incognito) extra.push('не сохранится');
+  const base = tuneText();
+  return extra.length ? `${base} · ${extra.join(' · ')}` : base;
+}
+
+function refreshTuneSummary() {
+  const summary = document.querySelector('.text-tune__summary');
+  if (summary) summary.textContent = textTuneSummary();
+}
+
+function applyTextTune() {
+  const panel = document.querySelector('.text-tune');
+  const toggle = document.querySelector('.text-tune__toggle');
+  if (panel) panel.hidden = !textTuneOpen;
+  if (toggle) {
+    toggle.classList.toggle('is-open', textTuneOpen);
+    toggle.setAttribute('aria-expanded', textTuneOpen ? 'true' : 'false');
+  }
+  if (stick) scrollLog();
+}
+
+function closeTextTune() {
+  if (!textTuneOpen) return;
+  textTuneOpen = false;
+  applyTextTune();
+}
+
+function refreshTextTune(host) {
+  const gap = document.querySelector('.text-tune__gap');
+  const settings = document.querySelector('.text-tune__settings');
+  if (gap) {
+    const missing = installedModels().length ? [] : [modelGap()];
+    gap.replaceChildren(...missing);
+  }
+  if (settings) {
+    const fields = textSettings(host);
+    settings.replaceChildren(...(fields ? [fields] : []));
+  }
+  refreshTuneSummary();
+}
+
+function fitComposer(node) {
+  if (!(node instanceof HTMLTextAreaElement)) return;
+  node.style.height = 'auto';
+  const max = 180;
+  const next = Math.min(node.scrollHeight, max);
+  node.style.height = `${Math.max(next, 44)}px`;
+  node.style.overflowY = node.scrollHeight > max ? 'auto' : 'hidden';
+}
+
 function textSettings(host) {
-  const models = installedModels();
-  if (!models.length) return modelGap();
+  if (!installedModels().length) return null;
   const modelField = field('Модель', modelControl(() => {
     touchQuick();
     render(host);
   }));
   if (mode === 'ask') return modelField;
   return el('div', { class: 'sheet__grid text-compose__grid' }, [
-    field('Оригинал', sourceControl(() => touchQuick()), '«Авто» само определяет язык.'),
+    field('Оригинал', sourceControl(() => {
+      touchQuick();
+      refreshTuneSummary();
+    }), '«Авто» само определяет язык.'),
     field('Перевод', targetControl(() => {
       touchQuick();
+      refreshTuneSummary();
       void refreshMeter();
     })),
     el('div', { class: 'text-compose__model' }, [modelField]),
@@ -2527,11 +2592,12 @@ function textBody(host) {
   bindLog(log);
   const input = el('textarea', {
     class: 'textarea chat-input',
-    rows: 4,
+    rows: 2,
     title: 'Enter отправляет, Shift+Enter переносит строку',
     placeholder: mode === 'ask' ? 'Вопрос модели…' : 'Вставьте фрагмент…',
     onInput: (event) => {
       draft = event.target.value;
+      fitComposer(event.target);
       paintSend();
       queueMeter();
     },
@@ -2550,10 +2616,12 @@ function textBody(host) {
     onInput: (event) => {
       context = event.target.value;
       touchQuick();
+      refreshTuneSummary();
       queueMeter();
     },
   });
   tone.value = context;
+  const fields = textSettings(host);
   const hyNote = mode === 'ask' && model?.promptStyle === 'hy-mt2'
     ? el('p', {
       class: 'chat-note',
@@ -2582,36 +2650,38 @@ function textBody(host) {
         void send();
       },
     }, [
-      textSettings(host),
-      hyNote,
-      el('div', { class: 'text-box' }, [
-        el('div', { class: 'chat-files' }),
-        input,
-        el('div', { class: 'text-box__bar' }, [
-          el('span', { class: 'chat-counter', text: `${draft.length} / ${TEXT_LIMIT}` }),
-          el('button', {
-            class: 'btn btn--primary chat-send',
-            type: 'submit',
-            disabled: !draft.trim() && attachments.length === 0 && !sending,
-          }, [sendLabel()]),
-        ]),
-      ]),
-      el('details', {
-        class: 'sheet__more',
-        open: Boolean(context.trim()) || mode === 'ask',
+      el('div', { class: 'text-tune__gap' }, installedModels().length ? [] : [modelGap()]),
+      el('button', {
+        type: 'button',
+        class: `text-tune__toggle${textTuneOpen ? ' is-open' : ''}`,
+        ariaExpanded: textTuneOpen ? 'true' : 'false',
+        ariaControls: 'text-tune',
+        title: 'Языки, модель, тон и сохранение',
+        onClick: () => {
+          textTuneOpen = !textTuneOpen;
+          applyTextTune();
+        },
       }, [
-        el('summary', {}, ['Ещё']),
-        el('div', { class: 'sheet__more-body' }, [
-          field('Тон', tone, 'Необязательно. Уходит вместе с фрагментом, до 800 знаков.'),
-          el('label', { class: 'sheet__check' }, [
-            el('input', {
-              type: 'checkbox',
-              class: 'text-incognito',
-              checked: incognito,
-              onChange: (event) => setIncognito(event.target.checked),
-            }),
-            el('span', { text: 'Не сохранять диалог' }),
-          ]),
+        icon('chevron-down'),
+        el('span', { class: 'text-tune__summary', text: textTuneSummary() }),
+      ]),
+      el('div', {
+        id: 'text-tune',
+        class: 'text-tune',
+        hidden: !textTuneOpen,
+      }, [
+        el('div', { class: 'text-tune__settings' }, fields ? [fields] : []),
+        field('Тон', tone, 'Необязательно. Уходит вместе с фрагментом, до 800 знаков.'),
+        el('label', { class: 'sheet__check' }, [
+          el('input', {
+            type: 'checkbox',
+            class: 'text-incognito',
+            checked: incognito,
+            onChange: (event) => setIncognito(event.target.checked),
+          }),
+          el('span', { text: 'Не сохранять диалог' }),
+        ]),
+        el('div', { class: 'text-tune__actions' }, [
           button({
             label: mode === 'ask' ? 'Вернуть перевод' : 'Спросить у модели',
             size: 'sm',
@@ -2626,7 +2696,20 @@ function textBody(host) {
             title: 'Короткая выдержка попадёт в сообщение. Целый документ переводится на «Файл».',
             onClick: () => void attachFiles(),
           }),
-          el('p', { class: 'chat-meter chat-note', text: meterShort }),
+        ]),
+        el('p', { class: 'chat-meter chat-note', text: meterShort }),
+      ]),
+      hyNote,
+      el('div', { class: 'text-box' }, [
+        el('div', { class: 'chat-files' }),
+        input,
+        el('div', { class: 'text-box__bar' }, [
+          el('span', { class: 'chat-counter', text: `${draft.length} / ${TEXT_LIMIT}` }),
+          el('button', {
+            class: 'btn btn--primary chat-send',
+            type: 'submit',
+            disabled: !draft.trim() && attachments.length === 0 && !sending,
+          }, [sendLabel()]),
         ]),
       ]),
     ]),
@@ -2707,6 +2790,7 @@ function render(host) {
     paintLog();
     paintFiles();
     paintSend();
+    fitComposer(document.querySelector('.chat-input'));
     void refreshMeter();
   } else {
     paintStage();

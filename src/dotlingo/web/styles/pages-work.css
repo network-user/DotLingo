@@ -1500,8 +1500,72 @@
 .chat-input {
   border-radius: 18px;
   min-height: 44px;
+  max-height: 180px;
   padding: 10px 14px;
+  resize: none;
   background: var(--group);
+}
+
+.text-tune__gap:empty {
+  display: none;
+}
+
+.text-tune__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.text-tune__toggle:hover,
+.text-tune__toggle.is-open {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+
+.text-tune__summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.text-tune__toggle .icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.text-tune__toggle.is-open .icon {
+  transform: rotate(180deg);
+}
+
+.text-tune {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.text-tune[hidden] {
+  display: none !important;
+}
+
+.text-tune__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .chat-context summary {
