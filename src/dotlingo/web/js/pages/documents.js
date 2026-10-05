@@ -39,7 +39,7 @@ function render(host) {
   }
 
   host.append(
-    el('div', { class: 'doc-list stack' }, [el('div', { class: 'page-loading' }, [spinner('lg')])])
+    el('div', { class: 'doc-list stack' }, [el('div', { class: 'page-loading' }, [spinner('lg')])]),
   );
   void refresh(host);
 }
@@ -271,7 +271,7 @@ async function revealLatestExport(docId) {
       toast('У документа нет экспортов.', 'warning');
       return;
     }
-    await call('revealPath', last.path);
+    await call('openPath', last.path);
   } catch (e) {
     toast(e.message, 'error');
   }

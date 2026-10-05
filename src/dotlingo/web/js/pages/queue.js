@@ -127,7 +127,7 @@ async function refresh(host) {
     return;
   }
 
-  allTasks = tasks ?? [];
+  allTasks = (tasks ?? []).filter((task) => task.kind !== 'file');
   renderList(host);
 }
 
@@ -151,7 +151,7 @@ function renderList(host) {
         title: narrowed ? 'Ничего не подошло' : 'Задач пока нет',
         text: narrowed
           ? 'Смените фильтр или очистите поиск.'
-          : 'Их ставят на странице «Документы», кнопкой «Перевести».',
+          : 'Их ставят на странице «Перевод»: выберите файл и нажмите «Перевести».',
       })
     );
     return;

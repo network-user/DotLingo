@@ -16,6 +16,7 @@ const PAGE_TITLES = {
   documents: 'Документы',
   review: 'Проверка',
   queue: 'Очередь',
+  history: 'История',
   models: 'Модели',
   glossary: 'Глоссарий',
   settings: 'Настройки',
@@ -61,6 +62,7 @@ export function currentPage() {
  * @param {string} name
  */
 export function showPage(name) {
+  if (name === 'documents') name = 'chat';
   const host = document.getElementById('page-host');
   if (!host) return;
   const def = pages.get(name);

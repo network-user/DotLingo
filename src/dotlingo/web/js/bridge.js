@@ -140,6 +140,13 @@ function mockResponse(method) {
       return { ok: true, data: { projectsDir: 'C:\\demo\\projects', modelsDir: 'C:\\demo\\models' } };
     case 'listTasks':
       return { ok: true, data: [] };
+    case 'publishPendingOutputs':
+      return { ok: true, data: { started: true } };
+    case 'openPath':
+    case 'revealPath':
+      return { ok: true, data: null };
+    case 'previewExport':
+      return { ok: true, data: { kind: 'text', name: 'demo.txt', text: 'Демонстрационный просмотр.' } };
     default:
       console.warn(`[bridge] demo: нет мока для метода ${method}`);
       return { ok: true, data: null };

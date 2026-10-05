@@ -1234,7 +1234,7 @@ async function finish() {
       handler(savedProject);
       return;
     }
-    router.showPage('documents');
+    router.showPage('chat');
   } catch (error) {
     showError(error.message);
     toast(error.message, 'error');

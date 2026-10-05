@@ -21,6 +21,13 @@ DEFAULTS: dict[str, Any] = {
     "chat_list_hidden": False,
     "ui_scale": 100,
     "text_scale": 100,
+    "translate_source": "auto",
+    "translate_target": "ru",
+    "translate_suffix": "",
+    "translate_model": "",
+    "translate_context": "",
+    "translate_glossary": True,
+    "translate_surface": "file",
 }
 
 

@@ -1,6 +1,8 @@
 /**
- * Страница «Перевод»: лента, полка проектов и диалогов, быстрый файл.
+ * Страница «Перевод»: список задач, файл с быстрыми настройками и короткий текст.
  */
+
+import { assembleResult, resultFileActions } from './results.js';
 
 import { call, isDemo, tryCall } from '../bridge.js';
 import * as store from '../store.js';
@@ -31,9 +33,24 @@ let sourceLang = 'auto';
 let targetLang = 'ru';
 let modelId = '';
 let mode = 'translate';
-let focusKind = 'dialog';
+let focusKind = 'work';
 let focusProjectId = '';
-let tuneOpen = false;
+let dialogProjectId = '';
+let surface = 'file';
+/** @type {object[]} */
+let tasks = [];
+let selectedKey = '';
+/** @type {{paths?: string[], names: string[], repeat: object|null}|null} */
+let staged = null;
+let destinationProjectId = '';
+let outputSuffix = '';
+let useGlossary = true;
+let taskQuery = '';
+let stageKey = '';
+let quickReady = false;
+let quickTouched = false;
+let committing = false;
+let rememberTimer = 0;
 /** @type {object[]} */
 let projects = [];
 /** @type {object[]} */
@@ -132,6 +149,12 @@ function ensureWire() {
     void refreshMeter();
   });
   store.on('hardware_detected', () => void refreshMeter());
+  store.subscribe((key) => {
+    if (key !== 'translateReady') return;
+    if (!takeQuickMemory()) return;
+    const host = document.getElementById('page-host');
+    if (host && router.currentPage() === 'chat' && focusKind !== 'deck') render(host);
+  });
   store.on('task_event', (payload) => {
     void onTaskEvent(payload);
   });
@@ -168,12 +191,11 @@ function paintLog() {
   const log = logElement();
   if (!log) return;
   const top = log.scrollTop;
-  const cards = focusKind === 'project' ? visibleJobs().map((job) => fileCard(job)) : [];
-  if (thread.length === 0 && cards.length === 0) {
+  if (thread.length === 0) {
     log.replaceChildren(el('p', { class: 'chat-empty', text: emptyLead() }));
     return;
   }
-  log.replaceChildren(...cards, ...thread.map((turn) => bubble(turn)));
+  log.replaceChildren(...thread.map((turn) => bubble(turn)));
   if (stick) log.scrollTop = log.scrollHeight;
   else log.scrollTop = top;
   const jump = document.querySelector('.chat-jump');
@@ -259,7 +281,7 @@ function projectMeta(project) {
 }
 
 function dialogRow(item) {
-  const selected = focusKind === 'dialog' && item.id === dialogId;
+  const selected = surface === 'text' && item.id === dialogId;
   return el('div', { class: `chat-dialog${selected ? ' is-selected' : ''}` }, [
     el('button', {
       type: 'button',
@@ -305,24 +327,7 @@ function projectRow(project) {
 }
 
 function paintDialogs() {
-  const list = document.querySelector('.chat-dialogs__list');
-  if (!list) return;
-  const loose = dialogs.filter((item) => !item.projectId);
-  const projectNodes = projects.length
-    ? projects.map((project) => projectRow(project))
-    : [el('p', {
-      class: 'chat-empty',
-      text: 'Бросьте файл на список или создайте проект.',
-    })];
-  const dialogNodes = loose.length
-    ? loose.map((item) => dialogRow(item))
-    : [el('p', { class: 'chat-empty', text: 'Короткий текст без файла появится здесь.' })];
-  list.replaceChildren(
-    el('p', { class: 'work-label', text: 'Проекты' }),
-    ...projectNodes,
-    el('p', { class: 'work-label', text: 'Диалоги' }),
-    ...dialogNodes,
-  );
+  paintList();
 }
 
 async function copyText(text) {
@@ -366,15 +371,8 @@ async function loadDialogs() {
   const [rows] = await tryCall('listDialogs');
   dialogs = Array.isArray(rows) ? rows : [];
   paintDialogs();
-  if (holdBootDialog) {
-    holdBootDialog = false;
-    booted = true;
-    return;
-  }
-  if (booted || sending || focusKind === 'project' || focusKind === 'deck') return;
+  holdBootDialog = false;
   booted = true;
-  const first = dialogs.find((item) => !item.projectId);
-  if (first && thread.length === 0) await openDialog(first.id);
 }
 
 function snapshot() {
@@ -388,7 +386,7 @@ function snapshot() {
     sourceLang,
     targetLang,
     context,
-    projectId: focusKind === 'project' ? focusProjectId : '',
+    projectId: dialogProjectId,
     messages: thread
       .filter((turn) => turn.text && !turn.pending)
       .map((turn) => ({
@@ -433,8 +431,9 @@ async function openDialog(id) {
     return;
   }
   dialogId = data.id;
-  focusKind = data.projectId ? 'project' : 'dialog';
-  focusProjectId = data.projectId || '';
+  focusKind = 'work';
+  dialogProjectId = data.projectId || '';
+  surface = 'text';
   mode = data.mode === 'ask' ? 'ask' : 'translate';
   modelId = data.modelId || modelId;
   sourceLang = data.sourceLang || 'auto';
@@ -508,9 +507,9 @@ async function startNew() {
     return;
   }
   await persist();
-  focusKind = 'dialog';
-  focusProjectId = '';
-  projectDocs = [];
+  focusKind = 'work';
+  dialogProjectId = '';
+  surface = 'text';
   dialogId = newId();
   thread = [];
   attachments = [];
@@ -637,13 +636,8 @@ const JOB_LABELS = {
 };
 
 function emptyLead() {
-  if (focusKind === 'project') {
-    return 'Бросьте файл в этот проект или напишите фрагмент. Файл вернётся в том же формате.';
-  }
-  if (mode === 'ask') {
-    return 'Напишите сообщение. Модель ответит на этом компьютере, без сети.';
-  }
-  return 'Напишите фрагмент или бросьте файл. Готовый файл придёт в том же формате.';
+  if (mode === 'ask') return 'Напишите сообщение. Модель ответит на этом компьютере, без сети.';
+  return 'Напишите фрагмент. Файл удобнее перевести в режиме «Файл».';
 }
 
 function tuneText() {
@@ -699,7 +693,7 @@ async function refreshProjects() {
   const [rows] = await tryCall('listProjects');
   projects = Array.isArray(rows) ? rows : [];
   store.set('projects', projects);
-  paintDialogs();
+  paintProjectChoices();
 }
 
 function pdfJobNote(doc) {
@@ -787,65 +781,46 @@ async function onTaskEvent(payload) {
   const event = payload?.task;
   const taskId = event?.task_id;
   if (!taskId) return;
-  const job = [...jobs.values()].find((item) => item.taskId === taskId);
-  if (!job) return;
-  if (event.status) job.status = event.status;
-  if (event.completed != null) job.completed = event.completed;
-  if (event.total != null) job.total = event.total;
-  if (event.status === 'failed') job.error = event.message || job.error || 'Перевод остановился.';
-  if (event.status === 'complete' && !job.publishing && !job.path) {
-    job.publishing = true;
-    await publishJob(job, payload.projectId || focusProjectId);
+  const task = tasks.find((item) => item.taskId === taskId);
+  if (!task) {
+    await refreshTasks();
+    return;
   }
-  paintLog();
+  if (event.status) task.status = event.status;
+  if (event.completed != null) task.completed = event.completed;
+  if (event.total != null) task.total = event.total;
+  if (event.status === 'failed') task.error = event.message || task.error || 'Перевод остановился.';
+  if (payload.exportPath) {
+    const file = { path: payload.exportPath, format: '', createdAt: '', exportId: '', note: '' };
+    task.files = [file, ...(task.files || []).filter((item) => item.path !== payload.exportPath)];
+    if (event.status === 'complete') task.status = 'complete';
+  } else if (payload.exportError) {
+    task.error = payload.exportError;
+  }
+  paintList();
+  if (surface === 'file') paintStage();
 }
 
 async function focusProject(id) {
   if (!id) return;
-  if (sending) {
-    toast('Сначала остановите ответ.', 'info');
-    return;
-  }
   if (focusKind === 'deck') releaseProjectDeck();
-  await persist();
   const [project, error] = await tryCall('openProject', id);
   if (error || !project) {
     toast(error?.message || 'Проект не открылся.', 'error');
     return;
   }
   store.set('activeProject', project);
-  focusKind = 'project';
+  destinationProjectId = project.title === 'Быстрые' ? '' : project.id;
   focusProjectId = project.id;
-  sourceLang = project.sourceLang || 'auto';
-  targetLang = (project.targetLangs || [])[0] || targetLang;
+  focusKind = 'work';
+  surface = 'file';
+  if (project.sourceLang) sourceLang = project.sourceLang;
+  if ((project.targetLangs || [])[0]) targetLang = project.targetLangs[0];
   if (project.modelId) modelId = project.modelId;
-  const bound = dialogs.find((item) => item.projectId === project.id);
-  if (bound) {
-    const [data, loadError] = await tryCall('loadDialog', bound.id);
-    if (!loadError && data) {
-      dialogId = data.id;
-      mode = data.mode === 'ask' ? 'ask' : 'translate';
-      context = data.context || '';
-      thread = (data.messages || []).map((turn) => ({
-        id: turn.id || newId(),
-        role: turn.role,
-        text: turn.text || '',
-        error: turn.error || '',
-      }));
-    } else {
-      dialogId = newId();
-      thread = [];
-    }
-  } else {
-    dialogId = newId();
-    thread = [];
-  }
-  attachments = [];
-  draft = '';
-  stick = true;
-  await refreshProjectDocs();
+  stageKey = '';
   const host = document.getElementById('page-host');
-  if (host) render(host);
+  if (host && router.currentPage() === 'chat') render(host);
+  else if (window.DL) window.DL.focusProjectId = id;
 }
 
 function waitImport(paths) {
@@ -890,7 +865,7 @@ async function startFiles(paths, explicitProjectId) {
     return;
   }
   targetLang = target;
-  const projectId = explicitProjectId || (focusKind === 'project' ? focusProjectId : '');
+  const projectId = explicitProjectId || '';
   let project;
   let error;
   if (projectId) {
@@ -906,20 +881,18 @@ async function startFiles(paths, explicitProjectId) {
     toast(error?.message || 'Проект не открылся.', 'error');
     return;
   }
-  if (!project.modelId || !(project.targetLangs || []).length) {
-    const [updated, updateError] = await tryCall('updateProjectSettings', {
-      modelId: project.modelId || model.id,
-      sourceLang: project.sourceLang || sourceLang || 'auto',
-      targetLangs: (project.targetLangs || []).length ? project.targetLangs : [target],
-      context: project.context || '',
-      rules: project.rules || '',
-    });
-    if (updateError || !updated) {
-      toast(updateError?.message || 'Не удалось записать языки проекта.', 'error');
-      return;
-    }
-    project = updated;
+  const [updated, updateError] = await tryCall('updateProjectSettings', {
+    modelId: model.id,
+    sourceLang: sourceLang || 'auto',
+    targetLangs: [target],
+    context: project.context || '',
+    rules: project.rules || '',
+  });
+  if (updateError || !updated) {
+    toast(updateError?.message || 'Не удалось записать языки проекта.', 'error');
+    return;
   }
+  project = updated;
   store.set('activeProject', project);
   let payload;
   try {
@@ -932,25 +905,105 @@ async function startFiles(paths, explicitProjectId) {
   (payload?.errors || []).forEach((item) => toast(`${item.name}: ${item.error}`, 'error', 6000));
   if (!imported.length) {
     if (!(payload?.errors || []).length) toast('Файлы не импортированы.', 'error');
-    await focusProject(project.id);
     return;
   }
-  const targets = (project.targetLangs || []).length ? project.targetLangs : [target];
   const [queued, queueError] = await tryCall('enqueueTranslation', {
     documentIds: imported.map((item) => item.id),
-    targetLangs: targets,
+    targetLangs: [target],
+    outputSuffix,
+    useGlossary,
+    context: context.slice(0, 800),
   });
   if (queueError || !queued) {
     toast(queueError?.message || 'Перевод не поставлен в очередь.', 'error', 6000);
-    await focusProject(project.id);
     return;
   }
   (queued.warnings || []).forEach((item) => toast(`${item.document}: ${item.text}`, 'info', 6000));
-  toast('Файл в очереди. Готовый документ появится в ленте.', 'success');
-  await focusProject(project.id);
+  toast('Файл в очереди.', 'success');
+  staged = null;
+  selectedKey = (queued.taskIds || [])[0] || '';
+  stageKey = '';
+  surface = 'file';
+  await refreshTasks();
 }
 
-async function receiveFiles(fileList, projectId) {
+async function startExisting(repeat) {
+  if (!repeat?.documentId || !repeat.projectId) return;
+  if (isDemo()) {
+    toast('Перевод файла запускается в окне приложения.', 'info');
+    return;
+  }
+  const model = currentModel();
+  if (!model) {
+    toast('Сначала скачайте модель.', 'error');
+    router.showPage('models');
+    return;
+  }
+  const codes = model.languageCodes || [];
+  const target = codes.includes(targetLang) ? targetLang : (codes.includes('ru') ? 'ru' : codes[0]);
+  if (!target) {
+    toast('У модели нет языка перевода.', 'error');
+    return;
+  }
+  targetLang = target;
+  const [project, error] = await tryCall('openProject', repeat.projectId);
+  if (error || !project) {
+    toast(error?.message || 'Проект не открылся.', 'error');
+    return;
+  }
+  const [updated, updateError] = await tryCall('updateProjectSettings', {
+    modelId: model.id,
+    sourceLang: sourceLang || 'auto',
+    targetLangs: [target],
+    context: project.context || '',
+    rules: project.rules || '',
+  });
+  if (updateError || !updated) {
+    toast(updateError?.message || 'Не удалось записать языки проекта.', 'error');
+    return;
+  }
+  store.set('activeProject', updated);
+  const [queued, queueError] = await tryCall('enqueueTranslation', {
+    documentIds: [repeat.documentId],
+    targetLangs: [target],
+    outputSuffix,
+    useGlossary,
+    context: context.slice(0, 800),
+  });
+  if (queueError || !queued) {
+    toast(queueError?.message || 'Перевод не поставлен в очередь.', 'error', 6000);
+    return;
+  }
+  toast('Файл в очереди.', 'success');
+  staged = null;
+  selectedKey = (queued.taskIds || [])[0] || '';
+  stageKey = '';
+  await refreshTasks();
+}
+
+function fileNameOf(path) {
+  const parts = String(path || '').split(/[\\/]/);
+  return parts[parts.length - 1] || String(path || 'Файл');
+}
+
+function stagePaths(paths) {
+  const list = [...paths].filter(Boolean);
+  if (!list.length) return;
+  quickTouched = true;
+  staged = { paths: list, names: list.map(fileNameOf), repeat: null };
+  selectedKey = '';
+  surface = 'file';
+  stageKey = '';
+  const host = document.getElementById('page-host');
+  if (!document.querySelector('.chat-stage-host')) {
+    if (host) render(host);
+    return;
+  }
+  paintList();
+  paintStage();
+}
+
+async function receiveFiles(fileList) {
   const files = [...fileList];
   if (!files.length) {
     toast('В переносе нет файла.', 'info');
@@ -966,17 +1019,17 @@ async function receiveFiles(fileList, projectId) {
     if (found) paths.push(found);
     else toast(`Не вижу путь к «${file.name}». Выберите его кнопкой «Файл».`, 'error');
   }
-  if (paths.length) await startFiles(paths, projectId || '');
+  if (paths.length) stagePaths(paths);
 }
 
-async function pickFiles(projectId) {
+async function pickFiles() {
   const [picked, error] = await tryCall('resolveImportPaths');
   if (error) {
     toast(error.message, 'error');
     return;
   }
   const paths = Array.isArray(picked) ? picked.filter(Boolean) : [];
-  if (paths.length) await startFiles(paths, projectId || '');
+  if (paths.length) stagePaths(paths);
 }
 
 async function translateDocument(documentId) {
@@ -1002,6 +1055,12 @@ async function translateDocument(documentId) {
 async function stopJob(job) {
   if (!job?.taskId) return;
   const [, error] = await tryCall('cancelTask', job.taskId);
+  if (error) toast(error.message, 'error');
+}
+
+async function resumeJob(job) {
+  if (!job?.taskId) return;
+  const [, error] = await tryCall('resumeTask', job.taskId);
   if (error) toast(error.message, 'error');
 }
 
@@ -1066,8 +1125,7 @@ function bindDrop(node, projectFromNode) {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
     clear();
-    const row = event.target?.closest?.('[data-drop-project]');
-    (row || node).classList.add('is-drop');
+    node.classList.add('is-drop');
   };
   node.addEventListener('dragenter', arm);
   node.addEventListener('dragover', arm);
@@ -1079,9 +1137,7 @@ function bindDrop(node, projectFromNode) {
     event.preventDefault();
     event.stopPropagation();
     clear();
-    const row = event.target?.closest?.('[data-drop-project]');
-    const projectId = row?.dataset.dropProject || projectFromNode() || '';
-    void receiveFiles(event.dataTransfer?.files || [], projectId);
+    void receiveFiles(event.dataTransfer?.files || []);
   });
 }
 
@@ -1096,23 +1152,22 @@ function openDeck(request) {
     onSaved(project) {
       releaseProjectDeck();
       store.set('activeProject', project);
-      focusKind = 'project';
+      focusKind = 'work';
       focusProjectId = project?.id || '';
-      sourceLang = project?.sourceLang || sourceLang;
-      targetLang = project?.targetLangs?.[0] || targetLang;
+      destinationProjectId = project?.title === 'Быстрые' ? '' : (project?.id || '');
+      surface = 'file';
+      if (project?.sourceLang) sourceLang = project.sourceLang;
+      if (project?.targetLangs?.[0]) targetLang = project.targetLangs[0];
       if (project?.modelId) modelId = project.modelId;
-      dialogId = newId();
-      thread = [];
-      attachments = [];
-      draft = '';
+      stageKey = '';
       const host = document.getElementById('page-host');
       if (host) render(host);
       void refreshProjects();
-      void refreshProjectDocs().then(() => paintLog());
     },
     onCancel() {
       releaseProjectDeck();
-      focusKind = focusProjectId ? 'project' : 'dialog';
+      focusKind = 'work';
+      stageKey = '';
       const workNode = document.querySelector('.chat-work');
       const deckNode = document.querySelector('.chat-deck');
       if (workNode) workNode.hidden = false;
@@ -1120,68 +1175,623 @@ function openDeck(request) {
         deckNode.hidden = true;
         deckNode.replaceChildren();
       }
+      paintStage();
     },
   });
 }
 
-function render(host) {
-  closeHelpMarks();
-  ensureWire();
-  const deckRequest = consumeDeckRequest();
-  const pendingFocus = window.DL?.focusProjectId || '';
-  if (window.DL) window.DL.focusProjectId = '';
-  if (deckRequest || pendingFocus) holdBootDialog = true;
+const STATUS_LABELS = {
+  queued: 'В очереди',
+  running: 'Идёт',
+  paused: 'Пауза',
+  complete: 'Готово',
+  failed: 'Ошибка',
+  cancelled: 'Отменено',
+  interrupted: 'Прервано',
+  saved: 'Файл',
+};
+
+const FORMAT_BY_EXT = {
+  txt: ['.txt', '.md'],
+  md: ['.md', '.txt'],
+  markdown: ['.md', '.txt'],
+  docx: ['.docx', '.txt', '.md'],
+  epub: ['.epub', '.txt', '.md'],
+  pdf: ['.md', '.txt', '.pdf'],
+};
+
+const FORMAT_LABEL = {
+  '.txt': 'Текст',
+  '.md': 'Markdown',
+  '.docx': 'DOCX',
+  '.epub': 'EPUB',
+  '.pdf': 'PDF',
+};
+
+function takeQuickMemory() {
+  if (quickReady || !store.get('translateReady')) return false;
+  quickReady = true;
+  if (quickTouched) return false;
+  const source = store.get('translateSource');
+  const target = store.get('translateTarget');
+  const suffix = store.get('translateSuffix');
+  const savedModel = store.get('translateModel');
+  const tone = store.get('translateContext');
+  const glossary = store.get('translateGlossary');
+  const savedSurface = store.get('translateSurface');
+  if (source) sourceLang = source;
+  if (target) targetLang = target;
+  if (typeof suffix === 'string') outputSuffix = suffix;
+  if (savedModel) modelId = savedModel;
+  if (typeof tone === 'string') context = tone;
+  if (typeof glossary === 'boolean') useGlossary = glossary;
+  if (savedSurface === 'text' || savedSurface === 'file') surface = savedSurface;
+  return true;
+}
+
+function rememberQuick() {
+  clearTimeout(rememberTimer);
+  rememberTimer = window.setTimeout(() => {
+    void call('setPreferences', {
+      translate_source: sourceLang,
+      translate_target: targetLang,
+      translate_suffix: outputSuffix,
+      translate_model: modelId,
+      translate_context: context.slice(0, 800),
+      translate_glossary: useGlossary,
+      translate_surface: surface,
+    }).catch(() => {});
+  }, 200);
+}
+
+function touchQuick() {
+  quickTouched = true;
+  rememberQuick();
+}
+
+function normalizeModel() {
   const models = installedModels();
   if (!modelId || !models.some((model) => model.id === modelId)) {
     modelId = models[0]?.id || '';
   }
-  const model = currentModel();
-  const codes = model?.languageCodes || [];
+  const codes = currentModel()?.languageCodes || [];
   if (targetLang !== 'auto' && codes.length && !codes.includes(targetLang)) {
     targetLang = codes.includes('ru') ? 'ru' : codes[0];
   }
-  if (!dialogId) dialogId = newId();
-  listHidden = Boolean(store.get('chatListHidden'));
+  if (sourceLang !== 'auto' && codes.length && !codes.includes(sourceLang)) {
+    sourceLang = 'auto';
+  }
+}
 
-  const modelSelect = el('select', {
-    class: 'select',
-    onChange: (event) => {
-      modelId = event.target.value;
-      if (focusKind === 'project') queueProjectSave();
-      render(host);
-    },
-  }, models.map((item) => el('option', { value: item.id, text: item.name })));
-  modelSelect.value = modelId;
+async function refreshTasks() {
+  const [rows] = await tryCall('listTasks');
+  const next = Array.isArray(rows) ? rows : [];
+  next.sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(
+    String(a.updatedAt || a.createdAt || ''),
+  ));
+  tasks = next;
+  if (selectedKey && !tasks.some((item) => item.taskId === selectedKey)) selectedKey = '';
+  paintList();
+  if (surface === 'file') paintStage();
+}
 
-  const sourceSelect = el('select', {
+function formatWhen(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function pairOf(task) {
+  const source = task?.sourceLang ? langLabel(task.sourceLang) : '';
+  const target = task?.targetLang ? langLabel(task.targetLang) : '';
+  if (source && target) return `${source} → ${target}`;
+  return target;
+}
+
+function progressText(task) {
+  if (!task || !(task.total > 0)) return '';
+  if (!['running', 'paused', 'queued'].includes(task.status)) return '';
+  return `${task.completed}/${task.total}`;
+}
+
+function paintList() {
+  const list = document.querySelector('.chat-dialogs__list');
+  if (!list) return;
+  const query = taskQuery.trim().toLowerCase();
+  if (surface === 'text') {
+    const rows = dialogs.filter((item) => !query || String(item.title || '').toLowerCase().includes(query));
+    list.replaceChildren(...(rows.length
+      ? rows.map((item) => dialogRow(item))
+      : [el('p', {
+        class: 'chat-empty',
+        text: query ? 'Ничего не нашлось.' : 'Короткий текст появится здесь.',
+      })]));
+    return;
+  }
+  const rows = tasks.filter((task) => {
+    if (!query) return true;
+    const blob = `${task.documentName || ''} ${task.projectTitle || ''}`.toLowerCase();
+    return blob.includes(query);
+  });
+  list.replaceChildren(...(rows.length
+    ? rows.map((task) => taskRow(task))
+    : [el('p', {
+      class: 'chat-empty',
+      text: query ? 'Ничего не нашлось.' : 'Задач пока нет. Бросьте файл справа.',
+    })]));
+}
+
+function taskRow(task) {
+  const selected = !staged && task.taskId === selectedKey;
+  const status = STATUS_LABELS[task.status] || task.status || '';
+  const projectBit = task.projectTitle && task.projectTitle !== 'Быстрые' ? task.projectTitle : '';
+  const meta = [pairOf(task), projectBit, status, progressText(task), formatWhen(task.updatedAt || task.createdAt)]
+    .filter(Boolean)
+    .join(' · ');
+  return el('div', { class: `chat-dialog${selected ? ' is-selected' : ''}` }, [
+    el('button', {
+      type: 'button',
+      class: 'chat-dialog__open',
+      title: task.documentName || 'Файл',
+      onClick: () => {
+        staged = null;
+        selectedKey = task.taskId;
+        stageKey = '';
+        paintList();
+        paintStage();
+      },
+    }, [
+      el('span', { class: 'chat-dialog__title', text: task.documentName || 'Файл' }),
+      el('span', { class: 'chat-dialog__meta' }, [
+        el('span', { class: 'task-status', dataset: { status: task.status || '' }, text: meta }),
+      ]),
+    ]),
+  ]);
+}
+
+function stageViewKey() {
+  if (staged) {
+    const kind = staged.repeat ? 'repeat' : 'new';
+    return `sheet:${staged.names.join('\n')}:${modelId}:${destinationProjectId}:${kind}`;
+  }
+  if (selectedKey) {
+    const task = tasks.find((item) => item.taskId === selectedKey);
+    return `task:${selectedKey}:${task?.status || ''}:${task?.files?.[0]?.path || ''}`;
+  }
+  return `drop:${destinationProjectId}:${modelId}`;
+}
+
+function paintStage() {
+  const node = document.querySelector('.chat-stage-host');
+  if (!node || surface !== 'file' || focusKind === 'deck') return;
+  const key = stageViewKey();
+  if (key === stageKey && node.childElementCount) {
+    paintStageLive();
+    return;
+  }
+  stageKey = key;
+  const view = staged ? settingsSheet() : (selectedKey ? taskDetail() : dropWell());
+  node.replaceChildren(view);
+}
+
+function paintStageLive() {
+  if (staged) return;
+  const task = tasks.find((item) => item.taskId === selectedKey);
+  if (!task) return;
+  const live = document.querySelector('[data-live-progress]');
+  if (live) live.textContent = progressText(task);
+  const fill = document.querySelector('.work-file__fill');
+  if (fill && task.total > 0) {
+    const width = Math.min(100, Math.round((task.completed / task.total) * 100));
+    fill.style.width = `${width}%`;
+  }
+}
+
+function destinationValue() {
+  const project = projects.find((item) => item.id === destinationProjectId);
+  if (!project || project.title === 'Быстрые') return '';
+  return destinationProjectId;
+}
+
+function projectChoices() {
+  return [
+    el('option', { value: '', text: 'Быстрые' }),
+    ...projects
+      .filter((item) => item.title !== 'Быстрые')
+      .map((item) => el('option', { value: item.id, text: item.title || 'Проект' })),
+  ];
+}
+
+function paintProjectChoices() {
+  const select = document.querySelector('[data-project-select]');
+  if (!(select instanceof HTMLSelectElement)) return;
+  const value = destinationValue();
+  select.replaceChildren(...projectChoices());
+  if ([...select.options].some((option) => option.value === value)) select.value = value;
+}
+
+function destinationLine() {
+  const project = projects.find((item) => item.id === destinationValue());
+  if (!project) return 'Сохранится в «Быстрые».';
+  return `Сохранится в «${project.title}».`;
+}
+
+function extOf(name) {
+  const match = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+  return match ? match[1] : '';
+}
+
+function sharedSuffixes(names) {
+  const sets = names.map((name) => new Set(FORMAT_BY_EXT[extOf(name)] || ['.txt', '.md']));
+  if (!sets.length) return [];
+  return [...sets[0]].filter((suffix) => sets.every((set) => set.has(suffix)));
+}
+
+function dropWell() {
+  return el('div', { class: 'dropwell' }, [
+    el('p', { class: 'dropwell__title', text: 'Перетащите документ' }),
+    el('p', {
+      class: 'dropwell__hint',
+      text: 'TXT, Markdown, DOCX, EPUB или PDF с текстом. После выбора откроются язык, формат и модель. Оригинал не меняется.',
+    }),
+    el('div', { class: 'dropwell__actions' }, [
+      button({ label: 'Выбрать файл', variant: 'primary', onClick: () => void pickFiles() }),
+      button({
+        label: 'Новый проект',
+        title: 'Название, языки и свой глоссарий',
+        onClick: () => requestProjectDeck({ mode: 'new' }),
+      }),
+    ]),
+    el('p', { class: 'sheet__where', text: destinationLine() }),
+  ]);
+}
+
+function sourceControl(onChange) {
+  const codes = currentModel()?.languageCodes || [];
+  const select = el('select', {
     class: 'select',
+    ariaLabel: 'Язык оригинала',
     onChange: (event) => {
       sourceLang = event.target.value;
-      if (focusKind === 'project') queueProjectSave();
+      onChange?.();
     },
   }, [
     el('option', { value: 'auto', text: 'Авто' }),
     ...codes.map((code) => el('option', { value: code, text: langLabel(code) })),
   ]);
-  sourceSelect.value = sourceLang === 'auto' || codes.includes(sourceLang) ? sourceLang : 'auto';
+  select.value = sourceLang === 'auto' || codes.includes(sourceLang) ? sourceLang : 'auto';
+  sourceLang = select.value;
+  return select;
+}
 
-  const targetSelect = el('select', {
+function targetControl(onChange) {
+  const codes = currentModel()?.languageCodes || [];
+  const select = el('select', {
     class: 'select',
+    ariaLabel: 'Язык перевода',
     onChange: (event) => {
       targetLang = event.target.value;
-      if (focusKind === 'project') queueProjectSave();
-      void refreshMeter();
+      onChange?.();
     },
   }, codes.map((code) => el('option', { value: code, text: langLabel(code) })));
-  if (codes.includes(targetLang)) targetSelect.value = targetLang;
+  if (codes.includes(targetLang)) select.value = targetLang;
+  return select;
+}
 
+function modelControl(onChange) {
+  const models = installedModels();
+  const select = el('select', {
+    class: 'select',
+    ariaLabel: 'Модель',
+    onChange: (event) => {
+      modelId = event.target.value;
+      normalizeModel();
+      onChange?.();
+    },
+  }, models.map((item) => el('option', { value: item.id, text: item.name })));
+  select.value = modelId;
+  return select;
+}
+
+function settingsSheet() {
+  const names = staged?.names || [];
+  const models = installedModels();
+  const suffixes = sharedSuffixes(names);
+  if (outputSuffix && !suffixes.includes(outputSuffix)) outputSuffix = '';
+  const title = names.length > 1 ? filesLabel(names.length) : (names[0] || 'Файл');
+  const formatSelect = el('select', {
+    class: 'select',
+    ariaLabel: 'Формат файла',
+    onChange: (event) => {
+      outputSuffix = event.target.value;
+      touchQuick();
+    },
+  }, [
+    el('option', { value: '', text: 'Как у файла' }),
+    ...suffixes.map((suffix) => el('option', { value: suffix, text: FORMAT_LABEL[suffix] || suffix })),
+  ]);
+  formatSelect.value = outputSuffix;
+  const projectSelect = el('select', {
+    class: 'select',
+    dataset: { projectSelect: '1' },
+    ariaLabel: 'Куда сохранить',
+    onChange: (event) => {
+      destinationProjectId = event.target.value;
+      stageKey = '';
+      paintStage();
+    },
+  }, projectChoices());
+  projectSelect.value = destinationValue();
+  const tone = el('textarea', {
+    class: 'textarea',
+    rows: 3,
+    placeholder: 'Предмет, тон, как обращаться с именами…',
+    onInput: (event) => {
+      context = event.target.value;
+      touchQuick();
+    },
+  });
+  tone.value = context;
+  const repeatProject = staged?.repeat
+    ? projects.find((item) => item.id === staged.repeat.projectId)
+    : null;
+  return el('div', { class: 'sheet' }, [
+    el('div', { class: 'sheet__head' }, [
+      el('div', {}, [
+        el('p', { class: 'sheet__kicker', text: staged?.repeat ? 'Ещё раз' : 'Новый перевод' }),
+        el('h2', { class: 'sheet__title', text: title }),
+        names.length > 1
+          ? el('p', { class: 'sheet__names', text: names.join(', ') })
+          : null,
+      ]),
+      button({
+        label: 'Убрать',
+        size: 'sm',
+        onClick: () => {
+          staged = null;
+          stageKey = '';
+          paintList();
+          paintStage();
+        },
+      }),
+    ]),
+    models.length
+      ? el('div', { class: 'sheet__grid' }, [
+        field('Оригинал', sourceControl(() => touchQuick()), '«Авто» само определяет язык. Если он известен, выберите его.'),
+        field('Перевод', targetControl(() => touchQuick())),
+        field(
+          'Формат',
+          formatSelect,
+          'Как у файла сохраняет привычный вид. Обычный PDF приходит как Markdown. Книжный PDF может вернуться PDF.',
+        ),
+        field('Модель', modelControl(() => {
+          touchQuick();
+          stageKey = '';
+          paintStage();
+        })),
+        staged?.repeat
+          ? field('Куда', el('p', {
+            class: 'sheet__where',
+            text: repeatProject?.title || 'Тот же проект',
+          }))
+          : field('Куда', projectSelect),
+      ])
+      : el('div', { class: 'chat-missing' }, [
+        el('p', { text: 'Чтобы переводить, скачайте локальную модель.' }),
+        button({ label: 'К моделям', variant: 'primary', onClick: () => router.showPage('models') }),
+      ]),
+    el('details', { class: 'sheet__more', open: Boolean(context.trim()) }, [
+      el('summary', {}, ['Ещё']),
+      el('div', { class: 'sheet__more-body' }, [
+        field('Тон', tone, 'Необязательно. Уходит вместе с текстом, до 800 знаков.'),
+        el('label', { class: 'sheet__check' }, [
+          el('input', {
+            type: 'checkbox',
+            checked: useGlossary,
+            onChange: (event) => {
+              useGlossary = event.target.checked;
+              touchQuick();
+            },
+          }),
+          el('span', { text: 'Брать термины глоссария' }),
+          helpMark('Термины проекта, куда сохранится перевод. Список правится на вкладке «Глоссарий».'),
+        ]),
+        el('p', { class: 'sheet__kicker', text: 'Этот файл раньше' }),
+        priorBlock(names),
+      ]),
+    ]),
+    el('div', { class: 'sheet__actions' }, [
+      el('p', { class: 'sheet__where', text: staged?.repeat ? 'Тот же документ, новые настройки.' : destinationLine() }),
+      models.length
+        ? button({
+          label: committing ? 'Ставим в очередь…' : 'Перевести',
+          variant: 'primary',
+          disabled: committing,
+          onClick: (event) => {
+            event.currentTarget.disabled = true;
+            void commitSheet();
+          },
+        })
+        : null,
+    ]),
+  ]);
+}
+
+function priorBlock(names) {
+  const wanted = new Set(names.map((name) => name.toLowerCase()));
+  const prior = tasks
+    .filter((task) => wanted.has(String(task.documentName || '').toLowerCase()))
+    .slice(0, 6);
+  if (!prior.length) {
+    return el('p', { class: 'sheet__where', text: 'Файла с таким именем ещё не переводили.' });
+  }
+  return el('div', { class: 'prior' }, prior.map((task) => el('div', { class: 'prior__row' }, [
+    el('span', {
+      class: 'prior__meta',
+      text: [pairOf(task), STATUS_LABELS[task.status] || task.status, formatWhen(task.updatedAt)].filter(Boolean).join(' · '),
+    }),
+    button({
+      label: 'Открыть',
+      size: 'sm',
+      onClick: () => {
+        staged = null;
+        selectedKey = task.taskId;
+        stageKey = '';
+        paintList();
+        paintStage();
+      },
+    }),
+  ])));
+}
+
+async function commitSheet() {
+  if (!staged || committing) return;
+  committing = true;
+  touchQuick();
+  const current = staged;
+  try {
+    if (current.repeat) await startExisting(current.repeat);
+    else await startFiles(current.paths || [], destinationProjectId);
+  } finally {
+    committing = false;
+    const action = document.querySelector('.sheet__actions .btn--primary');
+    if (action && staged) action.disabled = false;
+  }
+}
+
+function stageRepeat(task) {
+  touchQuick();
+  if (task.sourceLang) sourceLang = task.sourceLang;
+  if (task.targetLang) targetLang = task.targetLang;
+  if (task.modelId) modelId = task.modelId;
+  if (typeof task.outputSuffix === 'string') outputSuffix = task.outputSuffix;
+  if (typeof task.useGlossary === 'boolean') useGlossary = task.useGlossary;
+  normalizeModel();
+  staged = {
+    names: [task.documentName || 'Файл'],
+    repeat: {
+      documentId: task.documentId,
+      projectId: task.projectId,
+      name: task.documentName || 'Файл',
+    },
+  };
+  selectedKey = '';
+  surface = 'file';
+  stageKey = '';
+  paintList();
+  paintStage();
+}
+
+function taskDetail() {
+  const task = tasks.find((item) => item.taskId === selectedKey);
+  if (!task) return dropWell();
+  const file = (task.files || []).find((item) => item?.path);
+  const real = task.taskId && !String(task.taskId).startsWith('export:');
+  const actions = [];
+  if (real && ['running', 'queued', 'paused'].includes(task.status)) {
+    actions.push(button({ label: 'Стоп', size: 'sm', onClick: () => void stopJob({ taskId: task.taskId }) }));
+  }
+  if (real && ['paused', 'interrupted', 'failed', 'cancelled'].includes(task.status)) {
+    actions.push(button({
+      label: 'Продолжить',
+      size: 'sm',
+      variant: 'primary',
+      onClick: () => void resumeJob({ taskId: task.taskId }),
+    }));
+  }
+  if (file?.path) actions.push(...resultFileActions(file));
+  else if (real && (task.status === 'complete' || task.status === 'failed')) {
+    actions.push(button({
+      label: 'Собрать файл',
+      size: 'sm',
+      onClick: () => void assembleResult(task).then(() => refreshTasks()),
+    }));
+  }
+  if (task.documentId && task.projectId) {
+    actions.push(button({ label: 'Ещё раз', size: 'sm', onClick: () => stageRepeat(task) }));
+  }
+  actions.push(button({ label: 'Проверка', size: 'sm', onClick: () => router.showPage('review') }));
+  const width = task.total > 0 ? Math.min(100, Math.round((task.completed / task.total) * 100)) : 0;
+  const projectBit = task.projectTitle ? task.projectTitle : '';
+  return el('article', { class: 'sheet' }, [
+    el('p', { class: 'sheet__kicker', text: STATUS_LABELS[task.status] || 'Задача' }),
+    el('h2', { class: 'sheet__title', text: task.documentName || 'Файл' }),
+    el('p', {
+      class: 'sheet__where',
+      text: [pairOf(task), projectBit, formatWhen(task.updatedAt || task.createdAt)].filter(Boolean).join(' · '),
+    }),
+    progressText(task)
+      ? el('p', { class: 'sheet__where', dataset: { liveProgress: '1' }, text: progressText(task) })
+      : null,
+    task.total > 0
+      ? el('div', { class: 'work-file__track', ariaHidden: 'true' }, [
+        el('div', { class: 'work-file__fill', style: { width: `${width}%` } }),
+      ])
+      : null,
+    task.error ? el('p', { class: 'sheet__error', text: task.error }) : null,
+    file?.note ? el('p', { class: 'sheet__where', text: file.note }) : null,
+    actions.length ? el('div', { class: 'work-file__actions' }, actions) : null,
+    button({
+      label: 'Новый файл',
+      size: 'sm',
+      onClick: () => {
+        selectedKey = '';
+        stageKey = '';
+        paintList();
+        paintStage();
+      },
+    }),
+  ]);
+}
+
+function topBar(host) {
+  return el('div', { class: 'chat-bar chat-bar--top' }, [
+    el('button', {
+      type: 'button',
+      class: 'btn btn--sm chat-list-show',
+      hidden: !listHidden,
+      title: 'Показать список',
+      text: 'Список',
+      onClick: () => setListHidden(false),
+    }),
+    el('div', { class: 'chat-modes', role: 'tablist', ariaLabel: 'Что переводим' }, [
+      surfaceButton('file', 'Файл', host),
+      surfaceButton('text', 'Текст', host),
+    ]),
+  ]);
+}
+
+function surfaceButton(value, label, host) {
+  return el('button', {
+    class: `chat-mode${surface === value ? ' is-selected' : ''}`,
+    type: 'button',
+    role: 'tab',
+    ariaSelected: surface === value ? 'true' : 'false',
+    onClick: () => {
+      if (surface === value) return;
+      surface = value;
+      touchQuick();
+      render(host);
+    },
+  }, [label]);
+}
+
+function textBody(host) {
+  const models = installedModels();
+  const model = currentModel();
+  const log = el('div', { class: 'chat-log', role: 'log', tabindex: '0' });
+  bindLog(log);
   const input = el('textarea', {
     class: 'textarea chat-input',
     rows: 3,
     title: 'Enter отправляет, Shift+Enter переносит строку',
-    placeholder: focusKind === 'project'
-      ? 'Фрагмент для этого проекта. Файл можно бросить сюда.'
-      : (mode === 'ask' ? 'Сообщение…' : 'Фрагмент или бросьте файл…'),
+    placeholder: mode === 'ask' ? 'Сообщение…' : 'Фрагмент для перевода…',
     onInput: (event) => {
       draft = event.target.value;
       paintSend();
@@ -1195,51 +1805,176 @@ function render(host) {
     },
   });
   input.value = draft;
-
-  const contextInput = el('textarea', {
+  const tone = el('textarea', {
     class: 'textarea',
     rows: 2,
-    placeholder: 'Необязательно: предмет, тон, как обращаться с именами…',
+    placeholder: 'Предмет, тон, как обращаться с именами…',
     onInput: (event) => {
       context = event.target.value;
+      touchQuick();
       queueMeter();
     },
   });
-  contextInput.value = context;
-
-  const log = el('div', { class: 'chat-log', role: 'log', tabindex: '0' });
-  bindLog(log);
-
+  tone.value = context;
   const hyNote = mode === 'ask' && model?.promptStyle === 'hy-mt2'
     ? el('p', {
-        class: 'chat-note',
-        text: 'Эта модель обучена переводить. В общении она может пересказать фразу, а не поддержать разговор.',
-      })
+      class: 'chat-note',
+      text: 'Эта модель обучена переводить. В общении она может пересказать фразу, а не поддержать разговор.',
+    })
     : null;
+  return el('div', { class: 'text-work' }, [
+    el('p', { class: 'chat-private', hidden: !incognito, text: 'Этот диалог не сохранится.' }),
+    el('div', { class: 'chat-stage' }, [
+      log,
+      el('button', {
+        type: 'button',
+        class: 'chat-jump',
+        hidden: true,
+        text: 'Вниз',
+        onClick: () => {
+          stick = true;
+          scrollLog();
+        },
+      }),
+    ]),
+    el('form', {
+      class: 'chat-composer',
+      onSubmit: (event) => {
+        event.preventDefault();
+        void send();
+      },
+    }, [
+      el('div', { class: 'chat-meter-row' }, [
+        el('div', { class: 'chat-meter-track', ariaHidden: 'true' }, [
+          el('div', { class: 'chat-meter__fill' }),
+        ]),
+        el('div', { class: 'chat-meter-line' }, [
+          el('p', { class: 'chat-meter', text: meterNote }),
+          helpMark('Оценка, сколько контекста модели уже занято. Это не ход перевода.'),
+        ]),
+      ]),
+      models.length && mode === 'translate'
+        ? el('div', { class: 'sheet__grid' }, [
+          field('Оригинал', sourceControl(() => touchQuick())),
+          field('Перевод', targetControl(() => {
+            touchQuick();
+            void refreshMeter();
+          })),
+          field('Модель', modelControl(() => {
+            touchQuick();
+            render(host);
+          })),
+        ])
+        : null,
+      models.length && mode === 'ask'
+        ? field('Модель', modelControl(() => {
+          touchQuick();
+          render(host);
+        }))
+        : null,
+      models.length
+        ? null
+        : el('div', { class: 'chat-missing' }, [
+          el('p', { text: 'Чтобы переводить, скачайте локальную модель.' }),
+          button({ label: 'К моделям', variant: 'primary', onClick: () => router.showPage('models') }),
+        ]),
+      el('div', { class: 'chat-mode-wrap' }, [
+        el('div', { class: 'chat-modes', role: 'radiogroup', ariaLabel: 'Режим текста' }, [
+          modeButton('translate', 'Перевод', host),
+          modeButton('ask', 'Общение', host),
+        ]),
+        el('button', {
+          type: 'button',
+          class: `btn btn--sm chat-incognito${incognito ? ' is-selected' : ''}`,
+          ariaPressed: incognito ? 'true' : 'false',
+          title: 'Не записывать этот диалог на диск',
+          text: 'Инкогнито',
+          onClick: () => setIncognito(!incognito),
+        }),
+      ]),
+      hyNote,
+      el('details', { class: 'chat-context', open: Boolean(context.trim()) }, [
+        el('summary', {}, [
+          'Тон',
+          helpMark('Необязательно. Предмет, тон и имена уходят в запрос вместе с текстом, до 800 знаков.'),
+        ]),
+        tone,
+      ]),
+      el('div', { class: 'chat-files' }),
+      input,
+      el('div', { class: 'chat-composer__row' }, [
+        el('span', { class: 'chat-counter', text: `${draft.length} / ${TEXT_LIMIT}` }),
+        el('div', { class: 'chat-composer__actions' }, [
+          button({
+            label: 'Документ',
+            title: 'Перевести файл целиком',
+            onClick: () => void pickFiles(),
+          }),
+          button({
+            label: 'Как текст',
+            size: 'sm',
+            title: 'Короткая выдержка из файла в сообщение, без сборки документа',
+            onClick: () => void attachFiles(),
+          }),
+          el('button', {
+            class: 'btn btn--primary chat-send',
+            type: 'submit',
+            disabled: !draft.trim() && attachments.length === 0 && !sending,
+          }, [sending ? 'Стоп' : 'Отправить']),
+        ]),
+      ]),
+    ]),
+  ]);
+}
+
+function render(host) {
+  closeHelpMarks();
+  ensureWire();
+  const deckRequest = consumeDeckRequest();
+  const pendingFocus = window.DL?.focusProjectId || '';
+  if (window.DL) window.DL.focusProjectId = '';
+  if (deckRequest || pendingFocus) holdBootDialog = true;
+  takeQuickMemory();
+  normalizeModel();
+  if (!dialogId) dialogId = newId();
+  listHidden = Boolean(store.get('chatListHidden'));
+  stageKey = '';
 
   const chat = el('div', {
     class: `chat${listHidden ? ' is-list-hidden' : ''}`,
     dataset: { stack: 'col' },
   }, [
-    el('aside', { class: 'chat-dialogs', ariaLabel: 'Проекты и диалоги' }, [
+    el('aside', { class: 'chat-dialogs', ariaLabel: surface === 'text' ? 'Диалоги' : 'Задачи' }, [
       el('div', { class: 'chat-dialogs__head' }, [
-        el('p', { class: 'chat-dialogs__label', text: 'Перевод' }),
+        el('p', { class: 'chat-dialogs__label', text: surface === 'text' ? 'Диалоги' : 'Задачи' }),
         el('div', { class: 'chat-dialogs__actions' }, [
           button({
             label: 'Скрыть',
             size: 'sm',
-            title: 'Скрыть список и отдать место ленте',
+            title: 'Скрыть список',
             onClick: () => setListHidden(true),
           }),
-          button({ label: 'Диалог', size: 'sm', title: 'Новый диалог без файла', onClick: () => void startNew() }),
-          button({
-            label: 'Проект',
-            size: 'sm',
-            title: 'Новый проект: название, языки, модель',
-            onClick: () => requestProjectDeck({ mode: 'new' }),
-          }),
+          surface === 'text'
+            ? button({ label: 'Новый', size: 'sm', title: 'Новый диалог', onClick: () => void startNew() })
+            : button({
+              label: 'Проект',
+              size: 'sm',
+              title: 'Новый проект: название, языки, модель',
+              onClick: () => requestProjectDeck({ mode: 'new' }),
+            }),
         ]),
       ]),
+      el('input', {
+        class: 'input task-search',
+        type: 'search',
+        placeholder: 'Найти',
+        value: taskQuery,
+        ariaLabel: 'Найти в списке',
+        onInput: (event) => {
+          taskQuery = event.target.value;
+          paintList();
+        },
+      }),
       el('div', { class: 'chat-dialogs__list' }),
     ]),
     el('div', {
@@ -1252,146 +1987,8 @@ function render(host) {
     el('div', { class: 'chat-main' }, [
       el('div', { class: 'chat-deck', hidden: true }),
       el('div', { class: 'chat-work' }, [
-      el('div', { class: 'chat-bar' }, [
-        el('button', {
-          type: 'button',
-          class: 'btn btn--sm chat-list-show',
-          hidden: !listHidden,
-          title: 'Показать проекты и диалоги',
-          text: 'Список',
-          onClick: () => setListHidden(false),
-        }),
-        el('button', {
-          type: 'button',
-          class: 'work-tune-toggle',
-          ariaExpanded: tuneOpen ? 'true' : 'false',
-          title: 'Языки, модель и редкие настройки',
-          text: tuneText(),
-          onClick: () => {
-            tuneOpen = !tuneOpen;
-            const panel = document.querySelector('.work-tune');
-            const toggle = document.querySelector('.work-tune-toggle');
-            if (panel) panel.hidden = !tuneOpen;
-            if (toggle) toggle.setAttribute('aria-expanded', tuneOpen ? 'true' : 'false');
-          },
-        }),
-        el('div', { class: 'work-tune', hidden: !tuneOpen }, [
-          el('button', {
-            type: 'button',
-            class: `btn btn--sm chat-incognito${incognito ? ' is-selected' : ''}`,
-            ariaPressed: incognito ? 'true' : 'false',
-            title: 'Не записывать этот диалог на диск',
-            text: 'Инкогнито',
-            onClick: () => setIncognito(!incognito),
-          }),
-          el('div', { class: 'chat-mode-wrap' }, [
-            el('div', { class: 'chat-modes', role: 'radiogroup', ariaLabel: 'Режим' }, [
-              modeButton('translate', 'Перевод', host),
-              modeButton('ask', 'Общение', host),
-            ]),
-            helpMark(
-              '«Перевод» берёт фрагмент и пару языков. «Общение» отвечает на сообщение. Модель, обученная переводить, может просто пересказать фразу.',
-            ),
-          ]),
-          models.length
-            ? field('Модель', modelSelect)
-            : el('div', { class: 'chat-missing' }, [
-                el('p', { text: 'Чтобы переводить, скачайте локальную модель.' }),
-                button({
-                  label: 'К моделям',
-                  variant: 'primary',
-                  onClick: () => router.showPage('models'),
-                }),
-              ]),
-          mode === 'translate' && models.length
-            ? field(
-              'Оригинал',
-              sourceSelect,
-              '«Авто» не называет язык оригинала. Если он известен, выберите его в списке.',
-            )
-            : null,
-          mode === 'translate' && models.length ? field('Перевод', targetSelect) : null,
-          focusKind === 'project'
-            ? button({
-              label: 'Настроить проект',
-              size: 'sm',
-              onClick: () => requestProjectDeck({ mode: 'existing', projectId: focusProjectId }),
-            })
-            : null,
-          focusKind === 'project'
-            ? button({ label: 'Документы', size: 'sm', onClick: () => router.showPage('documents') })
-            : null,
-          focusKind === 'project'
-            ? button({ label: 'Проверка', size: 'sm', onClick: () => router.showPage('review') })
-            : null,
-          button({
-            label: 'Как текст',
-            size: 'sm',
-            title: 'Короткая выдержка из файла в сообщение, без сборки документа',
-            onClick: () => void attachFiles(),
-          }),
-          hyNote,
-        ]),
-      ]),
-      el('p', {
-        class: 'chat-private',
-        hidden: !incognito,
-        text: 'Этот диалог не сохранится.',
-      }),
-      el('div', { class: 'chat-stage' }, [
-        log,
-        el('button', {
-          type: 'button',
-          class: 'chat-jump',
-          hidden: true,
-          text: 'Вниз',
-          onClick: () => {
-            stick = true;
-            scrollLog();
-          },
-        }),
-      ]),
-      el('form', {
-            class: 'chat-composer',
-            onSubmit: (event) => {
-              event.preventDefault();
-              void send();
-            },
-          }, [
-            el('div', { class: 'chat-meter-row' }, [
-              el('div', { class: 'chat-meter-track', ariaHidden: 'true' }, [
-                el('div', { class: 'chat-meter__fill' }),
-              ]),
-              el('div', { class: 'chat-meter-line' }, [
-                el('p', { class: 'chat-meter', text: meterNote }),
-                helpMark('Оценка, сколько контекста модели уже занято. Это не ход перевода.'),
-              ]),
-            ]),
-            el('details', { class: 'chat-context' }, [
-              el('summary', {}, [
-                'Контекст для тона',
-                helpMark('Необязательно. Предмет, тон и имена уходят в запрос вместе с текстом, до 800 знаков.'),
-              ]),
-              contextInput,
-            ]),
-            el('div', { class: 'chat-files' }),
-            input,
-            el('div', { class: 'chat-composer__row' }, [
-              el('span', { class: 'chat-counter', text: `${draft.length} / ${TEXT_LIMIT}` }),
-              el('div', { class: 'chat-composer__actions' }, [
-                button({
-                  label: 'Файл',
-                  title: 'Перевести файл и вернуть его в том же формате',
-                  onClick: () => void pickFiles(focusKind === 'project' ? focusProjectId : ''),
-                }),
-                el('button', {
-                  class: 'btn btn--primary chat-send',
-                  type: 'submit',
-                  disabled: !draft.trim() && attachments.length === 0 && !sending,
-                }, [sending ? 'Стоп' : 'Отправить']),
-              ]),
-            ]),
-          ]),
+        topBar(host),
+        surface === 'text' ? textBody(host) : el('div', { class: 'chat-stage-host' }),
       ]),
     ]),
   ]);
@@ -1399,16 +1996,20 @@ function render(host) {
   bindChatSplit(chat);
   const list = chat.querySelector('.chat-dialogs__list');
   const work = chat.querySelector('.chat-work');
-  if (list) bindDrop(list, () => '');
-  if (work) {
-    bindDrop(work, () => (focusKind === 'project' ? focusProjectId : ''));
+  if (list) bindDrop(list);
+  if (work) bindDrop(work);
+  paintList();
+  if (surface === 'text') {
+    paintLog();
+    paintFiles();
+    paintSend();
+    void refreshMeter();
+  } else {
+    paintStage();
   }
-  paintDialogs();
-  paintLog();
-  paintFiles();
   void refreshProjects();
   void loadDialogs();
-  void refreshMeter();
+  void refreshTasks();
   if (deckRequest) openDeck(deckRequest);
   else if (pendingFocus) void focusProject(pendingFocus);
 }
@@ -1607,9 +2208,9 @@ window.addEventListener('dl-focus-project', (event) => {
 
 router.registerPage('chat', {
   title: 'Перевод',
-  subtitle: 'Текст, файл или проект',
-  help: 'Напишите фрагмент или бросьте файл. Файл без выбранного проекта попадает в «Быстрые» и возвращается в том же формате. Книжный PDF возвращается PDF: заменяется текст, картинки остаются. Прочий PDF приходит как Markdown. Языки и модель открываются строкой под полем. Здесь лимит фрагмента '
-    + `${TEXT_LIMIT} знаков.`,
+  subtitle: 'Файл или короткий текст',
+  help: 'Бросьте документ или нажмите «Выбрать файл». Дальше язык, формат и модель. Последний выбор запоминается. «Текст» переводит фрагмент до '
+    + `${TEXT_LIMIT} знаков. Проект со своим глоссарием открывается кнопкой «Проект».`,
   layout: 'chat',
   render,
   destroy,

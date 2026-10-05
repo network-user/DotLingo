@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -16,7 +18,7 @@ import webview
 from webview.dom import _dnd_state
 
 from dotlingo.dialogs import delete_dialog, list_dialogs, load_dialog, read_attachment, save_dialog
-from dotlingo.formats import export_document
+from dotlingo.formats import DocumentError, export_document
 from dotlingo.hardware import (
     HardwareSnapshot,
     assess_model,
@@ -94,6 +96,13 @@ SAME_FORMAT_SUFFIX = {
 }
 
 
+def _pref_code(value: Any, fallback: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text or len(text) > 16 or not text.replace("-", "").isalnum():
+        return fallback
+    return text
+
+
 def _layout_span(value: Any, low: int, high: int, fallback: int) -> int:
     try:
         number = int(value)
@@ -127,24 +136,84 @@ def _safe_stem(name: str) -> str:
     return cleaned[:80] or "translation"
 
 
+def _stamp(value: str = "") -> str:
+    """Локальные дата и время для имени версии. Пустая строка - текущий момент."""
+    if value:
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            moment = datetime.now().astimezone()
+    else:
+        moment = datetime.now().astimezone()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone().strftime("%Y%m%d-%H%M%S")
+
+
+def _translation_suffix(fmt: str, book: bool) -> tuple[str, str]:
+    suffix = ".pdf" if book else SAME_FORMAT_SUFFIX.get(fmt, ".txt")
+    note = ""
+    if fmt == "pdf" and not book:
+        note = "PDF возвращается как Markdown: запись PDF в PDF в программе нет."
+    return suffix, note
+
+
+def _resolve_output_suffix(fmt: str, book: bool, requested: str) -> tuple[str, str]:
+    """Суффикс из быстрого меню, если экспортёр его умеет. Иначе формат файла."""
+    default, note = _translation_suffix(fmt, book)
+    wanted = str(requested or "").strip().lower()
+    if wanted and not wanted.startswith("."):
+        wanted = f".{wanted}"
+    if not wanted or wanted == default:
+        return default, note
+    allowed = set(EXPORT_ALLOWED.get(fmt, (".txt", ".md")))
+    if book and fmt == "pdf":
+        allowed.add(".pdf")
+    if wanted not in allowed:
+        return default, note
+    return wanted, ""
+
+
+def _versioned_output(store: ProjectStore, name: str, lang: str, suffix: str, stamp: str) -> Path:
+    """Новый файл в output. Повтор в ту же секунду получает суффикс -2, -3."""
+    folder = store.root / "output"
+    folder.mkdir(parents=True, exist_ok=True)
+    stem = _safe_stem(name)
+    candidate = folder / f"{stem}.{lang}.{stamp}{suffix}"
+    index = 2
+    while candidate.exists():
+        candidate = folder / f"{stem}.{lang}.{stamp}-{index}{suffix}"
+        index += 1
+    return candidate
+
+
 def _write_translation(
     store: ProjectStore,
     doc_id: str,
     target_lang: str,
     destination: Path,
-) -> None:
+    *,
+    task_id: str = "",
+) -> Path:
+    """Пишет файл и возвращает фактический путь.
+
+    Если книжный PDF не уложился в полосу, рядом сохраняется Markdown,
+    чтобы перевод не остался только в базе.
+    """
     store.verify_source(doc_id)
+    record = store.document(doc_id)
+    parsed = store.parsed(doc_id)
     translations = store.translations(doc_id, target_lang=target_lang)
-    export_document(
-        store.document(doc_id).source_path,
-        destination,
-        store.parsed(doc_id),
-        translations,
-    )
+    target = destination
     try:
-        store.record_export(doc_id, destination, target_lang=target_lang)
-    except Exception:
-        pass
+        export_document(record.source_path, target, parsed, translations)
+    except DocumentError:
+        if destination.suffix.lower() != ".pdf":
+            raise
+        target = destination.with_suffix(".md")
+        export_document(record.source_path, target, parsed, translations)
+    store.record_export(doc_id, target, target_lang=target_lang, task_id=task_id or None)
+    return target
 
 
 def _public_offer(offer: dict[str, Any], installed_sha: bool) -> dict[str, Any]:
@@ -332,6 +401,7 @@ class Api:
         self.preferences_root = self.data_dir
         self.projects: list[ProjectStore] = list_projects(self.projects_dir)
         self.project_queues: dict[str, TaskQueue] = {}
+        self._publishing: dict[str, threading.Event] = {}
         self.active_project_id: str | None = None
         self._lock = threading.RLock()
         self._window: Any = None
@@ -420,14 +490,31 @@ class Api:
                 document_name = store.document(task["document_id"]).name
             except KeyError:
                 document_name = ""
+        export_path = None
+        export_error = None
+        export_reused = False
+        if event.get("status") == "complete" and event.get("task_id"):
+            try:
+                published = self._publish_task_output(store, str(event["task_id"]))
+                export_path = published.get("path")
+                export_reused = bool(published.get("reused"))
+            except Exception as exc:
+                export_error = str(exc)
         self._push(
             "task_event",
             {
                 "projectId": store.project["id"],
                 "documentName": document_name,
                 "task": event,
+                "exportPath": export_path,
+                "exportError": export_error,
+                "exportReused": export_reused,
             },
         )
+        if export_path and not export_reused:
+            self._push("export_done", {"ok": True, "path": export_path, "error": None})
+        elif export_error:
+            self._push("export_done", {"ok": False, "path": None, "error": export_error})
 
     def _sync_projects(self) -> None:
         """Подхватить новые каталоги, не переоткрывая уже загруженные базы."""
@@ -511,7 +598,30 @@ class Api:
             self._set_preference("ui_scale", _layout_span(prefs["ui_scale"], 75, 160, 100))
         if "text_scale" in prefs:
             self._set_preference("text_scale", _layout_span(prefs["text_scale"], 75, 180, 100))
+        self._save_translate_preferences(prefs)
         return _ok(dict(self._preferences))
+
+    def _save_translate_preferences(self, prefs: dict[str, Any]) -> None:
+        if "translate_source" in prefs:
+            self._set_preference("translate_source", _pref_code(prefs["translate_source"], "auto"))
+        if "translate_target" in prefs:
+            self._set_preference("translate_target", _pref_code(prefs["translate_target"], "ru"))
+        if "translate_suffix" in prefs:
+            suffix = str(prefs["translate_suffix"] or "").strip().lower()
+            if suffix and not suffix.startswith("."):
+                suffix = f".{suffix}"
+            if suffix not in {"", ".txt", ".md", ".docx", ".epub", ".pdf"}:
+                suffix = ""
+            self._set_preference("translate_suffix", suffix)
+        if "translate_model" in prefs:
+            self._set_preference("translate_model", str(prefs["translate_model"] or "").strip()[:80])
+        if "translate_context" in prefs:
+            self._set_preference("translate_context", str(prefs["translate_context"] or "")[:800])
+        if "translate_glossary" in prefs:
+            self._set_preference("translate_glossary", bool(prefs["translate_glossary"]))
+        if "translate_surface" in prefs:
+            surface = "text" if str(prefs.get("translate_surface") or "") == "text" else "file"
+            self._set_preference("translate_surface", surface)
 
     # ------------------------------------------------------------------ projects
 
@@ -814,25 +924,41 @@ class Api:
             return _err("Сначала выберите проект.", "no_project")
         destination = Path(dest_path)
         try:
-            _write_translation(store, str(doc_id), str(target_lang), destination)
+            written = _write_translation(store, str(doc_id), str(target_lang), destination)
         except Exception as exc:
             return _err(f"Не удалось экспортировать: {exc}", "export_failed")
-        self._push("export_done", {"ok": True, "path": str(destination), "error": None})
-        return _ok({"path": str(destination)})
+        self._push("export_done", {"ok": True, "path": str(written), "error": None})
+        return _ok({"path": str(written)})
 
     def publishTranslation(
         self,
         doc_id: str,
         target_lang: str,
         project_id: str = "",
+        task_id: str = "",
     ) -> dict[str, Any]:
-        """Собрать перевод в каталог output проекта, не трогая оригинал."""
+        """Собрать перевод в каталог output проекта, не трогая оригинал.
+
+        С task_id файл один на завершённую задачу. Без task_id каждый вызов
+        пишет новую версию текущего текста.
+        """
         if project_id:
             store = self._store_by_id(str(project_id))
         else:
             store = self._active_store()
         if store is None:
             return _err("Сначала выберите проект.", "no_project")
+        linked = str(task_id or "").strip()
+        if linked:
+            try:
+                payload = self._publish_task_output(store, linked)
+            except KeyError:
+                return _err("Задача не найдена.", "not_found")
+            except Exception as exc:
+                return _err(f"Не удалось собрать файл: {exc}", "export_failed")
+            if not payload.get("reused"):
+                self._push("export_done", {"ok": True, "path": payload["path"], "error": None})
+            return _ok(payload)
         try:
             record = store.document(str(doc_id))
             parsed = store.parsed(str(doc_id))
@@ -841,40 +967,142 @@ class Api:
         lang = str(target_lang or "").strip()
         if not lang:
             return _err("Не выбран язык перевода.", "no_target")
-        layout = parsed.metadata.get("pdfLayout") == "book"
-        suffix = ".pdf" if layout else SAME_FORMAT_SUFFIX.get(record.format, ".txt")
-        note = ""
-        if record.format == "pdf" and not layout:
-            note = "PDF возвращается как Markdown: запись PDF в PDF в программе нет."
-        for item in store.exports(str(doc_id)):
-            if str(item.get("target_lang") or "") != lang:
-                continue
-            existing = Path(str(item.get("path") or ""))
-            if existing.is_file() and existing.suffix.lower() == suffix:
-                return _ok(
-                    {
-                        "path": str(existing),
-                        "format": record.format,
-                        "suffix": suffix,
-                        "note": note,
-                        "reused": True,
-                    }
-                )
-        destination = store.root / "output" / f"{_safe_stem(record.name)}.{lang}{suffix}"
+        suffix, note = _translation_suffix(
+            record.format,
+            parsed.metadata.get("pdfLayout") == "book",
+        )
+        destination = _versioned_output(store, record.name, lang, suffix, _stamp())
         try:
-            _write_translation(store, str(doc_id), lang, destination)
+            written = _write_translation(store, str(doc_id), lang, destination)
         except Exception as exc:
             return _err(f"Не удалось собрать файл: {exc}", "export_failed")
-        self._push("export_done", {"ok": True, "path": str(destination), "error": None})
+        if written.suffix.lower() == ".md" and suffix == ".pdf":
+            note = "PDF не собрался. Сохранён текст перевода в Markdown."
+        self._push("export_done", {"ok": True, "path": str(written), "error": None})
         return _ok(
             {
-                "path": str(destination),
+                "path": str(written),
                 "format": record.format,
-                "suffix": suffix,
+                "suffix": written.suffix.lower(),
                 "note": note,
                 "reused": False,
             }
         )
+
+    def _task_export_path(self, store: ProjectStore, task_id: str) -> Path | None:
+        for item in store.exports():
+            if str(item.get("task_id") or "") != task_id:
+                continue
+            path = Path(str(item.get("path") or ""))
+            if path.is_file():
+                return path
+        return None
+
+    def _publish_task_output(self, store: ProjectStore, task_id: str) -> dict[str, Any]:
+        """Один файл на завершённую задачу. Повторный вызов возвращает уже собранный."""
+        with self._lock:
+            pending = self._publishing.get(task_id)
+            if pending is None:
+                pending = threading.Event()
+                self._publishing[task_id] = pending
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            pending.wait(timeout=600)
+            found = self._task_export_path(store, task_id)
+            if found is not None:
+                return self._export_payload(store, task_id, found, reused=True)
+        try:
+            found = self._task_export_path(store, task_id)
+            if found is not None:
+                return self._export_payload(store, task_id, found, reused=True)
+            task = store.task(task_id)
+            if task.get("status") != "complete":
+                raise RuntimeError("Задача ещё не завершена.")
+            record = store.document(str(task["document_id"]))
+            parsed = store.parsed(str(task["document_id"]))
+            lang = str(task.get("target_lang") or "").strip()
+            if not lang:
+                raise RuntimeError("У задачи нет языка перевода.")
+            suffix, note = _resolve_output_suffix(
+                record.format,
+                parsed.metadata.get("pdfLayout") == "book",
+                str(task.get("output_suffix") or ""),
+            )
+            destination = _versioned_output(
+                store,
+                record.name,
+                lang,
+                suffix,
+                _stamp(str(task.get("updated_at") or "")),
+            )
+            written = _write_translation(store, record.id, lang, destination, task_id=task_id)
+            if written.suffix.lower() == ".md" and suffix == ".pdf":
+                note = "PDF не собрался. Сохранён текст перевода в Markdown."
+            return {
+                "path": str(written),
+                "format": record.format,
+                "suffix": written.suffix.lower(),
+                "note": note,
+                "reused": False,
+            }
+        finally:
+            if owner:
+                with self._lock:
+                    self._publishing.pop(task_id, None)
+                pending.set()
+
+    def _export_payload(
+        self,
+        store: ProjectStore,
+        task_id: str,
+        path: Path,
+        *,
+        reused: bool,
+    ) -> dict[str, Any]:
+        task = store.task(task_id)
+        record = store.document(str(task["document_id"]))
+        parsed = store.parsed(str(task["document_id"]))
+        suffix, note = _resolve_output_suffix(
+            record.format,
+            parsed.metadata.get("pdfLayout") == "book",
+            str(task.get("output_suffix") or ""),
+        )
+        if path.suffix.lower() == ".md" and suffix == ".pdf":
+            note = "PDF не собрался. Сохранён текст перевода в Markdown."
+        return {
+            "path": str(path),
+            "format": record.format,
+            "suffix": path.suffix.lower() if path.suffix.lower() == ".md" and suffix == ".pdf" else suffix,
+            "note": note,
+            "reused": reused,
+        }
+
+    def publishPendingOutputs(self) -> dict[str, Any]:
+        """Собрать файлы для уже завершённых задач, у которых версии ещё нет."""
+
+        def work() -> None:
+            paths: list[str] = []
+            errors: list[dict[str, str]] = []
+            self._sync_projects()
+            for store in list(self.projects):
+                if self._closing:
+                    break
+                for task in store.tasks():
+                    if task.get("status") != "complete":
+                        continue
+                    try:
+                        item = self._publish_task_output(store, str(task["id"]))
+                    except Exception as exc:
+                        errors.append({"taskId": str(task["id"]), "error": str(exc)})
+                        continue
+                    if not item.get("reused") and item.get("path"):
+                        paths.append(str(item["path"]))
+            self._push("exports_ready", {"ok": not errors, "paths": paths, "errors": errors})
+
+        self._spawn(work, "publish-outputs")
+        return _ok({"started": True})
 
     # ------------------------------------------------------------------ translation
 
@@ -906,6 +1134,12 @@ class Api:
                 "runtime_missing",
             )
         source = store.project.get("source_lang") or AUTO_LANGUAGE
+        if "context" in data:
+            task_context = str(data.get("context") or "")[:800]
+        else:
+            task_context = None
+        use_glossary = True if "useGlossary" not in data else bool(data.get("useGlossary"))
+        output_suffix = str(data.get("outputSuffix") or "")
         unsupported = [target for target in targets if not supports_language(model, target)]
         if source != AUTO_LANGUAGE and not supports_language(model, source):
             unsupported.insert(0, source)
@@ -936,6 +1170,9 @@ class Api:
                         chunks,
                         source_lang=source,
                         target_lang=target,
+                        context=task_context,
+                        output_suffix=output_suffix,
+                        use_glossary=use_glossary,
                     )
                     queue.enqueue(task_id)
                     task_ids.append(task_id)
@@ -948,16 +1185,43 @@ class Api:
         return _ok({"taskIds": task_ids, "warnings": warnings})
 
     def listTasks(self) -> dict[str, Any]:
+        """Задачи всех проектов и отдельно собранные файлы без задачи."""
         result: list[dict[str, Any]] = []
         self._sync_projects()
         for store in self.projects:
             title = store.project.get("title") or "Проект"
-            documents = {record.id: record.name for record in store.documents()}
+            project_id = store.project["id"]
+            records = {record.id: record for record in store.documents()}
+            documents = {doc_id: record.name for doc_id, record in records.items()}
+            files_by_task: dict[str, list[dict[str, Any]]] = {}
+            loose: list[dict[str, Any]] = []
+            for item in store.exports():
+                doc_id = str(item.get("document_id") or "")
+                source_format = records[doc_id].format if doc_id in records else ""
+                file_format = str(item.get("format") or "")
+                note = ""
+                if source_format == "pdf" and file_format in {"md", "markdown"}:
+                    note = "PDF не собрался. Сохранён текст перевода в Markdown."
+                file_row = {
+                    "path": item.get("path") or "",
+                    "format": file_format,
+                    "createdAt": item.get("created_at"),
+                    "exportId": item.get("id"),
+                    "note": note,
+                }
+                linked = str(item.get("task_id") or "")
+                if linked:
+                    files_by_task.setdefault(linked, []).append(file_row)
+                else:
+                    loose.append(item | {"_file": file_row})
             for task in store.tasks():
+                files = files_by_task.get(str(task["id"]), [])
+                files.sort(key=lambda row: str(row.get("createdAt") or ""), reverse=True)
                 result.append(
                     {
                         "taskId": task["id"],
-                        "projectId": store.project["id"],
+                        "kind": "task",
+                        "projectId": project_id,
                         "projectTitle": title,
                         "documentId": task["document_id"],
                         "documentName": documents.get(task["document_id"], ""),
@@ -968,6 +1232,35 @@ class Api:
                         "total": task.get("total", 0),
                         "error": task.get("error") or "",
                         "modelId": task.get("model_id") or "",
+                        "outputSuffix": task.get("output_suffix") or "",
+                        "useGlossary": task.get("use_glossary", 1) not in (0, "0", False),
+                        "createdAt": task.get("created_at"),
+                        "updatedAt": task.get("updated_at"),
+                        "files": files,
+                    }
+                )
+            for item in loose:
+                file_row = item["_file"]
+                doc_id = str(item.get("document_id") or "")
+                created = item.get("created_at")
+                result.append(
+                    {
+                        "taskId": f"export:{item.get('id')}",
+                        "kind": "file",
+                        "projectId": project_id,
+                        "projectTitle": title,
+                        "documentId": doc_id,
+                        "documentName": documents.get(doc_id, ""),
+                        "sourceLang": "",
+                        "targetLang": item.get("target_lang") or "",
+                        "status": "saved",
+                        "completed": 0,
+                        "total": 0,
+                        "error": "",
+                        "modelId": "",
+                        "createdAt": created,
+                        "updatedAt": created,
+                        "files": [file_row],
                     }
                 )
         return _ok(result)
@@ -1497,11 +1790,16 @@ class Api:
         return _ok(allowed)
 
     def revealPath(self, path: str) -> dict[str, Any]:
+        """Показать файл в проводнике. Каталог открывается как папка."""
         if not path:
             return _err("Путь не указан.", "no_path")
         target = Path(path)
+        if not target.exists():
+            return _err("Файл не найден.", "not_found")
         try:
-            if sys.platform == "win32":
+            if sys.platform == "win32" and target.is_file():
+                subprocess.run(["explorer", f"/select,{target}"], check=False)
+            elif sys.platform == "win32":
                 os.startfile(str(target))  # noqa: S606
             elif target.is_dir():
                 webbrowser.open(target.as_uri())
@@ -1510,6 +1808,69 @@ class Api:
         except OSError as exc:
             return _err(f"Не удалось открыть: {exc}")
         return _ok(None)
+
+    def openPath(self, path: str) -> dict[str, Any]:
+        """Открыть файл программой по умолчанию."""
+        if not path:
+            return _err("Путь не указан.", "no_path")
+        target = Path(path)
+        if not target.exists():
+            return _err("Файл не найден.", "not_found")
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(target))  # noqa: S606
+            else:
+                webbrowser.open(target.as_uri())
+        except OSError as exc:
+            return _err(f"Не удалось открыть: {exc}")
+        return _ok(None)
+
+    def previewExport(self, path: str) -> dict[str, Any]:
+        """Текст или PDF результата. Чужие пути не читаются."""
+        try:
+            target = self._guard_export_file(path)
+        except ValueError as exc:
+            return _err(str(exc), "not_found")
+        suffix = target.suffix.lower()
+        name = target.name
+        if suffix in {".txt", ".md", ".markdown"}:
+            text = target.read_text(encoding="utf-8", errors="replace")
+            if len(text) > 200_000:
+                text = text[:200_000] + "\n\n…"
+            return _ok({"kind": "text", "name": name, "text": text})
+        if suffix == ".pdf":
+            size = target.stat().st_size
+            if size > 20 * 1024 * 1024:
+                return _ok({"kind": "too_large", "name": name, "bytes": size})
+            encoded = base64.b64encode(target.read_bytes()).decode("ascii")
+            return _ok({"kind": "pdf", "name": name, "base64": encoded})
+        return _ok({"kind": "external", "name": name, "suffix": suffix})
+
+    def _guard_export_file(self, path: str) -> Path:
+        if not path:
+            raise ValueError("Путь не указан.")
+        target = Path(path).resolve()
+        if not target.is_file():
+            raise ValueError("Файл не найден.")
+        root = self.projects_dir.resolve()
+        under_output = root in target.parents and "output" in target.parts
+        if under_output or self._known_export(target):
+            return target
+        raise ValueError("Можно открыть только собранный результат.")
+
+    def _known_export(self, target: Path) -> bool:
+        self._sync_projects()
+        for store in self.projects:
+            for item in store.exports():
+                raw = str(item.get("path") or "")
+                if not raw:
+                    continue
+                try:
+                    if Path(raw).resolve() == target:
+                        return True
+                except OSError:
+                    continue
+        return False
 
     def getDataDirs(self) -> dict[str, Any]:
         return _ok(

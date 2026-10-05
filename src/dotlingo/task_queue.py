@@ -300,7 +300,12 @@ class TaskQueue:
             pending = self.store.pending_segments(task_id)
             total = self.store.task(task_id)["total"]
             completed_at_start = self.store.task(task_id)["completed"]
-            terms = [
+            glossary_flag = task.get("use_glossary", 1)
+            try:
+                glossary_on = int(glossary_flag)
+            except (TypeError, ValueError):
+                glossary_on = 1
+            terms = [] if glossary_on == 0 else [
                 GlossaryTerm(item["source"], item["target"])
                 for item in self.store.glossary(task["target_lang"])
             ]

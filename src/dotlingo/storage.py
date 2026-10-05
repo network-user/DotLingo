@@ -25,6 +25,18 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_OUTPUT_SUFFIXES = {"", ".txt", ".md", ".docx", ".epub", ".pdf"}
+
+
+def _clean_output_suffix(value: str) -> str:
+    suffix = str(value or "").strip().lower()
+    if suffix and not suffix.startswith("."):
+        suffix = f".{suffix}"
+    if suffix not in _OUTPUT_SUFFIXES:
+        return ""
+    return suffix
+
+
 class SourceIntegrityError(RuntimeError):
     """The immutable project copy is missing or no longer matches its import hash."""
 
@@ -120,6 +132,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   target_lang TEXT NOT NULL DEFAULT '',
   context TEXT NOT NULL DEFAULT '',
   rules TEXT NOT NULL DEFAULT '',
+  output_suffix TEXT NOT NULL DEFAULT '',
+  use_glossary INTEGER NOT NULL DEFAULT 1,
   completed INTEGER NOT NULL DEFAULT 0,
   total INTEGER NOT NULL DEFAULT 0,
   error TEXT NOT NULL DEFAULT '',
@@ -148,6 +162,7 @@ CREATE TABLE IF NOT EXISTS exports (
   path TEXT NOT NULL,
   format TEXT NOT NULL,
   target_lang TEXT NOT NULL DEFAULT '',
+  task_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 """
@@ -212,6 +227,10 @@ class ProjectStore:
             db.execute("ALTER TABLE tasks ADD COLUMN context TEXT NOT NULL DEFAULT ''")
         if added_rules:
             db.execute("ALTER TABLE tasks ADD COLUMN rules TEXT NOT NULL DEFAULT ''")
+        if "output_suffix" not in task_columns:
+            db.execute("ALTER TABLE tasks ADD COLUMN output_suffix TEXT NOT NULL DEFAULT ''")
+        if "use_glossary" not in task_columns:
+            db.execute("ALTER TABLE tasks ADD COLUMN use_glossary INTEGER NOT NULL DEFAULT 1")
         if added_source or added_target or added_context or added_rules:
             db.execute(
                 "UPDATE tasks SET source_lang=(SELECT source_lang FROM project LIMIT 1), "
@@ -242,6 +261,8 @@ class ProjectStore:
         export_columns = {row["name"] for row in db.execute("PRAGMA table_info(exports)")}
         if "target_lang" not in export_columns:
             db.execute("ALTER TABLE exports ADD COLUMN target_lang TEXT NOT NULL DEFAULT ''")
+        if "task_id" not in export_columns:
+            db.execute("ALTER TABLE exports ADD COLUMN task_id TEXT NOT NULL DEFAULT ''")
 
     @classmethod
     def create(
@@ -568,6 +589,9 @@ class ProjectStore:
         *,
         source_lang: str | None = None,
         target_lang: str | None = None,
+        context: str | None = None,
+        output_suffix: str = "",
+        use_glossary: bool = True,
     ) -> str:
         task_id = str(uuid.uuid4())
         rows = [(task_id, block, index, source) for block, parts in chunks.items() for index, source in enumerate(parts)]
@@ -578,9 +602,12 @@ class ProjectStore:
             project = db.execute("SELECT * FROM project LIMIT 1").fetchone()
             chosen_source = source_lang or project["source_lang"]
             chosen_target = target_lang or project["target_lang"]
+            chosen_context = project["context"] if context is None else str(context)[:800]
+            chosen_suffix = _clean_output_suffix(output_suffix)
             db.execute(
-                "INSERT INTO tasks(id,document_id,status,model_id,source_lang,target_lang,context,rules,total,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO tasks(id,document_id,status,model_id,source_lang,target_lang,context,rules,"
+                "output_suffix,use_glossary,total,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     document_id,
@@ -588,8 +615,10 @@ class ProjectStore:
                     model_id,
                     chosen_source,
                     chosen_target,
-                    project["context"],
+                    chosen_context,
                     project["rules"],
+                    chosen_suffix,
+                    1 if use_glossary else 0,
                     len(rows),
                     timestamp,
                     timestamp,
@@ -807,17 +836,26 @@ class ProjectStore:
             rows = db.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task_id,)).fetchall()
         return [dict(row) for row in rows]
 
-    def record_export(self, document_id: str, path: Path, *, target_lang: str | None = None) -> None:
+    def record_export(
+        self,
+        document_id: str,
+        path: Path,
+        *,
+        target_lang: str | None = None,
+        task_id: str | None = None,
+    ) -> None:
         self.document(document_id)
         path = Path(path).resolve(strict=True)
         with _connect(self.db_path) as db:
             db.execute(
-                "INSERT INTO exports(document_id,path,format,target_lang,created_at) VALUES(?,?,?,?,?)",
+                "INSERT INTO exports(document_id,path,format,target_lang,task_id,created_at) "
+                "VALUES(?,?,?,?,?,?)",
                 (
                     document_id,
                     str(path),
                     path.suffix.lower().lstrip("."),
                     target_lang or self.project["target_lang"],
+                    task_id or "",
                     _now(),
                 ),
             )

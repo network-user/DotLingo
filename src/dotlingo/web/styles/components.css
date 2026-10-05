@@ -531,8 +531,9 @@
   --text-tertiary: var(--overlay-quiet);
 }
 
-.modal--market {
-  max-width: 920px;
+.modal--market,
+.modal--preview {
+  max-width: min(960px, calc(100vw - var(--sp-5)));
 }
 
 @keyframes modal-in {

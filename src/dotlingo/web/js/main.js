@@ -20,7 +20,7 @@ import {
 } from './appearance.js';
 
 /** Порядок страниц для клавиш 1..7 (совпадает с навигацией в index.html). */
-const PAGE_ORDER = ['chat', 'documents', 'review', 'queue', 'models', 'glossary', 'settings'];
+const PAGE_ORDER = ['chat', 'review', 'queue', 'history', 'models', 'glossary', 'settings'];
 
 const DEFAULT_PAGE = 'chat';
 const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая' };
@@ -147,6 +147,7 @@ const PAGE_LOADERS = {
   documents: () => import('./pages/documents.js'),
   review: () => import('./pages/review.js'),
   queue: () => import('./pages/queue.js'),
+  history: () => import('./pages/results.js'),
   models: () => import('./pages/models.js'),
   glossary: () => import('./pages/glossary.js'),
   settings: () => import('./pages/settings.js'),
@@ -258,6 +259,14 @@ async function initBridgeData() {
     chatListWidth: paneSize(prefs?.chat_list_width, 168, 1200, 240),
     chatListHeight: paneSize(prefs?.chat_list_height, 120, 800, 200),
     chatListHidden: Boolean(prefs?.chat_list_hidden),
+    translateSource: prefs?.translate_source || 'auto',
+    translateTarget: prefs?.translate_target || 'ru',
+    translateSuffix: prefs?.translate_suffix || '',
+    translateModel: prefs?.translate_model || '',
+    translateContext: prefs?.translate_context || '',
+    translateGlossary: prefs?.translate_glossary !== false,
+    translateSurface: prefs?.translate_surface === 'text' ? 'text' : 'file',
+    translateReady: true,
     uiScale: clampPercent(prefs?.ui_scale, UI_SCALE_MIN, UI_SCALE_MAX, SCALE_DEFAULT),
     textScale: clampPercent(prefs?.text_scale, TEXT_SCALE_MIN, TEXT_SCALE_MAX, SCALE_DEFAULT),
   });
@@ -308,6 +317,9 @@ const pushHandlers = {
   },
   export_done(payload) {
     store.emit('export_done', payload);
+  },
+  exports_ready(payload) {
+    store.emit('exports_ready', payload);
   },
   download_progress(payload) {
     store.emit('download_progress', payload);
@@ -638,7 +650,7 @@ function typingTarget(target) {
 
 function pageIndexFromKey(event) {
   const key = event.key;
-  if (key.length !== 1 || key < '1' || key > '8') return null;
+  if (key.length !== 1 || key < '1' || key > '7') return null;
   const index = Number(key) - 1;
   if (index >= PAGE_ORDER.length) return null;
   return index;

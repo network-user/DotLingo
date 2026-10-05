@@ -589,22 +589,26 @@ def export_document(
         raise DocumentError("Для этого формата нет проверенного экспортёра.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.stem}.{uuid.uuid4().hex}.partial{suffix}")
-    if suffix in {".txt", ".md", ".markdown"}:
-        content = _text_export(parsed, translations, suffix != ".txt")
-        temporary.write_text(content, encoding="utf-8", newline="")
-    elif suffix == ".docx":
-        if parsed.format != "docx":
-            raise DocumentError("DOCX-экспорт доступен только из импортированного DOCX.")
-        _export_docx(source_path, temporary, parsed, translations)
-    elif suffix == ".epub":
-        if parsed.format != "epub":
-            raise DocumentError("EPUB-экспорт доступен только из импортированного EPUB.")
-        _export_epub(source_path, temporary, parsed, translations)
-    elif suffix == ".pdf":
-        if parsed.format != "pdf":
-            raise DocumentError("PDF-экспорт доступен только из импортированного PDF.")
-        _export_pdf_layout(source_path, temporary, parsed, translations)
-    os.replace(temporary, destination)
+    try:
+        if suffix in {".txt", ".md", ".markdown"}:
+            content = _text_export(parsed, translations, suffix != ".txt")
+            temporary.write_text(content, encoding="utf-8", newline="")
+        elif suffix == ".docx":
+            if parsed.format != "docx":
+                raise DocumentError("DOCX-экспорт доступен только из импортированного DOCX.")
+            _export_docx(source_path, temporary, parsed, translations)
+        elif suffix == ".epub":
+            if parsed.format != "epub":
+                raise DocumentError("EPUB-экспорт доступен только из импортированного EPUB.")
+            _export_epub(source_path, temporary, parsed, translations)
+        elif suffix == ".pdf":
+            if parsed.format != "pdf":
+                raise DocumentError("PDF-экспорт доступен только из импортированного PDF.")
+            _export_pdf_layout(source_path, temporary, parsed, translations)
+        os.replace(temporary, destination)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def save_parsed(path: Path, parsed: ParsedDocument) -> None:

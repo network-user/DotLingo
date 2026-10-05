@@ -39,6 +39,15 @@ const state = {
   chatListHeight: 200,
   /** @type {boolean} список диалогов скрыт, лента на всю ширину */
   chatListHidden: false,
+  /** Память быстрого перевода. Подставляется после getPreferences. */
+  translateSource: 'auto',
+  translateTarget: 'ru',
+  translateSuffix: '',
+  translateModel: '',
+  translateContext: '',
+  translateGlossary: true,
+  translateSurface: 'file',
+  translateReady: false,
 };
 
 /** Подписчики на изменения: (ключ, значение, предыдущее) => void. */

@@ -149,9 +149,9 @@ function noDocumentsState() {
     title: 'Добавьте файлы',
     text: 'Сначала положите документы в проект и запустите перевод. Здесь правят уже готовые фрагменты.',
     action: button({
-      label: 'К документам',
+      label: 'К переводу',
       variant: 'ghost',
-      onClick: () => router.showPage('documents'),
+      onClick: () => router.showPage('chat'),
     }),
   });
 }
@@ -782,9 +782,9 @@ async function exportFlow() {
 function actions(host) {
   return [
     button({
-      label: 'К документам',
+      label: 'К переводу',
       variant: 'ghost',
-      onClick: () => router.showPage('documents'),
+      onClick: () => router.showPage('chat'),
     }),
   ];
 }

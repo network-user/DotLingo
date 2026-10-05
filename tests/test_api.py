@@ -282,11 +282,12 @@ def test_document_import_edit_export(tmp_path: Path) -> None:
     assert published["data"]["reused"] is False
     output = Path(published["data"]["path"])
     assert output.parent.name == "output"
-    assert output.name.endswith(".ru.txt")
+    assert ".ru." in output.name and output.suffix == ".txt"
     assert "Исправленный перевод." in output.read_text(encoding="utf-8")
     again = api.publishTranslation(doc_id, "ru")
-    assert again["data"]["reused"] is True
-    assert again["data"]["path"] == str(output)
+    assert again["data"]["reused"] is False
+    assert again["data"]["path"] != str(output)
+    assert "Исправленный перевод." in Path(again["data"]["path"]).read_text(encoding="utf-8")
 
     destination = tmp_path / "export" / "sample.translated-ru.txt"
     destination.parent.mkdir(exist_ok=True)
@@ -349,6 +350,111 @@ def test_enqueue_success_and_actions(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert store is not None
     store.set_task_status(task_id, "complete")
     assert api.resumeTask(task_id)["code"] == "already_complete"
+
+
+def test_enqueue_stores_sheet_choices(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    model = _available_model()
+    api = _make_api(tmp_path, sync=True)
+    _create_project(api, model["id"], targets=["ru"])
+    _import_txt(api, tmp_path)
+    doc_id = api.listDocuments()["data"][0]["id"]
+    order = next(
+        block["order"]
+        for block in api.getDocument(doc_id)["data"]["blocks"]
+        if block["translatable"]
+    )
+    assert api.saveEdit(doc_id, order, "Строка из быстрого меню.", "ru")["ok"] is True
+    monkeypatch.setattr(api_module, "installed", lambda m, root=None: True)
+    monkeypatch.setattr(api_module, "_runtime_available", lambda: True)
+
+    result = api.enqueueTranslation({
+        "documentIds": [doc_id],
+        "targetLangs": ["ru"],
+        "outputSuffix": "md",
+        "useGlossary": False,
+        "context": "деловой тон",
+    })
+    assert result["ok"] is True
+    task_id = result["data"]["taskIds"][0]
+    store = ProjectStore(api.projects_dir / api.active_project_id)
+    task = store.task(task_id)
+    assert task["output_suffix"] == ".md"
+    assert task["use_glossary"] == 0
+    assert task["context"] == "деловой тон"
+    store.set_task_status(task_id, "complete")
+    published = api.publishTranslation(doc_id, "ru", "", task_id)
+    assert published["ok"] is True
+    assert published["data"]["suffix"] == ".md"
+    assert "Строка из быстрого меню." in Path(published["data"]["path"]).read_text(encoding="utf-8")
+
+
+def test_translate_preferences_roundtrip(tmp_path: Path) -> None:
+    api = _make_api(tmp_path)
+    saved = api.setPreferences({
+        "translate_source": "EN",
+        "translate_target": "ru",
+        "translate_suffix": "md",
+        "translate_surface": "text",
+        "translate_glossary": False,
+        "translate_context": "я" * 900,
+        "translate_model": "hy-mt2",
+    })
+    data = saved["data"]
+    assert data["translate_source"] == "en"
+    assert data["translate_suffix"] == ".md"
+    assert data["translate_surface"] == "text"
+    assert data["translate_glossary"] is False
+    assert data["translate_model"] == "hy-mt2"
+    assert len(data["translate_context"]) == 800
+    assert api.setPreferences({"translate_suffix": "exe"})["data"]["translate_suffix"] == ""
+
+
+def test_completed_tasks_keep_separate_output_versions(tmp_path: Path) -> None:
+    from dotlingo.task_queue import build_chunks
+
+    model = _available_model()
+    api = _make_api(tmp_path, sync=True)
+    _create_project(api, model["id"], targets=["ru"])
+    _import_txt(api, tmp_path)
+    doc_id = api.listDocuments()["data"][0]["id"]
+    order = next(
+        block["order"]
+        for block in api.getDocument(doc_id)["data"]["blocks"]
+        if block["translatable"]
+    )
+    assert api.saveEdit(doc_id, order, "Готовая строка.", "ru")["ok"] is True
+    store = ProjectStore(api.projects_dir / api.active_project_id)
+    chunks = build_chunks(store.blocks(doc_id))
+    first = store.create_task(doc_id, model["id"], chunks, source_lang="en", target_lang="ru")
+    second = store.create_task(doc_id, model["id"], chunks, source_lang="en", target_lang="ru")
+    stopped = store.create_task(doc_id, model["id"], chunks, source_lang="en", target_lang="ru")
+    store.set_task_status(first, "complete")
+    store.set_task_status(second, "complete")
+    store.set_task_status(stopped, "failed", "сбой", "сбой")
+
+    assert api.publishPendingOutputs()["ok"] is True
+    rows = {row["taskId"]: row for row in api.listTasks()["data"]}
+    first_path = Path(rows[first]["files"][0]["path"])
+    second_path = Path(rows[second]["files"][0]["path"])
+    assert first_path.is_file() and second_path.is_file()
+    assert first_path != second_path
+    assert "Готовая строка." in first_path.read_text(encoding="utf-8")
+    assert rows[first]["updatedAt"]
+    assert rows[stopped]["status"] == "failed"
+    assert rows[stopped]["files"] == []
+
+    assert api.publishPendingOutputs()["ok"] is True
+    replay = {row["taskId"]: row for row in api.listTasks()["data"]}
+    assert replay[first]["files"][0]["path"] == str(first_path)
+
+    preview = api.previewExport(str(first_path))
+    assert preview["ok"] is True
+    assert preview["data"]["kind"] == "text"
+    assert "Готовая строка." in preview["data"]["text"]
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret", encoding="utf-8")
+    assert api.previewExport(str(outside))["ok"] is False
+    assert api.openPath(str(tmp_path / "missing.txt"))["code"] == "not_found"
 
 
 # --------------------------------------------------------------------- glossary

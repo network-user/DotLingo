@@ -95,6 +95,9 @@ const PATHS = {
     '<circle cx="12" cy="12" r="8"/>' +
     '<path d="M4 12h16"/>' +
     '<ellipse cx="12" cy="12" rx="3.45" ry="8"/>',
+  clock:
+    '<circle cx="12" cy="12" r="8"/>' +
+    '<path d="M12 7.35V12l3.15 2.05"/>',
 };
 
 /** Общий шаблон SVG-элемента. */
