@@ -1345,8 +1345,8 @@
 }
 
 .chat-mode {
-  min-height: 30px;
-  padding: 0 14px;
+  min-height: 32px;
+  padding: 0 16px;
   border-radius: 10px;
   border: 0;
   background: transparent;
@@ -1506,60 +1506,9 @@
   background: var(--group);
 }
 
-.text-tune__gap:empty {
+.text-tune__gap:empty,
+.text-tune__settings:empty {
   display: none;
-}
-
-.text-tune__toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 12px;
-  background: var(--surface);
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--fs-small);
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-}
-
-.text-tune__toggle:hover,
-.text-tune__toggle.is-open {
-  color: var(--text);
-  border-color: var(--hairline-strong);
-}
-
-.text-tune__summary {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.text-tune__toggle .icon {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  transition: transform var(--dur-fast) var(--ease);
-}
-
-.text-tune__toggle.is-open .icon {
-  transform: rotate(180deg);
-}
-
-.text-tune {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
-}
-
-.text-tune[hidden] {
-  display: none !important;
 }
 
 .text-tune__actions {
@@ -1739,13 +1688,18 @@
 .chat-dialog__delete {
   align-self: center;
   flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
   margin-right: 8px;
+  border-radius: 8px;
 }
 
 .chat-stage {
   position: relative;
-  flex: 1;
-  min-height: 96px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -1897,71 +1851,26 @@ body.is-resizing-row * {
 }
 
 .chat-bar--top {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: var(--sp-3);
-  min-height: 36px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-height: 40px;
 }
 
-.chat-bar__lead,
 .chat-bar__tail {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.chat-bar__tail {
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin-left: auto;
 }
 
-.work-icon {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  border-radius: 8px;
-}
-
-.work-sections {
-  gap: 6px;
+.chat-bar__tail .btn {
   min-height: 32px;
-  padding: 0 12px 0 8px;
-  border-radius: 10px;
-}
-
-.work-sections .icon {
-  width: 16px;
-  height: 16px;
-}
-
-.work-sections__label {
-  font-size: var(--fs-small);
-  font-weight: 600;
-}
-
-.work-sections[aria-pressed="true"] {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--accent-text);
-}
-
-@container main (max-width: 680px) {
-  .chat-bar--top {
-    display: flex;
-    flex-wrap: wrap;
-  }
-
-  .chat-modes {
-    order: -1;
-    flex: 1 1 100%;
-    justify-content: center;
-  }
-
-  .chat-bar__tail {
-    margin-left: auto;
-  }
 }
 
 .chat-stage-host,
@@ -1975,14 +1884,41 @@ body.is-resizing-row * {
 .text-work {
   width: min(100%, 40rem);
   align-self: center;
+  overflow: hidden;
 }
 
 .text-compose {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: var(--sp-3);
   margin-top: auto;
   padding-top: 8px;
+  container-type: inline-size;
+}
+
+.text-compose__scroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.sheet__grid.text-compose__grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.text-compose__grid .chat-field {
+  max-width: none;
+}
+
+.sheet__grid.text-compose__grid .text-compose__model {
+  grid-column: 1 / -1;
+}
+
+@container (max-width: 480px) {
+  .sheet__grid.text-compose__grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .text-compose .chat-field {
@@ -1991,11 +1927,12 @@ body.is-resizing-row * {
 }
 
 .text-compose__model {
-  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .text-box {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 8px;
 }

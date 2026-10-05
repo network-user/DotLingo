@@ -20,11 +20,6 @@
   transition: --sidebar-w 480ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* «Перевод» забирает окно: разделы уезжают, шапка складывается. */
-html[data-work="focus"] #app {
-  --sidebar-w: 0px !important;
-}
-
 /* --------------------------------------------------------------------------
    Sidebar
    -------------------------------------------------------------------------- */
@@ -57,12 +52,6 @@ html[data-sidebar="collapsed"] {
   background: var(--canvas);
   border-right: 1px solid var(--hairline);
   transition: opacity 420ms var(--ease), border-color 420ms var(--ease);
-}
-
-html[data-work="focus"] .sidebar {
-  opacity: 0;
-  pointer-events: none;
-  border-right-color: transparent;
 }
 
 /* Бренд */
@@ -155,11 +144,6 @@ html[data-work="focus"] .sidebar {
   touch-action: none;
   cursor: col-resize;
   transition: opacity 280ms var(--ease);
-}
-
-html[data-work="focus"] .sidebar-resize {
-  opacity: 0;
-  pointer-events: none;
 }
 
 .sidebar-resize::before {
@@ -805,16 +789,6 @@ html[data-sidebar="collapsed"] .download-dock {
     min-height 480ms cubic-bezier(0.22, 1, 0.36, 1),
     padding 480ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 320ms var(--ease);
-}
-
-html[data-work] .main-header {
-  max-height: 0;
-  min-height: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  opacity: 0;
-  pointer-events: none;
-  overflow: hidden;
 }
 
 .main-header__titles {

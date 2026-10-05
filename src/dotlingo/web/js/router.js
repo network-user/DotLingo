@@ -57,30 +57,6 @@ export function currentPage() {
 }
 
 /**
- * Рабочий режим «Перевод».
- * focus прячет левые разделы, sections возвращает их, не записывая это в настройки.
- * Пустая строка выключает режим на остальных страницах.
- * @param {'focus'|'sections'|''} mode
- */
-export function setWorkChrome(mode) {
-  const root = document.documentElement;
-  if (mode === 'focus' || mode === 'sections') root.dataset.work = mode;
-  else delete root.dataset.work;
-  const hidden = root.dataset.work === 'focus';
-  const sidebar = document.querySelector('.sidebar');
-  const handle = document.getElementById('sidebar-resize');
-  if (sidebar) {
-    sidebar.toggleAttribute('inert', hidden);
-    sidebar.setAttribute('aria-hidden', hidden ? 'true' : 'false');
-  }
-  if (handle) {
-    handle.toggleAttribute('inert', hidden);
-    handle.tabIndex = hidden ? -1 : 0;
-  }
-  window.dispatchEvent(new CustomEvent('dl-work-chrome', { detail: root.dataset.work || '' }));
-}
-
-/**
  * Переключить страницу. Если модуль ещё не подключился, экран не подменяется
  * заглушкой: оболочка догружает модуль и вызывает показ ещё раз.
  * @param {string} name
@@ -108,7 +84,6 @@ export function showPage(name) {
 
   current = name;
   store.set('page', name);
-  setWorkChrome(name === 'chat' ? 'focus' : '');
   host.replaceChildren();
 
   const title = document.getElementById('page-title');

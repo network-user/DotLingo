@@ -384,23 +384,8 @@ function wireShell() {
   });
 
   document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
-    if (document.documentElement.dataset.work === 'sections') {
-      router.setWorkChrome('focus');
-      return;
-    }
     const collapsed = document.documentElement.dataset.sidebar !== 'collapsed';
     setSidebarCollapsed(collapsed);
-  });
-  window.addEventListener('dl-work-chrome', () => {
-    const toggle = document.getElementById('sidebar-toggle');
-    if (!toggle) return;
-    if (document.documentElement.dataset.work === 'sections') {
-      const label = 'Закрыть разделы';
-      toggle.title = label;
-      toggle.setAttribute('aria-label', label);
-      return;
-    }
-    setSidebarMode(collapsedNow());
   });
   applySidebar(false);
   bindSidebarResize();

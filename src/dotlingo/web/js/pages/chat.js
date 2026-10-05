@@ -68,7 +68,7 @@ let wired = false;
 let stick = true;
 let booted = false;
 let incognito = false;
-let textTuneOpen = false;
+
 let listHidden = false;
 let meterShort = '';
 /** @type {{taskId: string, signature: string, root: HTMLElement, body: HTMLElement}|null} */
@@ -283,7 +283,6 @@ function ensureWire() {
     if (!request || router.currentPage() !== 'chat') return;
     openDeck(request);
   });
-  window.addEventListener('dl-work-chrome', () => paintSectionsButton());
 }
 
 function logElement() {
@@ -426,7 +425,7 @@ function dialogRow(item) {
     ]),
     el('button', {
       type: 'button',
-      class: 'btn btn--ghost btn--icon work-icon chat-dialog__delete',
+      class: 'btn btn--ghost btn--icon chat-dialog__delete',
       title: 'Удалить диалог',
       ariaLabel: 'Удалить диалог',
       onClick: () => void removeDialog(item.id),
@@ -571,7 +570,6 @@ async function openDialog(id) {
   attachments = [];
   draft = '';
   stick = true;
-  textTuneOpen = false;
   const host = document.getElementById('page-host');
   if (host) render(host);
 }
@@ -645,7 +643,6 @@ function setIncognito(next) {
     return;
   }
   incognito = next;
-  refreshTuneSummary();
   const box = document.querySelector('.text-incognito');
   if (box instanceof HTMLInputElement) box.checked = incognito;
   const note = document.querySelector('.chat-private');
@@ -667,7 +664,6 @@ async function startNew() {
   attachments = [];
   draft = '';
   stick = true;
-  textTuneOpen = false;
   const host = document.getElementById('page-host');
   if (host) render(host);
 }
@@ -725,7 +721,6 @@ async function send() {
     toast(`Сообщение длиннее ${TEXT_LIMIT} знаков. Большой текст бросьте файлом.`, 'error');
     return;
   }
-  closeTextTune();
   if (!dialogId) dialogId = newId();
   const shown = [text, ...attachments.map((file) => `Файл «${file.name}»`)].filter(Boolean).join('\n');
   const files = attachmentPayload();
@@ -1800,9 +1795,8 @@ function settingsSheet() {
           ? el('p', { class: 'sheet__names', text: names.join(', ') })
           : null,
       ]),
-      button({
+      barButton({
         label: 'Убрать',
-        size: 'sm',
         onClick: () => {
           staged = null;
           stageKey = '';
@@ -2431,65 +2425,33 @@ function syncFollow(reason) {
   paintProgress(follow.root, task);
 }
 
-function toggleSections() {
-  const open = document.documentElement.dataset.work === 'sections';
-  router.setWorkChrome(open ? 'focus' : 'sections');
-}
-
-function paintSectionsButton() {
-  const button = document.querySelector('.work-sections');
-  if (!(button instanceof HTMLButtonElement)) return;
-  const open = document.documentElement.dataset.work === 'sections';
-  const label = open ? 'Скрыть разделы' : 'Разделы';
-  button.title = open
-    ? 'Скрыть разделы и оставить перевод на весь экран'
-    : 'Проверка, очередь, модели и остальные разделы';
-  button.setAttribute('aria-label', label);
-  button.setAttribute('aria-pressed', open ? 'true' : 'false');
-  button.replaceChildren(
-    icon(open ? 'chevron-left' : 'chevron-right'),
-    el('span', { class: 'work-sections__label', text: label }),
-  );
+function barButton(opts) {
+  const node = button({ ...opts, size: 'sm' });
+  node.classList.add('btn--ghost');
+  return node;
 }
 
 function topBar(host) {
-  const shelfHiddenLabel = surface === 'text' ? 'Показать диалоги' : 'Показать историю';
-  const sectionsOpen = document.documentElement.dataset.work === 'sections';
+  const shelfName = surface === 'text' ? 'Диалоги' : 'История';
+  const showShelf = barButton({
+    label: shelfName,
+    title: surface === 'text' ? 'Показать диалоги' : 'Показать историю',
+    onClick: () => setListHidden(false),
+  });
+  showShelf.classList.add('chat-list-show');
+  showShelf.hidden = !listHidden;
   return el('div', { class: 'chat-bar chat-bar--top' }, [
-    el('div', { class: 'chat-bar__lead' }, [
-      el('button', {
-        type: 'button',
-        class: 'btn btn--ghost work-sections',
-        title: sectionsOpen
-          ? 'Скрыть разделы и оставить перевод на весь экран'
-          : 'Проверка, очередь, модели и остальные разделы',
-        ariaLabel: sectionsOpen ? 'Скрыть разделы' : 'Разделы',
-        ariaPressed: sectionsOpen ? 'true' : 'false',
-        onClick: () => toggleSections(),
-      }, [
-        icon(sectionsOpen ? 'chevron-left' : 'chevron-right'),
-        el('span', { class: 'work-sections__label', text: sectionsOpen ? 'Скрыть разделы' : 'Разделы' }),
-      ]),
-      el('button', {
-        type: 'button',
-        class: 'btn btn--ghost btn--icon work-icon chat-list-show',
-        hidden: !listHidden,
-        title: shelfHiddenLabel,
-        ariaLabel: shelfHiddenLabel,
-        onClick: () => setListHidden(false),
-      }, [icon(surface === 'text' ? 'message' : 'clock')]),
-    ]),
     el('div', { class: 'chat-modes', role: 'tablist', ariaLabel: 'Что переводим' }, [
       surfaceButton('file', 'Файл', host),
       surfaceButton('text', 'Текст', host),
     ]),
     el('div', { class: 'chat-bar__tail' }, [
+      showShelf,
       surface === 'text'
-        ? button({ label: 'Новый', size: 'sm', title: 'Новый диалог', onClick: () => void startNew() })
+        ? barButton({ label: 'Новый', title: 'Новый диалог', onClick: () => void startNew() })
         : null,
-      button({
+      barButton({
         label: 'Проект',
-        size: 'sm',
         title: 'Название, языки и свой глоссарий',
         onClick: () => requestProjectDeck({ mode: 'new' }),
       }),
@@ -2512,36 +2474,6 @@ function surfaceButton(value, label, host) {
   }, [label]);
 }
 
-function textTuneSummary() {
-  const extra = [];
-  if (context.trim()) extra.push('тон задан');
-  if (incognito) extra.push('не сохранится');
-  const base = tuneText();
-  return extra.length ? `${base} · ${extra.join(' · ')}` : base;
-}
-
-function refreshTuneSummary() {
-  const summary = document.querySelector('.text-tune__summary');
-  if (summary) summary.textContent = textTuneSummary();
-}
-
-function applyTextTune() {
-  const panel = document.querySelector('.text-tune');
-  const toggle = document.querySelector('.text-tune__toggle');
-  if (panel) panel.hidden = !textTuneOpen;
-  if (toggle) {
-    toggle.classList.toggle('is-open', textTuneOpen);
-    toggle.setAttribute('aria-expanded', textTuneOpen ? 'true' : 'false');
-  }
-  if (stick) scrollLog();
-}
-
-function closeTextTune() {
-  if (!textTuneOpen) return;
-  textTuneOpen = false;
-  applyTextTune();
-}
-
 function refreshTextTune(host) {
   const gap = document.querySelector('.text-tune__gap');
   const settings = document.querySelector('.text-tune__settings');
@@ -2553,7 +2485,6 @@ function refreshTextTune(host) {
     const fields = textSettings(host);
     settings.replaceChildren(...(fields ? [fields] : []));
   }
-  refreshTuneSummary();
 }
 
 function fitComposer(node) {
@@ -2575,11 +2506,9 @@ function textSettings(host) {
   return el('div', { class: 'sheet__grid text-compose__grid' }, [
     field('Оригинал', sourceControl(() => {
       touchQuick();
-      refreshTuneSummary();
     }), '«Авто» само определяет язык.'),
     field('Перевод', targetControl(() => {
       touchQuick();
-      refreshTuneSummary();
       void refreshMeter();
     })),
     el('div', { class: 'text-compose__model' }, [modelField]),
@@ -2616,7 +2545,6 @@ function textBody(host) {
     onInput: (event) => {
       context = event.target.value;
       touchQuick();
-      refreshTuneSummary();
       queueMeter();
     },
   });
@@ -2650,56 +2578,44 @@ function textBody(host) {
         void send();
       },
     }, [
-      el('div', { class: 'text-tune__gap' }, installedModels().length ? [] : [modelGap()]),
-      el('button', {
-        type: 'button',
-        class: `text-tune__toggle${textTuneOpen ? ' is-open' : ''}`,
-        ariaExpanded: textTuneOpen ? 'true' : 'false',
-        ariaControls: 'text-tune',
-        title: 'Языки, модель, тон и сохранение',
-        onClick: () => {
-          textTuneOpen = !textTuneOpen;
-          applyTextTune();
-        },
-      }, [
-        icon('chevron-down'),
-        el('span', { class: 'text-tune__summary', text: textTuneSummary() }),
-      ]),
-      el('div', {
-        id: 'text-tune',
-        class: 'text-tune',
-        hidden: !textTuneOpen,
-      }, [
+      el('div', { class: 'text-compose__scroll' }, [
+        el('div', { class: 'text-tune__gap' }, installedModels().length ? [] : [modelGap()]),
         el('div', { class: 'text-tune__settings' }, fields ? [fields] : []),
-        field('Тон', tone, 'Необязательно. Уходит вместе с фрагментом, до 800 знаков.'),
-        el('label', { class: 'sheet__check' }, [
-          el('input', {
-            type: 'checkbox',
-            class: 'text-incognito',
-            checked: incognito,
-            onChange: (event) => setIncognito(event.target.checked),
-          }),
-          el('span', { text: 'Не сохранять диалог' }),
+        el('details', {
+          class: 'sheet__more',
+          open: mode === 'ask' || incognito || Boolean(context.trim()),
+        }, [
+          el('summary', {}, ['Ещё']),
+          el('div', { class: 'sheet__more-body' }, [
+            field('Тон', tone, 'Необязательно. Уходит вместе с фрагментом, до 800 знаков.'),
+            el('label', { class: 'sheet__check' }, [
+              el('input', {
+                type: 'checkbox',
+                class: 'text-incognito',
+                checked: incognito,
+                onChange: (event) => setIncognito(event.target.checked),
+              }),
+              el('span', { text: 'Не сохранять диалог' }),
+            ]),
+            el('div', { class: 'text-tune__actions' }, [
+              barButton({
+                label: mode === 'ask' ? 'Вернуть перевод' : 'Спросить у модели',
+                onClick: () => {
+                  mode = mode === 'ask' ? 'translate' : 'ask';
+                  render(host);
+                },
+              }),
+              barButton({
+                label: 'Фрагмент из файла',
+                title: 'Короткая выдержка попадёт в сообщение. Целый документ переводится на «Файл».',
+                onClick: () => void attachFiles(),
+              }),
+            ]),
+            el('p', { class: 'chat-meter chat-note', text: meterShort }),
+          ]),
         ]),
-        el('div', { class: 'text-tune__actions' }, [
-          button({
-            label: mode === 'ask' ? 'Вернуть перевод' : 'Спросить у модели',
-            size: 'sm',
-            onClick: () => {
-              mode = mode === 'ask' ? 'translate' : 'ask';
-              render(host);
-            },
-          }),
-          button({
-            label: 'Фрагмент из файла',
-            size: 'sm',
-            title: 'Короткая выдержка попадёт в сообщение. Целый документ переводится на «Файл».',
-            onClick: () => void attachFiles(),
-          }),
-        ]),
-        el('p', { class: 'chat-meter chat-note', text: meterShort }),
+        hyNote,
       ]),
-      hyNote,
       el('div', { class: 'text-box' }, [
         el('div', { class: 'chat-files' }),
         input,
@@ -2741,13 +2657,11 @@ function render(host) {
     }, [
       el('div', { class: 'chat-dialogs__head' }, [
         el('p', { class: 'chat-dialogs__label', text: surface === 'text' ? 'Диалоги' : 'История' }),
-        el('button', {
-          type: 'button',
-          class: 'btn btn--ghost btn--icon work-icon',
+        barButton({
+          label: 'Скрыть',
           title: surface === 'text' ? 'Скрыть диалоги' : 'Скрыть историю',
-          ariaLabel: surface === 'text' ? 'Скрыть диалоги' : 'Скрыть историю',
           onClick: () => setListHidden(true),
-        }, [icon('chevron-left')]),
+        }),
       ]),
       el('input', {
         class: 'input task-search',
@@ -2984,7 +2898,7 @@ window.addEventListener('dl-focus-project', (event) => {
 
 router.registerPage('chat', {
   title: 'Перевод',
-  subtitle: 'Бросьте файл или напишите текст. Остальные разделы открываются кнопкой «Разделы».',
+  subtitle: 'Документ целиком или короткий фрагмент.',
   help: 'Бросьте документ или нажмите «Выбрать файл». Дальше язык, формат и модель. Последний выбор запоминается. «Текст» переводит фрагмент до '
     + `${TEXT_LIMIT} знаков. Проект со своим глоссарием открывается кнопкой «Проект».`,
   layout: 'chat',
