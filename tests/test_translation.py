@@ -156,6 +156,12 @@ def test_heading_is_not_packed_with_the_paragraph() -> None:
 def test_russian_punctuation_uses_guillemets() -> None:
     assert polish_translation('"Ну и отлично!"', "ru") == "«Ну и отлично!»"
     assert polish_translation("Не стоит спрашивать:, “и всё”.", "ru") == "Не стоит спрашивать: «и всё»."
+    assert (
+        polish_translation('«А какой смысл в книге", — думала она, "без картинок?»', "ru")
+        == "«А какой смысл в книге», — думала она, «без картинок?»"
+    )
+    assert polish_translation("опоздаю!» (Позже", "ru") == "опоздаю!» (Позже"
+    assert polish_translation("опоздаю!«(Позже", "ru") == "опоздаю!» (Позже"
     assert polish_translation('"Hi," she said.', "en") == '"Hi," she said.'
 
 

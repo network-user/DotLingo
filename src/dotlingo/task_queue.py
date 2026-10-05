@@ -1017,17 +1017,27 @@ _SPACE_BEFORE_PUNCT = re.compile(r"[ \t]+([,.;:!?…])")
 _DOUBLED_PUNCT = re.compile(r"([,.;:!?])\s*,")
 _SPACE_AFTER_OPEN_QUOTE = re.compile(r"«[ \t]+")
 _SPACE_BEFORE_CLOSE_QUOTE = re.compile(r"[ \t]+»")
+_MISTAKEN_OPEN_QUOTE = re.compile(r"«(?=[,.;:!?…»\)\(—–\-]|$)")
 
 
-def _pair_straight_quotes(text: str) -> str:
+def _normalize_quotes(text: str) -> str:
+    """Сводит кавычки к «ёлочкам», не открывая уже открытую."""
     opened = False
     chars: list[str] = []
     for char in text:
-        if char != '"':
-            chars.append(char)
+        if char in {"«", "„"}:
+            chars.append("«")
+            opened = True
             continue
-        chars.append("»" if opened else "«")
-        opened = not opened
+        if char in {"»", "”"}:
+            chars.append("»")
+            opened = False
+            continue
+        if char in {'"', "“"}:
+            chars.append("»" if opened else "«")
+            opened = not opened
+            continue
+        chars.append(char)
     return "".join(chars)
 
 
@@ -1035,12 +1045,13 @@ def polish_translation(text: str, target_code: str) -> str:
     """Приводит кавычки и пунктуацию ответа к обычной кириллической прозе."""
     if target_code not in _CYRILLIC_TARGETS or not text:
         return text
-    cleaned = text.replace("„", "«").replace("“", "«").replace("”", "»")
-    cleaned = _pair_straight_quotes(cleaned)
+    cleaned = _normalize_quotes(text)
+    cleaned = _MISTAKEN_OPEN_QUOTE.sub("»", cleaned)
     cleaned = _SPACE_BEFORE_PUNCT.sub(r"\1", cleaned)
     cleaned = _DOUBLED_PUNCT.sub(r"\1", cleaned)
     cleaned = _SPACE_AFTER_OPEN_QUOTE.sub("«", cleaned)
     cleaned = _SPACE_BEFORE_CLOSE_QUOTE.sub("»", cleaned)
+    cleaned = re.sub(r"([.!?…»])\(", r"\1 (", cleaned)
     return cleaned
 
 
