@@ -1220,6 +1220,12 @@ async function stopJob(job) {
   if (error) toast(error.message, 'error');
 }
 
+async function pauseJob(job) {
+  if (!job?.taskId) return;
+  const [, error] = await tryCall('pauseTask', job.taskId);
+  if (error) toast(error.message, 'error');
+}
+
 async function resumeJob(job) {
   if (!job?.taskId) return;
   const [, error] = await tryCall('resumeTask', job.taskId);
@@ -1517,11 +1523,19 @@ function rememberLive(task, event) {
   };
 }
 
+function followCount(task) {
+  if (!showMeter(task)) return STATUS_LABELS[task.status] || '';
+  const completed = Number(task.completed) || 0;
+  const total = Number(task.total) || 0;
+  return `${completed}/${total} · ${percentOf(task)}%`;
+}
+
 function paintProgress(root, task) {
   const line = progressDetail(task);
+  const short = followCount(task);
   const pct = String(percentOf(task));
   root.querySelectorAll('[data-live-progress]').forEach((node) => {
-    node.textContent = line;
+    node.textContent = node.closest('.follow-mini') ? short : line;
   });
   root.querySelectorAll('[data-live-fill]').forEach((node) => {
     node.style.width = `${pct}%`;
@@ -1913,7 +1927,6 @@ function stageRepeat(task) {
 }
 
 const FOLLOW_WAIT = new Set(['queued', 'running', 'paused']);
-const FOLLOW_SETTLED = new Set(['complete', 'failed', 'cancelled', 'interrupted', 'saved']);
 
 function isRealTask(task) {
   return Boolean(task?.taskId) && !String(task.taskId).startsWith('export:');
@@ -1949,31 +1962,6 @@ function cardHint(task) {
   }
   if (task.status === 'paused') return 'Пауза. Продолжение пойдёт с того же места.';
   return '';
-}
-
-function followHint(task) {
-  const more = tasks.some((item) => (
-    item.taskId !== task.taskId && isRealTask(item) && FOLLOW_WAIT.has(item.status)
-  ));
-  const tail = more ? ' В очереди есть ещё переводы.' : '';
-  switch (task.status) {
-    case 'queued':
-      return `Файл в очереди. Это окно останется поверх других разделов.${tail}`;
-    case 'running':
-      return `Перевод идёт. Раздел под окном можно листать.${tail}`;
-    case 'paused':
-      return `Пауза. Продолжение пойдёт с того же места.${tail}`;
-    case 'complete':
-      return `Файл готов. Его можно открыть или вернуться к переводу.${tail}`;
-    case 'failed':
-      return 'Перевод остановился. Его можно продолжить.';
-    case 'cancelled':
-      return 'Перевод отменён.';
-    case 'interrupted':
-      return 'Перевод прерван. Его можно продолжить.';
-    default:
-      return tail.trim();
-  }
 }
 
 function statusLine(task) {
@@ -2279,16 +2267,38 @@ function taskDetail() {
 }
 
 function pickFollowTask() {
-  const usable = (task) => isRealTask(task)
-    && (FOLLOW_WAIT.has(task.status) || FOLLOW_SETTLED.has(task.status))
-    && !followHidden(task);
+  const waiting = (task) => isRealTask(task) && FOLLOW_WAIT.has(task.status) && !followHidden(task);
   if (followWatchId) {
     const watched = tasks.find((item) => item.taskId === followWatchId);
-    if (watched && usable(watched)) return watched;
+    if (watched && waiting(watched)) return watched;
   }
-  const next = tasks.find((item) => usable(item) && FOLLOW_WAIT.has(item.status));
+  const next = tasks.find((item) => waiting(item));
   if (next) followWatchId = next.taskId;
+  else followWatchId = '';
   return next || null;
+}
+
+function followControls(task) {
+  if (!isRealTask(task) || !FOLLOW_WAIT.has(task.status)) return [];
+  const pause = task.status === 'paused'
+    ? button({
+      label: 'Продолжить',
+      size: 'sm',
+      onClick: () => void resumeJob(task),
+    })
+    : button({
+      label: 'Пауза',
+      size: 'sm',
+      onClick: () => void pauseJob(task),
+    });
+  return [
+    pause,
+    button({
+      label: 'Стоп',
+      size: 'sm',
+      onClick: () => void stopJob(task),
+    }),
+  ];
 }
 
 function followSignature(task) {
@@ -2329,40 +2339,36 @@ function dismissFollow() {
   window.setTimeout(remove, 400);
 }
 
-function hideFollow() {
-  if (!follow) return;
-  const current = tasks.find((item) => item.taskId === follow.taskId);
-  if (current) followHide = { taskId: current.taskId, phase: followPhase(current) };
-  dismissFollow();
-  syncFollow();
-}
-
 function fillFollow(task) {
-  if (!follow?.body) return;
-  const title = follow.root.querySelector('.modal__title');
-  const subtitle = follow.root.querySelector('.modal__subtitle');
-  if (title) title.textContent = task.documentName || 'Файл';
-  if (subtitle) subtitle.textContent = taskMeta(task);
-  const file = taskFile(task);
-  const hint = followHint(task);
-  const actions = taskActions(task, { navigate: true });
-  follow.body.replaceChildren(el('div', {
-    class: 'follow-panel',
+  if (!follow?.root) return;
+  const pct = percentOf(task);
+  const count = followCount(task);
+  follow.root.replaceChildren(el('div', {
+    class: 'follow-mini',
     dataset: { status: task.status || '' },
   }, [
-    statusLine(task),
-    progressMeter(task),
-    liveStage(task),
-    fileStage(task),
-    hint ? el('p', { class: 'run-card__hint', text: hint }) : null,
-    task.error ? el('p', { class: 'run-card__error', text: task.error }) : null,
-    file?.note ? el('p', { class: 'run-card__meta', text: file.note }) : null,
-    actions.length ? el('div', { class: 'run-card__actions' }, actions) : null,
+    el('div', { class: 'follow-mini__main' }, [
+      el('div', { class: 'follow-mini__line' }, [
+        el('p', { class: 'follow-mini__name', text: task.documentName || 'Файл' }),
+        el('p', { class: 'follow-mini__count', dataset: { liveProgress: '1' }, text: count }),
+      ]),
+      showMeter(task) ? el('div', {
+        class: 'run-card__track',
+        role: 'progressbar',
+        ariaValueNow: String(pct),
+        ariaValueMin: '0',
+        ariaValueMax: '100',
+        ariaLabel: 'Ход перевода',
+      }, [
+        el('div', {
+          class: 'run-card__fill',
+          dataset: { liveFill: '1' },
+          style: { width: `${pct}%` },
+        }),
+      ]) : null,
+    ]),
+    el('div', { class: 'follow-mini__actions' }, followControls(task)),
   ]));
-  mountPreviews(follow.body);
-  const fresh = follow.body.querySelector('[data-run-out]');
-  if (fresh && task.live?.translation) fresh.dataset.shown = '';
-  if (task.live) paintLiveBeat(task);
   placeFollowSpace();
 }
 
@@ -2380,28 +2386,12 @@ function placeFollowSpace() {
 function openFollow(task, signature) {
   dismissFollow();
   followWatchId = task.taskId;
-  const body = el('div', { class: 'modal__body' });
   const root = el('div', {
     class: 'follow-pop',
     role: 'region',
     ariaLabel: 'Ход перевода',
-  }, [
-    el('header', { class: 'modal__header' }, [
-      el('div', { class: 'follow-pop__titles' }, [
-        el('h2', { class: 'modal__title', text: task.documentName || 'Файл' }),
-        el('p', { class: 'modal__subtitle', text: taskMeta(task) }),
-      ]),
-      el('button', {
-        class: 'modal__close',
-        type: 'button',
-        title: 'Скрыть',
-        ariaLabel: 'Скрыть ход перевода',
-        onClick: () => hideFollow(),
-      }, [icon('close')]),
-    ]),
-    body,
-  ]);
-  follow = { taskId: task.taskId, signature, root, body };
+  });
+  follow = { taskId: task.taskId, signature, root, body: root };
   const host = document.getElementById('modal-root') || document.body;
   host.append(root);
   fillFollow(task);

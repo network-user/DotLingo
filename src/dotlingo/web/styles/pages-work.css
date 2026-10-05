@@ -2138,7 +2138,8 @@ body.is-resizing-row * {
 }
 
 .run-card[data-status="running"] .run-card__fill::after,
-.follow-panel[data-status="running"] .run-card__fill::after {
+.follow-panel[data-status="running"] .run-card__fill::after,
+.follow-mini[data-status="running"] .run-card__fill::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -2306,22 +2307,6 @@ body.is-resizing-row * {
 .run-preview__wait {
   color: var(--text-secondary);
   font-size: var(--fs-small);
-}
-
-.follow-pop .run-sheet {
-  min-height: 0;
-}
-
-.follow-pop .run-sheet__text {
-  max-height: 4.8rem;
-}
-
-.follow-pop .run-preview__frame {
-  height: 200px;
-}
-
-.follow-pop .run-preview__text {
-  max-height: 140px;
 }
 
 .sheet__head {

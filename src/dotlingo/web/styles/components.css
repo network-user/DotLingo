@@ -635,12 +635,12 @@
   position: fixed;
   z-index: 90;
   left: 50%;
-  bottom: 20px;
-  width: min(520px, calc(100% - 32px));
-  max-height: min(78vh, 680px);
+  bottom: 16px;
+  width: min(520px, calc(100% - 24px));
   display: flex;
   flex-direction: column;
-  border-radius: 20px;
+  padding: 10px 8px 10px 14px;
+  border-radius: 16px;
   border: 1px solid var(--overlay-edge);
   background-color: var(--overlay);
   color: var(--overlay-text);
@@ -678,14 +678,57 @@
   }
 }
 
-.follow-pop__titles {
+.follow-mini {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  flex: 1;
 }
 
-.follow-pop .modal__title,
-.follow-pop .modal__subtitle {
-  overflow-wrap: anywhere;
+.follow-mini__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.follow-mini__line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.follow-mini__name {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.follow-mini__count {
+  margin: 0;
+  flex: 0 0 auto;
+  color: var(--overlay-muted);
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.follow-mini .run-card__track {
+  height: 4px;
+  background: var(--overlay-sink);
+}
+
+.follow-mini__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
 }
 
 .follow-pop .btn:not(.btn--primary):not(.btn--danger) {
