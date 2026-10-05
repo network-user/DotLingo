@@ -13,6 +13,7 @@ from dotlingo.task_queue import (
     group_segments,
     output_repeats_context,
     output_token_budget,
+    polish_translation,
     select_memory_examples,
     split_packed,
 )
@@ -132,8 +133,30 @@ def test_chunk_and_context_budgets_follow_the_model_window() -> None:
 def test_short_header_does_not_steer_the_next_paragraph() -> None:
     window = _remember_context([], "RABBIT-HOLE.", "РЕБЯТНЫЙ ПОДВАЛ.", 2400)
     assert window == []
+    window = _remember_context(
+        [],
+        "DOWN THE RABBIT-HOLE.",
+        "Вниз по лазу для кроликов.",
+        2400,
+        kind="heading",
+    )
+    assert window == []
     window = _remember_context([], "Alice saw a white rabbit.", "Алиса увидела белого кролика.", 2400)
     assert window == [("Alice saw a white rabbit.", "Алиса увидела белого кролика.")]
+
+
+def test_heading_is_not_packed_with_the_paragraph() -> None:
+    mixed = [
+        {"block_ord": 1, "segment_ord": 0, "source": "DOWN THE RABBIT-HOLE.", "kind": "heading"},
+        {"block_ord": 2, "segment_ord": 0, "source": "Alice was tired of sitting.", "kind": "paragraph"},
+    ]
+    assert group_segments(mixed, 2400) == [[mixed[0]], [mixed[1]]]
+
+
+def test_russian_punctuation_uses_guillemets() -> None:
+    assert polish_translation('"Ну и отлично!"', "ru") == "«Ну и отлично!»"
+    assert polish_translation("Не стоит спрашивать:, “и всё”.", "ru") == "Не стоит спрашивать: «и всё»."
+    assert polish_translation('"Hi," she said.', "en") == '"Hi," she said.'
 
 
 def test_context_window_keeps_the_newest_pairs_inside_the_budget() -> None:

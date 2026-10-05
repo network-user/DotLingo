@@ -124,6 +124,10 @@ def pack_pending(
             lengths.append(len(text))
             # Короткий колонтитул рядом с абзацем сбивает маленькую модель.
             mismatch = min(lengths) <= 48 and max(lengths) >= 160
+            previous_kind = str(current[-1].get("kind") or "")
+            this_kind = str(segment.get("kind") or "")
+            if previous_kind != this_kind and "heading" in {previous_kind, this_kind}:
+                mismatch = True
         if current and (len(current) >= items or size + len(text) > limit or mismatch):
             groups.append(current)
             current = []
@@ -546,7 +550,10 @@ class TaskQueue:
                 [
                     (row["source"], row["translation"])
                     for row in self.store.completed_segments(task_id, limit=8)
-                    if _worth_context(str(row["source"]))
+                    if _worth_context(
+                        str(row["source"]),
+                        kind=_block_kind(block_by_order, int(row["block_ord"])),
+                    )
                 ],
                 budget,
             )
@@ -562,6 +569,8 @@ class TaskQueue:
             done = completed_at_start
             direction = f"{source_language} → {task['target_lang']}"
             target_name = prompt_language_name(str(task["target_lang"]))
+            for segment in pending:
+                segment["kind"] = _block_kind(block_by_order, int(segment["block_ord"]))
             groups = group_segments(pending, chunk_limit(context_size))
 
             def wait_ready() -> None:
@@ -603,7 +612,9 @@ class TaskQueue:
                     output = preserve_whitespace(source, output)
                     _remember_short(known_short, source, output)
                 self.store.save_segment(task_id, segment["block_ord"], segment["segment_ord"], output)
-                context_tail = _remember_context(context_tail, source, output, budget)
+                context_tail = _remember_context(
+                    context_tail, source, output, budget, kind=str(block.kind)
+                )
                 chars_done += len(source)
                 done += 1
                 since_summary += 1
@@ -657,7 +668,9 @@ class TaskQueue:
                             self.store.save_segment(
                                 task_id, segment["block_ord"], segment["segment_ord"], output
                             )
-                            context_tail = _remember_context(context_tail, source, output, budget)
+                            context_tail = _remember_context(
+                                context_tail, source, output, budget, kind=str(block.kind)
+                            )
                             chars_done += len(source)
                             done += 1
                             since_summary += 1
@@ -857,7 +870,7 @@ def _generate_translation(
     if (previous or story) and echoed:
         raw = once([], "")
         cleaned = clean_model_output(raw)
-    return cleaned
+    return polish_translation(cleaned, _target_code(direction))
 
 
 def build_translation_prompt(
@@ -968,8 +981,20 @@ def _hy_mt2_clause(has_markers: bool) -> str:
     )
 
 
-def _worth_context(source: str) -> bool:
-    """Короткий колонтитул не должен задавать слова следующим абзацам."""
+def _block_kind(blocks: dict[int, Any], block_ord: int) -> str:
+    block = blocks.get(block_ord)
+    return str(block.kind) if block is not None else ""
+
+
+def _target_code(direction: str) -> str:
+    parts = direction.split(" → ")
+    return parts[1].strip() if len(parts) == 2 else ""
+
+
+def _worth_context(source: str, *, kind: str = "") -> bool:
+    """Короткий колонтитул и заголовок не должны задавать слова следующим абзацам."""
+    if kind == "heading":
+        return False
     words = re.findall(r"[^\W\d_]{2,}", source, re.UNICODE)
     return len(words) >= 4
 
@@ -979,10 +1004,44 @@ def _remember_context(
     source: str,
     output: str,
     budget: int,
+    *,
+    kind: str = "",
 ) -> list[tuple[str, str]]:
-    if not _worth_context(source):
+    if not _worth_context(source, kind=kind):
         return window
     return fit_context_window([*window, (source, output)], budget)
+
+
+_CYRILLIC_TARGETS = frozenset({"ru", "uk", "be"})
+_SPACE_BEFORE_PUNCT = re.compile(r"[ \t]+([,.;:!?…])")
+_DOUBLED_PUNCT = re.compile(r"([,.;:!?])\s*,")
+_SPACE_AFTER_OPEN_QUOTE = re.compile(r"«[ \t]+")
+_SPACE_BEFORE_CLOSE_QUOTE = re.compile(r"[ \t]+»")
+
+
+def _pair_straight_quotes(text: str) -> str:
+    opened = False
+    chars: list[str] = []
+    for char in text:
+        if char != '"':
+            chars.append(char)
+            continue
+        chars.append("»" if opened else "«")
+        opened = not opened
+    return "".join(chars)
+
+
+def polish_translation(text: str, target_code: str) -> str:
+    """Приводит кавычки и пунктуацию ответа к обычной кириллической прозе."""
+    if target_code not in _CYRILLIC_TARGETS or not text:
+        return text
+    cleaned = text.replace("„", "«").replace("“", "«").replace("”", "»")
+    cleaned = _pair_straight_quotes(cleaned)
+    cleaned = _SPACE_BEFORE_PUNCT.sub(r"\1", cleaned)
+    cleaned = _DOUBLED_PUNCT.sub(r"\1", cleaned)
+    cleaned = _SPACE_AFTER_OPEN_QUOTE.sub("«", cleaned)
+    cleaned = _SPACE_BEFORE_CLOSE_QUOTE.sub("»", cleaned)
+    return cleaned
 
 
 def _hy_mt2_user(
