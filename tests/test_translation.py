@@ -139,6 +139,24 @@ def test_scaffold_echo_keeps_the_translation_after_the_source_label() -> None:
         "«Как можно читать книгу без картинок?»"
     )
     assert clean_model_output(glued) == "«Как можно читать книгу без картинок?»"
+    spanish = (
+        "*[Información de Fondo]*\n"
+        "Hola\n"
+        "\n"
+        "Identifique el idioma de origen del texto. Por favor, traduce el siguiente texto "
+        "al español, teniendo en cuenta la información proporcionada.\n"
+        "\n"
+        "*[Texto de Origen]*\n"
+        "Hola, ¿cómo estás?"
+    )
+    assert clean_model_output(spanish) == "Hola, ¿cómo estás?"
+    instruction_first = (
+        "Identifique el idioma de origen del texto. Por favor, traduce el siguiente texto "
+        "al español, teniendo en cuenta la información proporcionada.\n"
+        "*[Texto de Origen]*\n"
+        "Hola, ¿cómo estás?"
+    )
+    assert clean_model_output(instruction_first) == "Hola, ¿cómo estás?"
     repeated = "Алиса сидела на берегу и смотрела в книгу сестры без картинок. " * 2
     assert output_repeats_context(repeated, [("Alice sat.", repeated)], "")
     assert not output_repeats_context("Белый кролик достал часы из кармана жилета и побежал дальше по полю.", [("Alice sat.", repeated)], "")

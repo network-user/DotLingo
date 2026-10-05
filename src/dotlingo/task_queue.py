@@ -242,11 +242,28 @@ _INSTRUCTION_LINE = re.compile(
     r"|return exactly\s+\d+"
     r"|(?:пожалуйста[, ]+)?перевед\w+\s+следующ\w+\s+текст"
     r"|translate the following text"
+    r"|identify the source language"
+    r"|taking the provided background"
     r"|only output the translated"
     r"|без каких-либо дополнительных"
     r"|without any additional explanation"
+    r"|identif\w+\s+el\s+idioma\s+de\s+origen"
+    r"|traduc\w+\s+el\s+siguiente\s+texto"
+    r"|teniendo\s+en\s+cuenta\s+la\s+informaci"
+    r"|tradui\w+\s+le\s+texte\s+suivant"
+    r"|identif\w+\s+la\s+langue\s+(?:source|d['’]origine)"
+    r"|en\s+tenant\s+compte"
+    r"|übersetze\w*\s+den\s+folgenden\s+text"
+    r"|identifiziere\w*\s+die\s+ausgangssprache"
+    r"|traduz\w+\s+o\s+seguinte\s+texto"
+    r"|identif\w+\s+o\s+idioma\s+de\s+origem"
+    r"|traduc\w+\s+il\s+seguente\s+testo"
+    r"|identifica\w*\s+la\s+lingua\s+di\s+origine"
     r")",
     re.IGNORECASE,
+)
+_LEADING_STAR = re.compile(
+    r"^\s*#*\s*(?:\*+\s*\[[^\]\n]{1,90}\]\s*\*+|\[\s*\*[^\]\n]{1,90}\*\s*\])\s*#*\s*(.*)$"
 )
 _SENTENCE_END = ".!?…»\"”"
 _HASH_MARK = re.compile(r"[ \t]*#+(?=\s|\n|$)")
@@ -273,6 +290,54 @@ def _drop_instruction_prefix(line: str) -> str | None:
     return rest
 
 
+def _text_after_leading_label(line: str) -> str | None:
+    """Текст после метки, если строка с неё начинается. None — это не метка промпта."""
+    match = _LEADING_STAR.match(line)
+    if match is None:
+        return None
+    return match.group(1).strip()
+
+
+def _only_prompt(text: str) -> bool:
+    """В куске не осталось перевода, только фон и инструкция."""
+    cleaned = _BARE_SCAFFOLD.sub(" ", _STAR_LABEL.sub(" ", text))
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _cut_echo_line(stripped):
+            return False
+    return True
+
+
+def _answer_after_prompt_frame(text: str) -> str:
+    """Оставляет перевод после последней метки, если перед ней только каркас промпта.
+
+    Модель переводит шаблон на язык ответа: *[Información de Fondo]*, инструкцию
+    и *[Texto de Origen]*, а сам перевод ставит следом. Метка в середине фразы
+    сюда не попадает.
+    """
+    lines = text.splitlines()
+    boundaries = [
+        (index, rest)
+        for index, line in enumerate(lines)
+        if (rest := _text_after_leading_label(line)) is not None
+    ]
+    if not boundaries:
+        return text
+    first, _rest = boundaries[0]
+    last, last_rest = boundaries[-1]
+    before = "\n".join(lines[:first]).strip()
+    after_lines = [last_rest] if last_rest else []
+    after_lines.extend(lines[last + 1 :])
+    after = "\n".join(after_lines).strip()
+    if not after:
+        return text
+    if not before or _only_prompt(before):
+        return after
+    return "\n\n".join(part for part in (before, after) if part)
+
+
 def _cut_echo_line(line: str) -> str | None:
     """Отрезает хвост, где модель повторяет фон. None — строку убрать целиком."""
     if _PAIR_LINE.match(line):
@@ -296,6 +361,7 @@ def clean_model_output(text: str) -> str:
     cleaned = str(text or "").strip()
     if not cleaned:
         return ""
+    cleaned = _answer_after_prompt_frame(cleaned)
     cleaned = _STAR_LABEL.sub(" ", cleaned)
     cleaned = _BARE_SCAFFOLD.sub(" ", cleaned)
     cleaned = _HASH_MARK.sub(" ", cleaned)
