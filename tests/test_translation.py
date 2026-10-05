@@ -89,6 +89,8 @@ def test_scaffold_echo_keeps_the_translation_after_the_source_label() -> None:
         "ГЛАВА I"
     )
     assert clean_model_output(echoed) == "ГЛАВА I"
+    labeled = "*[Источник текста]* Она размышляла про себя, когда мимо пробежал кролик."
+    assert clean_model_output(labeled) == "Она размышляла про себя, когда мимо пробежал кролик."
     packed = "Первый абзац.\n\nВторой абзац."
     assert clean_model_output("*[Текст источника]*\n" + packed) == packed
     repeated = "Алиса сидела на берегу и смотрела в книгу сестры без картинок. " * 2
@@ -145,6 +147,11 @@ def test_short_whole_blocks_pack_and_a_split_paragraph_stays_alone() -> None:
     assert groups[1] == [segments[1]]
     assert groups[2] == [segments[2], segments[3]]
     assert groups[3] == [segments[4]]
+    mixed = [
+        {"block_ord": 10, "segment_ord": 0, "source": "DOWN THE"},
+        {"block_ord": 11, "segment_ord": 0, "source": "A" * 200},
+    ]
+    assert group_segments(mixed, 2400) == [[mixed[0]], [mixed[1]]]
     assert split_packed("Первый.\n\nВторой.", 2) == ["Первый.", "Второй."]
     assert split_packed("Первый.\nВторой.", 2) is None
     assert split_packed("Один.", 1) == ["Один."]

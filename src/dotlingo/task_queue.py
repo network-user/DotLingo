@@ -118,7 +118,13 @@ def pack_pending(
     items = max(1, int(max_items))
     for segment in segments:
         text = str(segment.get("source") or "")
-        if current and (len(current) >= items or size + len(text) > limit):
+        mismatch = False
+        if current:
+            lengths = [len(str(item.get("source") or "")) for item in current]
+            lengths.append(len(text))
+            # Короткий колонтитул рядом с абзацем сбивает маленькую модель.
+            mismatch = min(lengths) <= 48 and max(lengths) >= 160
+        if current and (len(current) >= items or size + len(text) > limit or mismatch):
             groups.append(current)
             current = []
             size = 0
@@ -174,12 +180,19 @@ def split_packed(output: str, count: int) -> list[str] | None:
 _SCAFFOLD_MARKERS = (
     "*[source text]*",
     "*[текст источника]*",
+    "*[источник текста]*",
     "*[background information]*",
     "*[информация о фоне]*",
     "[source text]",
     "[background information]",
 )
-_SOURCE_LABELS = ("*[source text]*", "*[текст источника]*", "[source text]")
+_SOURCE_LABELS = (
+    "*[source text]*",
+    "*[текст источника]*",
+    "*[источник текста]*",
+    "[source text]",
+)
+_LABEL_SPAN = re.compile(r"\*\[[^\]\n]{1,48}\]\*")
 _ECHO_LINE = re.compile(
     r"^\s*(?:"
     r"\*\[(?:background information|source text|информация о фоне|текст источника)\]\*"
@@ -213,9 +226,10 @@ def clean_model_output(text: str) -> str:
         if not line.strip():
             kept.append("")
             continue
-        if _ECHO_LINE.match(line):
+        stripped = _LABEL_SPAN.sub("", line).strip()
+        if not stripped or _ECHO_LINE.match(line) or _ECHO_LINE.match(stripped):
             continue
-        kept.append(line)
+        kept.append(stripped)
     return "\n".join(kept).strip()
 
 
@@ -235,12 +249,20 @@ def output_repeats_context(
     )
     if len(hay) < 80:
         return False
-    return compact[:120] in hay
+    if compact[:120] in hay:
+        return True
+    sentences = [part.strip() for part in re.split(r"[.!?…]+", compact) if len(part.strip()) >= 40]
+    if not sentences:
+        return False
+    copied = sum(1 for part in sentences if part in hay)
+    return copied >= 1 and copied * 2 >= len(sentences)
 
 
 def _has_scaffold(text: str) -> bool:
     lowered = text.casefold()
-    return any(marker in lowered for marker in _SCAFFOLD_MARKERS)
+    if any(marker in lowered for marker in _SCAFFOLD_MARKERS):
+        return True
+    return _LABEL_SPAN.search(text) is not None
 
 
 def _model_error(exc: Exception) -> str:
