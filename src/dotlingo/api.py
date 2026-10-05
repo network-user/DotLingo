@@ -194,8 +194,8 @@ def _write_translation(
 ) -> Path:
     """Пишет файл и возвращает фактический путь.
 
-    Если книжный PDF не уложился в полосу, рядом сохраняется Markdown,
-    чтобы перевод не остался только в базе.
+    Абзац, который не входит в книжную строку, дописывается в конец того же PDF.
+    Markdown остаётся только если сам PDF записать не удалось.
     """
     store.verify_source(doc_id)
     record = store.document(doc_id)
@@ -986,13 +986,18 @@ class Api:
             }
         )
 
-    def _task_export_path(self, store: ProjectStore, task_id: str) -> Path | None:
+    def _task_export_path(self, store: ProjectStore, task_id: str, suffix: str = "") -> Path | None:
+        """Уже собранный файл задачи. С суффиксом не отдаёт чужой тип, например .md вместо .pdf."""
+        wanted = suffix.lower()
         for item in store.exports():
             if str(item.get("task_id") or "") != task_id:
                 continue
             path = Path(str(item.get("path") or ""))
-            if path.is_file():
-                return path
+            if not path.is_file():
+                continue
+            if wanted and path.suffix.lower() != wanted:
+                continue
+            return path
         return None
 
     def _publish_task_output(self, store: ProjectStore, task_id: str) -> dict[str, Any]:
@@ -1011,12 +1016,7 @@ class Api:
             if found is not None:
                 return self._export_payload(store, task_id, found, reused=True)
         try:
-            found = self._task_export_path(store, task_id)
-            if found is not None:
-                return self._export_payload(store, task_id, found, reused=True)
             task = store.task(task_id)
-            if task.get("status") != "complete":
-                raise RuntimeError("Задача ещё не завершена.")
             record = store.document(str(task["document_id"]))
             parsed = store.parsed(str(task["document_id"]))
             lang = str(task.get("target_lang") or "").strip()
@@ -1027,6 +1027,11 @@ class Api:
                 parsed.metadata.get("pdfLayout") == "book",
                 str(task.get("output_suffix") or ""),
             )
+            found = self._task_export_path(store, task_id, suffix)
+            if found is not None:
+                return self._export_payload(store, task_id, found, reused=True)
+            if task.get("status") != "complete":
+                raise RuntimeError("Задача ещё не завершена.")
             destination = _versioned_output(
                 store,
                 record.name,

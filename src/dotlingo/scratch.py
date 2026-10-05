@@ -12,7 +12,7 @@ from typing import Any, Callable
 from dotlingo.engine import InferenceCancelled, InferenceError, InferenceProcess
 from dotlingo.hardware import detect, gpu_layers_for
 from dotlingo.models import get_model, model_path, verify_model
-from dotlingo.task_queue import build_translation_prompt
+from dotlingo.task_queue import build_translation_prompt, clean_model_output
 
 ASK_SYSTEM = (
     "Answer the user's message directly. Use the same language as the user. "
@@ -120,7 +120,7 @@ class ScratchTranslator:
             request_id = uuid.uuid4().hex
             self._thread = threading.Thread(
                 target=self._run,
-                args=(request_id, model, system, user),
+                args=(request_id, model, system, user, mode != "ask"),
                 name="DotLingo scratch",
                 daemon=True,
             )
@@ -148,19 +148,35 @@ class ScratchTranslator:
         if engine is not None:
             engine.close()
 
-    def _run(self, request_id: str, model: dict[str, Any], system: str, user: str) -> None:
+    def _run(
+        self,
+        request_id: str,
+        model: dict[str, Any],
+        system: str,
+        user: str,
+        clean_output: bool = False,
+    ) -> None:
         pending: list[str] = []
+        raw_parts: list[str] = []
         last_flush = time.monotonic()
 
         def flush() -> None:
             nonlocal last_flush
             if not pending:
                 return
-            self._push("chat_token", {"requestId": request_id, "text": "".join(pending)})
+            if clean_output:
+                text = clean_model_output("".join(raw_parts))
+                self._push(
+                    "chat_token",
+                    {"requestId": request_id, "text": text, "replace": True},
+                )
+            else:
+                self._push("chat_token", {"requestId": request_id, "text": "".join(pending)})
             pending.clear()
             last_flush = time.monotonic()
 
         def on_token(piece: str) -> None:
+            raw_parts.append(piece)
             pending.append(piece)
             if time.monotonic() - last_flush >= 0.08:
                 flush()
@@ -175,6 +191,8 @@ class ScratchTranslator:
             max_tokens = int(model.get("max_output_tokens") or 1800)
             result = engine.translate(system, user, max_tokens=max_tokens, on_token=on_token)
             flush()
+            if clean_output:
+                result = clean_model_output(result)
             self._push("chat_done", {"requestId": request_id, "ok": True, "text": result, "error": None})
         except InferenceCancelled:
             self._drop_engine()

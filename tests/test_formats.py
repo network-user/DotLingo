@@ -243,5 +243,41 @@ def test_book_pdf_with_empty_password_exports_pdf(tmp_path: Path, monkeypatch: p
 
     document = pdfium.PdfDocument(str(output))
     text = document[0].get_textpage().get_text_bounded()
+    count = len(document)
     document.close()
+    assert count == 1
     assert "Алиса совсем не ушиблась." in text
+
+
+def test_book_pdf_that_does_not_fit_stays_pdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("pypdf")
+    pytest.importorskip("reportlab")
+    pytest.importorskip("pdfminer")
+    pytest.importorskip("pypdfium2")
+    import dotlingo.pdf_layout as pdf_layout
+    from dotlingo.pdf_layout import FONT_NAME, _register_font
+
+    monkeypatch.setattr(pdf_layout, "_BOOK_FONT", "OldStandard")
+    _register_font()
+    plain = tmp_path / "alice.pdf"
+    _write_line_pdf(plain, "Alice was not hurt, and she jumped up.", FONT_NAME)
+    parsed = import_document(plain)
+    assert parsed.metadata.get("pdfLayout") == "book"
+    long = "Алиса " * 80
+    translations = {block.order: long for block in parsed.blocks if block.translatable}
+    output = tmp_path / "alice-long.pdf"
+    export_document(plain, output, parsed, translations)
+    assert output.suffix == ".pdf"
+    assert output.is_file()
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument(str(output))
+    pages = [
+        document[index].get_textpage().get_text_bounded()
+        for index in range(len(document))
+    ]
+    count = len(document)
+    document.close()
+    assert count >= 2
+    assert "Алиса" in "\n".join(pages)
+    assert output.with_suffix(".md").exists() is False

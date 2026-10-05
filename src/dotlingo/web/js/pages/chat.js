@@ -238,7 +238,8 @@ function ensureWire() {
     if (!payload || payload.requestId !== requestId) return;
     const turn = thread.find((item) => item.id === requestId);
     if (!turn) return;
-    turn.text += payload.text || '';
+    if (payload.replace) turn.text = payload.text || '';
+    else turn.text += payload.text || '';
     turn.pending = true;
     const node = document.querySelector(`[data-turn="${CSS.escape(requestId)}"] .chat-bubble__text`);
     if (node) node.textContent = turn.text;
@@ -252,7 +253,7 @@ function ensureWire() {
     requestId = '';
     if (turn) {
       turn.pending = false;
-      if (payload.ok && payload.text) turn.text = payload.text;
+      if (payload.ok && typeof payload.text === 'string') turn.text = payload.text;
       if (!payload.ok) {
         const message = payload.error || 'Ответ не получен.';
         if (!turn.text) {

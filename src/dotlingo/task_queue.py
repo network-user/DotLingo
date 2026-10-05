@@ -190,28 +190,105 @@ _SCAFFOLD_MARKERS = (
     "[source text]",
     "[background information]",
 )
-_SOURCE_LABELS = (
-    "*[source text]*",
-    "*[текст источника]*",
-    "*[источник текста]*",
-    "[source text]",
-)
 _LABEL_SPAN = re.compile(r"\*\[[^\]\n]{1,48}\]\*")
 _BARE_LABEL = re.compile(
     r"\[(?:source text|background information|текст источника|источник текста|информация о фоне)\]",
     re.IGNORECASE,
 )
-_ECHO_LINE = re.compile(
-    r"^\s*(?:"
-    r"\*\[(?:background information|source text|информация о фоне|текст источника)\]\*"
-    r"|\[(?:background information|source text)\]"
+# Модель переводит метки промпта и вставляет их в ответ: *[Текст источника]*,
+# [Предыдущие предложения для описания тона:], «Источник:» / «Перевод:».
+_STAR_LABEL = re.compile(
+    r"[ \t]*#*[ \t]*(?:\*+\s*\[[^\]\n]{1,90}\]\s*\*+|\[\s*\*[^\]\n]{1,90}\*\s*\])[ \t]*#*"
+)
+_BARE_SCAFFOLD = re.compile(
+    r"[ \t]*#*[ \t]*\[[^\]\n]{0,100}(?:"
+    r"текст\s+источника|источник\s+текста|исходн\w+\s+текст|"
+    r"информаци\w+\s+(?:о|для)\s+фона|фонов\w+\s+информаци|"
+    r"background\s+information|source\s+text|"
+    r"предыдущ\w+\s+предложен\w+|описани\w+\s+тона"
+    r")[^\]\n]{0,40}\][ \t]*#*",
+    re.IGNORECASE,
+)
+_ECHO_START = re.compile(
+    r"(?:"
+    r"недавн\w+\s+перевод\w*"
+    r"|предыдущ\w+\s+предложен\w+"
+    r"|для описания тона"
+    r"|продолж\w+\s+в\s+т(?:ом|ой)\s+же"
     r"|recent translation\b"
-    r"|недавн\w* перевод\w*"
     r"|story so far\b"
-    r"|(?:source|translation|источник|перевод)\s*:"
+    r"|continue in the same voice"
+    r"|do not repeat the background"
+    r"|translate only the source below"
+    r"|taking the provided background"
+    r"|информаци\w+\s+(?:о|для)\s+фона"
+    r"|background information"
     r")",
     re.IGNORECASE,
 )
+_PAIR_MARK = re.compile(
+    r"(?:^|[\s.:])(?:source|translation|источник|перевод)\s*:",
+    re.IGNORECASE,
+)
+_PAIR_LINE = re.compile(
+    r"^\s*(?:source|translation|источник|перевод)\s*:",
+    re.IGNORECASE,
+)
+_INSTRUCTION_LINE = re.compile(
+    r"(?:"
+    r"(?:источник|source)\s+состоит из\s+\d+"
+    r"|the source has\s+\d+\s+paragraphs"
+    r"|возвраща\w+(?:ся)?\s+(?:только|ровно)"
+    r"|return exactly\s+\d+"
+    r"|(?:пожалуйста[, ]+)?перевед\w+\s+следующ\w+\s+текст"
+    r"|translate the following text"
+    r"|only output the translated"
+    r"|без каких-либо дополнительных"
+    r"|without any additional explanation"
+    r")",
+    re.IGNORECASE,
+)
+_SENTENCE_END = ".!?…»\"”"
+_HASH_MARK = re.compile(r"[ \t]*#+(?=\s|\n|$)")
+
+
+def _drop_instruction_prefix(line: str) -> str | None:
+    """Срезает переведённую инструкцию в начале строки и оставляет перевод после неё."""
+    rest = line.strip()
+    changed = False
+    while True:
+        match = _INSTRUCTION_LINE.search(rest)
+        if match is None or match.start() > 15:
+            break
+        changed = True
+        after = rest[match.end() :]
+        end = re.search(r"[.!?…]", after)
+        if end is None:
+            return None
+        rest = after[end.end() :].lstrip(" \t")
+        if not rest:
+            return None
+    if not changed:
+        return line
+    return rest
+
+
+def _cut_echo_line(line: str) -> str | None:
+    """Отрезает хвост, где модель повторяет фон. None — строку убрать целиком."""
+    if _PAIR_LINE.match(line):
+        return None
+    without_instruction = _drop_instruction_prefix(line)
+    if without_instruction is None:
+        return None
+    line = without_instruction
+    match = _ECHO_START.search(line)
+    if match is None:
+        return line
+    head = line[: match.start()].rstrip(" \t#")
+    tail = line[match.start() :]
+    if not head or _PAIR_MARK.search(tail) or head[-1] in _SENTENCE_END:
+        return head or None
+    return line
 
 
 def clean_model_output(text: str) -> str:
@@ -219,25 +296,21 @@ def clean_model_output(text: str) -> str:
     cleaned = str(text or "").strip()
     if not cleaned:
         return ""
-    lowered = cleaned.casefold()
-    cut_at = -1
-    cut_len = 0
-    for marker in _SOURCE_LABELS:
-        index = lowered.rfind(marker)
-        if index > cut_at:
-            cut_at = index
-            cut_len = len(marker)
-    if cut_at >= 0:
-        cleaned = cleaned[cut_at + cut_len:].strip()
+    cleaned = _STAR_LABEL.sub(" ", cleaned)
+    cleaned = _BARE_SCAFFOLD.sub(" ", cleaned)
+    cleaned = _HASH_MARK.sub(" ", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r" *\n", "\n", cleaned)
+    cleaned = re.sub(r"\n +", "\n", cleaned)
     kept: list[str] = []
     for line in cleaned.splitlines():
         if not line.strip():
             kept.append("")
             continue
-        stripped = _BARE_LABEL.sub("", _LABEL_SPAN.sub("", line)).strip()
-        if not stripped or _ECHO_LINE.match(line) or _ECHO_LINE.match(stripped):
+        kept_line = _cut_echo_line(line.strip())
+        if not kept_line:
             continue
-        kept.append(stripped)
+        kept.append(kept_line)
     return "\n".join(kept).strip()
 
 
