@@ -21,6 +21,16 @@ from dotlingo.storage import ProjectStore, SourceIntegrityError
 
 EventSink = Callable[[dict[str, Any]], None]
 
+# Живая карточка показывает абзац, а не обрывок строки.
+LIVE_TEXT_LIMIT = 720
+
+
+def clip_live_text(text: str, limit: int = LIVE_TEXT_LIMIT) -> str:
+    """Оставить начало фрагмента для окна, где за переводом следят."""
+    if not isinstance(text, str) or len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "…"
+
 # nvidia-smi и импорт llama.cpp не нужны перед каждым фрагментом.
 _placement_cache: tuple[float, Any] | None = None
 
@@ -291,8 +301,8 @@ class TaskQueue:
             }
             for key in ("current_source", "current_translation"):
                 text = payload.get(key)
-                if isinstance(text, str) and len(text) > 160:
-                    payload[key] = text[:160]
+                if isinstance(text, str):
+                    payload[key] = clip_live_text(text)
             self.on_event(payload)
         except Exception:
             return

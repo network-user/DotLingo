@@ -7,7 +7,14 @@ from pathlib import Path
 import dotlingo.task_queue as task_queue_module
 from dotlingo.formats import export_document
 from dotlingo.storage import ProjectStore
-from dotlingo.task_queue import TaskQueue, build_chunks
+from dotlingo.task_queue import LIVE_TEXT_LIMIT, TaskQueue, build_chunks, clip_live_text
+
+
+def test_live_text_keeps_a_readable_paragraph() -> None:
+    assert clip_live_text("Короткий абзац.") == "Короткий абзац."
+    clipped = clip_live_text("я" * (LIVE_TEXT_LIMIT + 40))
+    assert clipped.endswith("…")
+    assert len(clipped) == LIVE_TEXT_LIMIT + 1
 
 
 def test_project_source_is_immutable_and_running_task_recovers(tmp_path: Path) -> None:

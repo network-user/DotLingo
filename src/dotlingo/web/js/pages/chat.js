@@ -835,9 +835,11 @@ async function onTaskEvent(payload) {
   } else if (payload.exportError) {
     task.error = payload.exportError;
   }
+  rememberLive(task, event);
   paintList();
   if (surface === 'file') paintStage();
   syncFollow();
+  paintLiveBeat(task);
 }
 
 async function focusProject(id) {
@@ -1316,6 +1318,11 @@ function normalizeModel() {
 async function refreshTasks() {
   const [rows] = await tryCall('listTasks');
   const next = Array.isArray(rows) ? rows : [];
+  const kept = new Map(tasks.filter((item) => item.live).map((item) => [item.taskId, item.live]));
+  next.forEach((item) => {
+    const live = kept.get(item.taskId);
+    if (live) item.live = live;
+  });
   next.sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(
     String(a.updatedAt || a.createdAt || ''),
   ));
@@ -1366,7 +1373,31 @@ function progressDetail(task) {
   if (!showMeter(task)) return '';
   const total = Number(task.total) || 0;
   const completed = Number(task.completed) || 0;
-  return `${completed} из ${total} · ${percentOf(task)}%`;
+  return `${completed} из ${total} · ${percentOf(task)}%${paceSuffix(task)}`;
+}
+
+function paceSuffix(task) {
+  const rate = Number(task?.live?.pace);
+  if (!Number.isFinite(rate) || rate <= 0) return '';
+  if (!['running', 'paused'].includes(task?.status)) return '';
+  return ` · ${Math.round(rate)} симв/с`;
+}
+
+function plainLive(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function rememberLive(task, event) {
+  const source = plainLive(event?.current_source);
+  const translation = plainLive(event?.current_translation);
+  if (!source && !translation) return;
+  const pace = Number(event.chars_per_sec);
+  task.live = {
+    source,
+    translation,
+    section: plainLive(event.message || event.current_section),
+    pace: Number.isFinite(pace) ? pace : 0,
+  };
 }
 
 function paintProgress(root, task) {
@@ -1467,6 +1498,7 @@ function paintStage() {
   stageKey = key;
   const view = staged ? settingsSheet() : (selectedKey ? taskDetail() : dropWell());
   node.replaceChildren(view);
+  mountPreviews(view);
 }
 
 function paintStageLive() {
@@ -1776,7 +1808,9 @@ function isRealTask(task) {
 }
 
 function taskFile(task) {
-  return (task?.files || []).find((item) => item?.path) || null;
+  const files = (task?.files || []).filter((item) => item?.path);
+  const pdf = files.find((item) => String(item.format || '').toLowerCase() === 'pdf' || /\.pdf$/i.test(item.path));
+  return pdf || files[0] || null;
 }
 
 function taskMeta(task) {
@@ -1940,6 +1974,168 @@ function taskActions(task, { navigate = false } = {}) {
   return actions;
 }
 
+const translationFrames = new WeakMap();
+const previewCache = new Map();
+
+function motionReduced() {
+  if (document.documentElement.dataset.reduceMotion === 'true') return true;
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+}
+
+function restartSheet(sheet) {
+  if (!(sheet instanceof HTMLElement)) return;
+  sheet.classList.remove('is-in');
+  void sheet.offsetWidth;
+  sheet.classList.add('is-in');
+}
+
+function writeTranslation(node, text) {
+  const previous = translationFrames.get(node);
+  if (previous) cancelAnimationFrame(previous);
+  const full = text || '';
+  if (!full || motionReduced()) {
+    node.textContent = full || '…';
+    return;
+  }
+  const start = performance.now();
+  const duration = Math.min(1600, 320 + full.length * 14);
+  const tick = (now) => {
+    const ratio = Math.min(1, (now - start) / duration);
+    const count = Math.max(1, Math.ceil(full.length * ratio));
+    node.textContent = full.slice(0, count);
+    if (ratio < 1) translationFrames.set(node, requestAnimationFrame(tick));
+    else translationFrames.delete(node);
+  };
+  node.textContent = '';
+  translationFrames.set(node, requestAnimationFrame(tick));
+}
+
+function liveSheet(label, kind, text) {
+  const body = el('p', {
+    class: 'run-sheet__text',
+    dataset: kind === 'out' ? { runOut: '1', shown: text } : { runSource: '1', shown: text },
+    text,
+  });
+  return el('div', { class: 'run-sheet' }, [
+    el('p', { class: 'run-sheet__label', text: label }),
+    body,
+  ]);
+}
+
+function liveStage(task) {
+  if (!FOLLOW_WAIT.has(task.status)) return null;
+  const live = task.live;
+  const source = live?.source || (task.status === 'queued'
+    ? 'Файл ждёт очереди. Текст появится, когда дойдёт ход.'
+    : 'Текст оригинала появится здесь.');
+  const translation = live?.translation || 'Перевод пишется сюда.';
+  return el('div', {
+    class: 'run-stage',
+    dataset: { runStage: '1', taskId: task.taskId },
+  }, [
+    el('p', {
+      class: 'run-stage__section',
+      dataset: { runSection: '1' },
+      text: live?.section || (task.status === 'queued' ? 'В очереди' : 'Ждём фрагмент'),
+    }),
+    el('div', { class: 'run-stage__sheets' }, [
+      liveSheet('Оригинал', 'source', source),
+      liveSheet('Перевод', 'out', translation),
+    ]),
+  ]);
+}
+
+function paintLiveBeat(task) {
+  if (!task?.live) return;
+  const sourceText = task.live.source || '';
+  const outText = task.live.translation || '';
+  document.querySelectorAll('[data-run-stage]').forEach((stage) => {
+    if (stage.dataset.taskId !== task.taskId) return;
+    const section = stage.querySelector('[data-run-section]');
+    if (section && task.live.section) section.textContent = task.live.section;
+    const source = stage.querySelector('[data-run-source]');
+    if (source && sourceText && source.dataset.shown !== sourceText) {
+      source.dataset.shown = sourceText;
+      source.textContent = sourceText;
+      restartSheet(source.closest('.run-sheet'));
+    }
+    const out = stage.querySelector('[data-run-out]');
+    if (out && outText && out.dataset.shown !== outText) {
+      out.dataset.shown = outText;
+      restartSheet(out.closest('.run-sheet'));
+      writeTranslation(out, outText);
+    }
+  });
+}
+
+function pdfBlobUrl(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+}
+
+function paintPreview(host, preview) {
+  if (preview.kind === 'text') {
+    host.replaceChildren(el('pre', { class: 'run-preview__text', text: preview.text || '' }));
+  } else if (preview.kind === 'pdf' && preview.url) {
+    host.replaceChildren(el('iframe', {
+      class: 'run-preview__frame',
+      src: preview.url,
+      title: preview.name || 'PDF',
+    }));
+  } else {
+    host.replaceChildren(el('p', {
+      class: 'run-preview__wait',
+      text: 'Файл собран. Его можно открыть или посмотреть.',
+    }));
+  }
+  placeFollowSpace();
+}
+
+async function loadPreview(path, host) {
+  if (!path || !(host instanceof HTMLElement)) return;
+  const cached = previewCache.get(path);
+  if (cached) {
+    paintPreview(host, cached);
+    return;
+  }
+  host.replaceChildren(el('p', { class: 'run-preview__wait', text: 'Открываем вид файла…' }));
+  const [data, error] = await tryCall('previewExport', path);
+  if (!host.isConnected) return;
+  if (error || !data) {
+    host.replaceChildren(el('p', { class: 'run-preview__wait', text: 'Вид файла не открылся.' }));
+    return;
+  }
+  const preview = { kind: data.kind || '', name: data.name || fileNameOf(path) };
+  if (data.kind === 'text') preview.text = String(data.text || '').slice(0, 1800);
+  if (data.kind === 'pdf' && typeof data.base64 === 'string' && data.base64.length <= 1_600_000) {
+    preview.url = pdfBlobUrl(data.base64);
+  } else if (data.kind === 'pdf') {
+    preview.kind = 'external';
+  }
+  previewCache.set(path, preview);
+  if (host.isConnected) paintPreview(host, preview);
+}
+
+function mountPreviews(root) {
+  if (!(root instanceof HTMLElement)) return;
+  root.querySelectorAll('[data-run-preview]').forEach((host) => {
+    void loadPreview(host.dataset.runPreview || '', host);
+  });
+}
+
+function fileStage(task) {
+  if (FOLLOW_WAIT.has(task.status)) return null;
+  const file = taskFile(task);
+  if (!file?.path) return null;
+  return el('div', { class: 'run-file' }, [
+    el('p', { class: 'run-sheet__label', text: 'Готовый файл' }),
+    el('p', { class: 'run-file__name', text: fileNameOf(file.path) }),
+    el('div', { class: 'run-preview', dataset: { runPreview: file.path } }),
+  ]);
+}
+
 function taskDetail() {
   const task = tasks.find((item) => item.taskId === selectedKey);
   if (!task) return dropWell();
@@ -1961,6 +2157,8 @@ function taskDetail() {
     el('h2', { class: 'run-card__title', text: task.documentName || 'Файл' }),
     el('p', { class: 'run-card__meta', text: taskMeta(task) }),
     progressMeter(task),
+    liveStage(task),
+    fileStage(task),
     hint ? el('p', { class: 'run-card__hint', text: hint }) : null,
     task.error ? el('p', { class: 'run-card__error', text: task.error }) : null,
     file?.note ? el('p', { class: 'run-card__meta', text: file.note }) : null,
@@ -2042,11 +2240,17 @@ function fillFollow(task) {
   }, [
     statusLine(task),
     progressMeter(task),
+    liveStage(task),
+    fileStage(task),
     hint ? el('p', { class: 'run-card__hint', text: hint }) : null,
     task.error ? el('p', { class: 'run-card__error', text: task.error }) : null,
     file?.note ? el('p', { class: 'run-card__meta', text: file.note }) : null,
     actions.length ? el('div', { class: 'run-card__actions' }, actions) : null,
   ]));
+  mountPreviews(follow.body);
+  const fresh = follow.body.querySelector('[data-run-out]');
+  if (fresh && task.live?.translation) fresh.dataset.shown = '';
+  if (task.live) paintLiveBeat(task);
   placeFollowSpace();
 }
 
