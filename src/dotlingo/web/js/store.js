@@ -19,6 +19,8 @@ const state = {
   hardware: null,
   /** @type {Array<object>} доступные модели */
   models: [],
+  /** @type {boolean} listModels уже ответил в этой сессии, удачно или нет */
+  modelsLoaded: false,
   /** @type {object|null} рекомендация устройства {id, reason} */
   recommendation: null,
   /** @type {Object<string, string>} языки: код → русское название */

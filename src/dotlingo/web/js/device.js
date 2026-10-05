@@ -35,9 +35,14 @@ export function catalogModels() {
   );
 }
 
+/** Файл модели уже на диске. Карточка может прийти с installed или только с installState. */
+export function isInstalledModel(model) {
+  return model?.installed === true || model?.installState === 'installed';
+}
+
 /** На диске уже есть хотя бы один вес. */
 export function hasInstalledModel() {
-  return (store.get('models') || []).some((model) => model.installed);
+  return (store.get('models') || []).some(isInstalledModel);
 }
 
 /**
@@ -120,12 +125,14 @@ async function loadCatalog() {
   const [data, error] = await tryCall('listModels');
   if (!data) {
     catalogError = error?.message || 'Не удалось прочитать каталог.';
+    store.set('modelsLoaded', true);
     return false;
   }
   catalogError = '';
   store.patch({
     models: data.models ?? [],
     recommendation: data.recommendation ?? null,
+    modelsLoaded: true,
   });
   store.emit('models_refreshed', data);
   return true;

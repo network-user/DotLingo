@@ -5,6 +5,7 @@
 import { assembleResult, resultFileActions } from './results.js';
 
 import { call, isDemo, tryCall } from '../bridge.js';
+import { catalogFailure, isInstalledModel, refreshCatalog } from '../device.js';
 import * as store from '../store.js';
 import * as router from '../router.js';
 import { el, button, toast, confirmDialog, helpMark, closeHelpMarks } from '../components.js';
@@ -76,7 +77,71 @@ let followHide = null;
 let followWatchId = '';
 
 function installedModels() {
-  return (store.get('models') || []).filter((model) => model.installed);
+  return (store.get('models') || []).filter(isInstalledModel);
+}
+
+function installedSignature() {
+  return installedModels().map((model) => model.id).join('|');
+}
+
+function chromeSignature() {
+  const ids = installedSignature();
+  if (ids) return ids;
+  if (!store.get('modelsLoaded')) return 'wait';
+  const failure = catalogFailure();
+  return failure ? `error:${failure}` : 'empty';
+}
+
+/** Подпись моделей, которая уже нарисована на экране перевода. */
+let shownInstalled = '';
+
+function modelGap() {
+  if (!store.get('modelsLoaded')) {
+    return el('div', { class: 'chat-missing' }, [
+      el('p', { text: 'Проверяем локальные модели…' }),
+    ]);
+  }
+  const failure = catalogFailure();
+  if (failure) {
+    return el('div', { class: 'chat-missing' }, [
+      el('p', { text: failure }),
+      button({
+        label: 'Повторить',
+        variant: 'primary',
+        onClick: () => void refreshCatalog(),
+      }),
+    ]);
+  }
+  return el('div', { class: 'chat-missing' }, [
+    el('p', { text: 'Чтобы переводить, скачайте локальную модель.' }),
+    button({ label: 'К моделям', variant: 'primary', onClick: () => router.showPage('models') }),
+  ]);
+}
+
+function syncModelChrome() {
+  const next = chromeSignature();
+  if (next === shownInstalled) return;
+  if (router.currentPage() !== 'chat' || focusKind === 'deck') {
+    shownInstalled = next;
+    return;
+  }
+  const host = document.getElementById('page-host');
+  if (!host) return;
+  const form = document.querySelector('.text-compose');
+  const sheet = document.querySelector('.sheet');
+  const gap = document.querySelector('.chat-missing');
+  if (!form && !sheet && !gap) {
+    shownInstalled = next;
+    return;
+  }
+  shownInstalled = next;
+  normalizeModel();
+  if (surface === 'text' && form?.firstElementChild) {
+    form.firstElementChild.replaceWith(textSettings(host));
+    return;
+  }
+  stageKey = '';
+  paintStage();
 }
 
 function currentModel() {
@@ -156,6 +221,7 @@ function ensureWire() {
   });
   store.on('hardware_detected', () => void refreshMeter());
   store.subscribe((key) => {
+    if (key === 'models' || key === 'modelsLoaded') syncModelChrome();
     if (key !== 'translateReady') return;
     if (!takeQuickMemory()) return;
     const host = document.getElementById('page-host');
@@ -1303,8 +1369,13 @@ function touchQuick() {
 
 function normalizeModel() {
   const models = installedModels();
+  if (!models.length) {
+    if (store.get('modelsLoaded')) modelId = '';
+    return;
+  }
   if (!modelId || !models.some((model) => model.id === modelId)) {
-    modelId = models[0]?.id || '';
+    const saved = store.get('translateModel');
+    modelId = saved && models.some((model) => model.id === saved) ? saved : models[0].id;
   }
   const codes = currentModel()?.languageCodes || [];
   if (targetLang !== 'auto' && codes.length && !codes.includes(targetLang)) {
@@ -1477,7 +1548,8 @@ function taskRow(task) {
 function stageViewKey() {
   if (staged) {
     const kind = staged.repeat ? 'repeat' : 'new';
-    return `sheet:${staged.names.join('\n')}:${modelId}:${destinationProjectId}:${kind}`;
+    const models = installedSignature();
+    return `sheet:${staged.names.join('\n')}:${modelId}:${destinationProjectId}:${kind}:${models}`;
   }
   if (selectedKey) {
     const task = tasks.find((item) => item.taskId === selectedKey);
@@ -1694,10 +1766,7 @@ function settingsSheet() {
           }))
           : field('Куда', projectSelect),
       ])
-      : el('div', { class: 'chat-missing' }, [
-        el('p', { text: 'Чтобы переводить, скачайте локальную модель.' }),
-        button({ label: 'К моделям', variant: 'primary', onClick: () => router.showPage('models') }),
-      ]),
+      : modelGap(),
     el('details', { class: 'sheet__more', open: Boolean(context.trim()) }, [
       el('summary', {}, ['Ещё']),
       el('div', { class: 'sheet__more-body' }, [
@@ -2403,12 +2472,7 @@ function surfaceButton(value, label, host) {
 
 function textSettings(host) {
   const models = installedModels();
-  if (!models.length) {
-    return el('div', { class: 'chat-missing' }, [
-      el('p', { text: 'Чтобы переводить, скачайте локальную модель.' }),
-      button({ label: 'К моделям', variant: 'primary', onClick: () => router.showPage('models') }),
-    ]);
-  }
+  if (!models.length) return modelGap();
   const modelField = field('Модель', modelControl(() => {
     touchQuick();
     render(host);
@@ -2605,6 +2669,7 @@ function render(host) {
   if (list) bindDrop(list);
   if (work) bindDrop(work);
   paintList();
+  shownInstalled = chromeSignature();
   if (surface === 'text') {
     paintLog();
     paintFiles();
