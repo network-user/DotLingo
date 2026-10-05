@@ -21,6 +21,7 @@ def split_text(text: str, max_chars: int = 1_100) -> list[TextSegment]:
     while len(remainder) > max_chars:
         window = remainder[:max_chars]
         sentence_cuts = [m.end() for m in re.finditer(r"[.!?…][\"'»”)]*\s+", window)]
+        sentence_cuts.extend(m.end() for m in re.finditer(r"[。！？]", window))
         sentence_cuts = [cut for cut in sentence_cuts if cut > max_chars // 2]
         if sentence_cuts:
             cut = sentence_cuts[-1]

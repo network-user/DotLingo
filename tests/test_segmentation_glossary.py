@@ -14,6 +14,13 @@ def test_split_text_keeps_exact_source_and_prefers_sentence_boundaries() -> None
     assert all(item.text for item in segments)
 
 
+def test_split_text_breaks_on_cjk_punctuation() -> None:
+    source = ("甲" * 80) + "。" + ("乙" * 80)
+    segments = split_text(source, max_chars=100)
+    assert "".join(item.text for item in segments) == source
+    assert segments[0].text.endswith("。")
+
+
 def test_split_text_rejects_too_small_limit() -> None:
     with pytest.raises(ValueError):
         split_text("text", max_chars=12)
