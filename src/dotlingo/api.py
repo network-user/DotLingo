@@ -730,9 +730,16 @@ class Api:
         if store is None:
             return _err("Проект не найден.", "not_found")
         key = str(store.root)
-        queue = self.project_queues.pop(key, None)
+        queue = self.project_queues.get(key)
         if queue is not None:
-            queue.close(timeout=1)
+            queue.close(timeout=8)
+            worker = getattr(queue, "_worker", None)
+            if worker is not None and getattr(worker, "is_alive", lambda: False)():
+                return _err(
+                    "Перевод ещё останавливается. Подождите немного и удалите проект снова.",
+                    "busy",
+                )
+            self.project_queues.pop(key, None)
         with self._lock:
             self.projects = [p for p in self.projects if p.project["id"] != project_id]
             if self.active_project_id == project_id:
@@ -1159,15 +1166,20 @@ class Api:
                 return _err("Документ не найден.", "not_found")
         task_ids: list[str] = []
         warnings: list[dict[str, Any]] = []
+        prepared: list[tuple[Any, dict[int, list[str]]]] = []
+        for document in documents:
+            chunks = build_chunks(
+                store.blocks(document.id),
+                max_chars=chunk_limit(int(model.get("default_context") or 4096)),
+            )
+            if not any(chunks.values()):
+                return _err(f"В «{document.name}» нет текста для перевода.", "empty_document")
+            prepared.append((document, chunks))
         # Диалог держит ту же модель в памяти. Перед документом её нужно отпустить.
         self._scratch.close()
         try:
             queue = self._queue_for(store)
-            for document in documents:
-                chunks = build_chunks(
-                    store.blocks(document.id),
-                    max_chars=chunk_limit(int(model.get("default_context") or 4096)),
-                )
+            for document, chunks in prepared:
                 for target in targets:
                     task_id = store.create_task(
                         document.id,
@@ -1405,7 +1417,12 @@ class Api:
             with self._lock:
                 self.hardware = snapshot
                 self._hardware_detected_at = detected_at
-            _save_hardware_cache(self.data_dir, snapshot, detected_at)
+            # Таймаут пробника GPU - не отказ. Следующий запуск спросит ещё раз.
+            probe_failed = (
+                snapshot.llama_runtime_available and snapshot.llama_gpu_offload_available is None
+            )
+            if not probe_failed:
+                _save_hardware_cache(self.data_dir, snapshot, detected_at)
             self._push("hardware_detected", _serialize_hardware(snapshot, detected_at))
 
         self._spawn(work, "device_check")
@@ -2052,7 +2069,7 @@ class Api:
                 worker.join(timeout=3)
         self._scratch.close()
         for queue in self.project_queues.values():
-            queue.close(timeout=1)
+            queue.close(timeout=8)
         return _ok(None)
 
     def resumeQueuedTasks(self) -> dict[str, Any]:

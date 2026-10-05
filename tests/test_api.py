@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -214,6 +215,39 @@ def test_ensure_work_project_reuses_the_quick_shelf(tmp_path: Path) -> None:
     opened = api.ensureWorkProject({"projectId": named["data"]["id"]})
     assert opened["data"]["id"] == named["data"]["id"]
     assert opened["data"]["title"] == "Тестовый проект"
+
+
+def test_delete_project_waits_until_translation_stops(tmp_path: Path) -> None:
+    api = _make_api(tmp_path)
+    created = _create_project(api)
+    assert created["ok"] is True
+    project_id = created["data"]["id"]
+    store = api._store_by_id(project_id)
+    assert store is not None
+    release = threading.Event()
+
+    def block() -> None:
+        release.wait(30)
+
+    worker = threading.Thread(target=block, daemon=True)
+    worker.start()
+
+    class StuckQueue:
+        def __init__(self) -> None:
+            self._worker = worker
+
+        def close(self, timeout: float = 8) -> None:
+            self._worker.join(timeout=0.05)
+
+    api.project_queues[str(store.root)] = StuckQueue()
+    refused = api.deleteProject(project_id)
+    assert refused["ok"] is False
+    assert refused["code"] == "busy"
+    assert api.getActiveProject()["data"]["id"] == project_id
+    assert (store.root / "project.sqlite").is_file()
+    release.set()
+    worker.join(timeout=2)
+    assert api.deleteProject(project_id)["ok"] is True
 
 
 def test_project_validation(tmp_path: Path) -> None:
@@ -510,7 +544,7 @@ def test_hardware_cached_until_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyP
         gpu_names=("NVIDIA Demo",),
         gpu_vram_gb=(4.0,),
         llama_runtime_available=True,
-        llama_gpu_offload_available=None,
+        llama_gpu_offload_available=False,
     )
     monkeypatch.setattr(api_module, "detect", lambda _path: snapshot)
     assert api.detectHardware()["ok"] is True
@@ -522,6 +556,26 @@ def test_hardware_cached_until_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert cached["cpuThreads"] == 8
     assert cached["gpuNames"] == ["NVIDIA Demo"]
     assert cached["detectedAt"]
+
+
+def test_inconclusive_gpu_probe_is_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dotlingo.hardware import HardwareSnapshot
+
+    api = _make_api(tmp_path, sync=True)
+    snapshot = HardwareSnapshot(
+        cpu_threads=8,
+        ram_total_gb=16.0,
+        ram_available_gb=8.0,
+        disk_free_gb=100.0,
+        gpu_names=("NVIDIA Demo",),
+        gpu_vram_gb=(4.0,),
+        llama_runtime_available=True,
+        llama_gpu_offload_available=None,
+    )
+    monkeypatch.setattr(api_module, "detect", lambda _path: snapshot)
+    assert api.detectHardware()["ok"] is True
+    assert api.hardware is snapshot
+    assert not (tmp_path / "hardware.json").exists()
 
 
 # --------------------------------------------------------------------- close semantics
