@@ -283,33 +283,37 @@ class ProjectStore:
         project_id = str(uuid.uuid4())
         root = base / project_id
         root.mkdir()
-        (root / "source").mkdir()
-        (root / "output").mkdir()
-        db_path = root / "project.sqlite"
-        with _connect(db_path) as db:
-            db.executescript(SCHEMA)
-            timestamp = _now()
-            selected_targets = list(
-                dict.fromkeys(target_langs if target_langs is not None else [target_lang])
-            )
-            if not selected_targets:
-                raise ValueError("Выберите хотя бы один язык перевода.")
-            target_lang = selected_targets[0]
-            db.execute(
-                "INSERT INTO project(id,title,source_lang,target_lang,target_langs_json,model_id,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                (
-                    project_id,
-                    title.strip() or "Новый проект",
-                    source_lang,
-                    target_lang,
-                    json.dumps(selected_targets, ensure_ascii=False),
-                    model_id,
-                    timestamp,
-                    timestamp,
-                ),
-            )
-        return cls(root)
+        try:
+            (root / "source").mkdir()
+            (root / "output").mkdir()
+            db_path = root / "project.sqlite"
+            with _connect(db_path) as db:
+                db.executescript(SCHEMA)
+                timestamp = _now()
+                selected_targets = list(
+                    dict.fromkeys(target_langs if target_langs is not None else [target_lang])
+                )
+                if not selected_targets:
+                    raise ValueError("Выберите хотя бы один язык перевода.")
+                target_lang = selected_targets[0]
+                db.execute(
+                    "INSERT INTO project(id,title,source_lang,target_lang,target_langs_json,model_id,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                    (
+                        project_id,
+                        title.strip() or "Новый проект",
+                        source_lang,
+                        target_lang,
+                        json.dumps(selected_targets, ensure_ascii=False),
+                        model_id,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+            return cls(root)
+        except Exception:
+            shutil.rmtree(root, ignore_errors=True)
+            raise
 
     @property
     def project(self) -> dict[str, Any]:
@@ -317,6 +321,8 @@ class ProjectStore:
             return self._project_row
         with _connect(self.db_path) as db:
             row = db.execute("SELECT * FROM project LIMIT 1").fetchone()
+        if row is None:
+            raise sqlite3.DatabaseError("В базе проекта нет записи.")
         self._project_row = dict(row)
         return self._project_row
 
@@ -752,7 +758,11 @@ class ProjectStore:
                 db.execute(
                     "INSERT INTO translations(document_id,target_lang,block_ord,text,edited,updated_at) "
                     "VALUES(?,?,?, ?,0,?) ON CONFLICT(document_id,target_lang,block_ord) "
-                    "DO UPDATE SET text=excluded.text,edited=0,updated_at=excluded.updated_at",
+                    "DO UPDATE SET "
+                    "text=CASE WHEN translations.edited=1 THEN translations.text ELSE excluded.text END, "
+                    "edited=CASE WHEN translations.edited=1 THEN 1 ELSE 0 END, "
+                    "updated_at=CASE WHEN translations.edited=1 "
+                    "THEN translations.updated_at ELSE excluded.updated_at END",
                     (task["document_id"], task["target_lang"], block_ord, "".join(parts), timestamp),
                 )
             db.execute(
@@ -893,7 +903,9 @@ def list_projects(base: Path) -> list[ProjectStore]:
     for child in Path(base).iterdir():
         if (child / "project.sqlite").is_file():
             try:
-                result.append(ProjectStore(child))
+                store = ProjectStore(child)
+                store.project
+                result.append(store)
             except (OSError, sqlite3.DatabaseError):
                 continue
     return sorted(result, key=lambda project: project.project["updated_at"], reverse=True)

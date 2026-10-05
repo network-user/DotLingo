@@ -66,6 +66,62 @@ def test_confirmed_pairs_keep_human_edits_apart_from_the_machine_draft(tmp_path:
     assert store.translation_flags(document.id, "ru")[first] is True
 
 
+def test_finish_keeps_a_human_edit(tmp_path: Path) -> None:
+    source = tmp_path / "doc.txt"
+    source.write_text("Harbour master.", encoding="utf-8")
+    store = ProjectStore.create(tmp_path / "projects", "Test")
+    document = store.import_file(source)
+    task_id = store.create_task(document.id, "hy-mt2-7b-q4km", build_chunks(store.blocks(document.id)))
+    pending = store.pending_segments(task_id)
+    for segment in pending:
+        store.save_segment(task_id, segment["block_ord"], segment["segment_ord"], "черновик")
+    store.finish_task(task_id)
+    order = pending[0]["block_ord"]
+    store.save_edit(document.id, order, "Начальник гавани.", target_lang="ru")
+    store.finish_task(task_id)
+    assert store.translations(document.id)[order] == "Начальник гавани."
+    assert store.translation_flags(document.id, "ru")[order] is True
+
+
+def test_pause_and_cancel_do_not_reopen_a_finished_task(tmp_path: Path) -> None:
+    source = tmp_path / "doc.txt"
+    source.write_text("Text", encoding="utf-8")
+    store = ProjectStore.create(tmp_path / "projects", "Test")
+    document = store.import_file(source)
+    task_id = store.create_task(document.id, "test-model", build_chunks(store.blocks(document.id)))
+    pending = store.pending_segments(task_id)
+    for segment in pending:
+        store.save_segment(task_id, segment["block_ord"], segment["segment_ord"], "текст")
+    store.finish_task(task_id)
+    queue = TaskQueue(store, tmp_path / "models")
+    queue.pause(task_id)
+    queue.cancel(task_id)
+    assert store.task(task_id)["status"] == "complete"
+
+
+def test_broken_project_database_does_not_stop_the_list(tmp_path: Path) -> None:
+    from dotlingo.storage import list_projects
+
+    base = tmp_path / "projects"
+    good = ProjectStore.create(base, "Целый")
+    broken = base / "broken"
+    broken.mkdir()
+    (broken / "project.sqlite").write_bytes(b"")
+    found = list_projects(base)
+    assert [item.project["id"] for item in found] == [good.project["id"]]
+
+
+def test_failed_create_does_not_leave_a_directory(tmp_path: Path) -> None:
+    base = tmp_path / "projects"
+    try:
+        ProjectStore.create(base, "Пустой", target_langs=[])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("пустой список языков должен быть отклонён")
+    assert not base.exists() or list(base.iterdir()) == []
+
+
 def test_cancel_queued_task_persists_state(tmp_path: Path) -> None:
     source = tmp_path / "doc.txt"
     source.write_text("Text", encoding="utf-8")
