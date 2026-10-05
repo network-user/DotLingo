@@ -1927,6 +1927,10 @@ body.is-resizing-row * {
   padding: 8px 4px 24px;
 }
 
+.chat-stage-host:has(.run-card) {
+  justify-content: safe center;
+}
+
 .task-search {
   width: calc(100% - 24px);
   margin: 0 12px 8px;
@@ -2007,6 +2011,119 @@ body.is-resizing-row * {
   max-width: 40rem;
   margin-top: 12px;
   padding: var(--sp-2) 0 var(--sp-4);
+}
+
+.run-card {
+  flex: 0 0 auto;
+  width: min(100%, 28rem);
+  margin-block: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 36px 28px 28px;
+  text-align: center;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.run-card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--fs-small);
+  font-weight: 600;
+}
+
+.run-card__dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.run-card[data-status="running"] .run-card__dot,
+.follow-panel[data-status="running"] .run-card__dot {
+  animation: task-live-pulse 1.6s ease-in-out infinite;
+}
+
+.run-card__title {
+  margin: 0;
+  font-size: var(--fs-subtitle);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.run-card__meta,
+.run-card__hint {
+  margin: 0;
+  max-width: 36rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-small);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.run-card__meter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.run-card__track {
+  width: 100%;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--surface-hover);
+  overflow: hidden;
+}
+
+.run-card__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--text);
+  transition: width var(--dur-slow) var(--ease);
+}
+
+.run-card__count {
+  margin: 0;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.run-card__error {
+  margin: 0;
+  color: var(--error);
+  overflow-wrap: anywhere;
+}
+
+.run-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.run-card__actions .btn:not(.btn--primary) {
+  background: var(--field);
+}
+
+.follow-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
 }
 
 .sheet__head {

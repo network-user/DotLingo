@@ -630,6 +630,73 @@
   justify-content: flex-start;
 }
 
+/* Ход перевода поверх других разделов. Без затемнения: страницу можно листать. */
+.follow-pop {
+  position: fixed;
+  z-index: 90;
+  left: 50%;
+  bottom: 20px;
+  width: min(440px, calc(100% - 32px));
+  max-height: min(70vh, 520px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 20px;
+  border: 1px solid var(--overlay-edge);
+  background-color: var(--overlay);
+  color: var(--overlay-text);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: follow-pop-in var(--dur-slow) var(--ease) both;
+  --text: var(--overlay-text);
+  --text-secondary: var(--overlay-muted);
+  --text-tertiary: var(--overlay-quiet);
+}
+
+.follow-pop.is-leaving {
+  animation: follow-pop-out var(--dur-base) var(--ease) forwards;
+}
+
+@keyframes follow-pop-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@keyframes follow-pop-out {
+  from {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(16px);
+  }
+}
+
+.follow-pop__titles {
+  min-width: 0;
+  flex: 1;
+}
+
+.follow-pop .modal__title,
+.follow-pop .modal__subtitle {
+  overflow-wrap: anywhere;
+}
+
+.follow-pop .btn:not(.btn--primary):not(.btn--danger) {
+  border-color: var(--overlay-edge);
+  color: var(--overlay-text);
+}
+
+body.has-follow .page-scroll:not(:has(.chat)) {
+  padding-bottom: calc(var(--sp-5) + var(--follow-space, 280px));
+}
+
 /* --------------------------------------------------------------------------
    Тосты
    -------------------------------------------------------------------------- */

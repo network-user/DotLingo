@@ -69,6 +69,11 @@ let booted = false;
 let incognito = false;
 let listHidden = false;
 let meterShort = '';
+/** @type {{taskId: string, signature: string, root: HTMLElement, body: HTMLElement}|null} */
+let follow = null;
+/** @type {{taskId: string, phase: string}|null} */
+let followHide = null;
+let followWatchId = '';
 
 function installedModels() {
   return (store.get('models') || []).filter((model) => model.installed);
@@ -159,6 +164,7 @@ function ensureWire() {
   store.on('task_event', (payload) => {
     void onTaskEvent(payload);
   });
+  store.watch('page', () => syncFollow('page'));
   store.on('open-project-deck', () => {
     const request = consumeDeckRequest();
     if (!request || router.currentPage() !== 'chat') return;
@@ -796,6 +802,7 @@ async function publishJob(job, projectId) {
     job.documentId,
     job.targetLang,
     projectId || '',
+    job.taskId || '',
   );
   job.publishing = false;
   if (error || !data?.path) {
@@ -830,6 +837,7 @@ async function onTaskEvent(payload) {
   }
   paintList();
   if (surface === 'file') paintStage();
+  syncFollow();
 }
 
 async function focusProject(id) {
@@ -1315,6 +1323,7 @@ async function refreshTasks() {
   if (selectedKey && !tasks.some((item) => item.taskId === selectedKey)) selectedKey = '';
   paintList();
   if (surface === 'file') paintStage();
+  syncFollow();
 }
 
 function formatWhen(value) {
@@ -1340,6 +1349,38 @@ function progressText(task) {
   if (!task || !(task.total > 0)) return '';
   if (!['running', 'paused', 'queued'].includes(task.status)) return '';
   return `${task.completed}/${task.total}`;
+}
+
+function percentOf(task) {
+  const total = Number(task?.total) || 0;
+  const completed = Number(task?.completed) || 0;
+  if (total <= 0) return 0;
+  return Math.min(100, Math.round((completed / total) * 100));
+}
+
+function showMeter(task) {
+  return (Number(task?.total) || 0) > 0 && task?.status !== 'cancelled';
+}
+
+function progressDetail(task) {
+  if (!showMeter(task)) return '';
+  const total = Number(task.total) || 0;
+  const completed = Number(task.completed) || 0;
+  return `${completed} из ${total} · ${percentOf(task)}%`;
+}
+
+function paintProgress(root, task) {
+  const line = progressDetail(task);
+  const pct = String(percentOf(task));
+  root.querySelectorAll('[data-live-progress]').forEach((node) => {
+    node.textContent = line;
+  });
+  root.querySelectorAll('[data-live-fill]').forEach((node) => {
+    node.style.width = `${pct}%`;
+  });
+  root.querySelectorAll('.run-card__track').forEach((node) => {
+    node.setAttribute('aria-valuenow', pct);
+  });
 }
 
 function paintList() {
@@ -1409,7 +1450,8 @@ function stageViewKey() {
   }
   if (selectedKey) {
     const task = tasks.find((item) => item.taskId === selectedKey);
-    return `task:${selectedKey}:${task?.status || ''}:${task?.files?.[0]?.path || ''}`;
+    const total = task?.total > 0 ? '1' : '0';
+    return `task:${selectedKey}:${task?.status || ''}:${task?.files?.[0]?.path || ''}:${total}`;
   }
   return `drop:${destinationProjectId}:${modelId}`;
 }
@@ -1430,14 +1472,9 @@ function paintStage() {
 function paintStageLive() {
   if (staged) return;
   const task = tasks.find((item) => item.taskId === selectedKey);
-  if (!task) return;
-  const live = document.querySelector('[data-live-progress]');
-  if (live) live.textContent = progressText(task);
-  const fill = document.querySelector('.work-file__fill');
-  if (fill && task.total > 0) {
-    const width = Math.min(100, Math.round((task.completed / task.total) * 100));
-    fill.style.width = `${width}%`;
-  }
+  const card = document.querySelector('.run-card');
+  if (!task || !card) return;
+  paintProgress(card, task);
 }
 
 function destinationValue() {
@@ -1611,7 +1648,7 @@ function settingsSheet() {
         field(
           'Формат',
           formatSelect,
-          'Как у файла оставляет тот же тип. Книга сохраняет полосу. Обычный PDF собирается заново, по страницам.',
+          'Как у файла оставляет PDF. Книга сохраняет полосу. Абзац, который не входит, дописывается в конец того же PDF.',
         ),
         field('Модель', modelControl(() => {
           touchQuick();
@@ -1731,66 +1768,352 @@ function stageRepeat(task) {
   paintStage();
 }
 
+const FOLLOW_WAIT = new Set(['queued', 'running', 'paused']);
+const FOLLOW_SETTLED = new Set(['complete', 'failed', 'cancelled', 'interrupted', 'saved']);
+
+function isRealTask(task) {
+  return Boolean(task?.taskId) && !String(task.taskId).startsWith('export:');
+}
+
+function taskFile(task) {
+  return (task?.files || []).find((item) => item?.path) || null;
+}
+
+function taskMeta(task) {
+  return [pairOf(task), task?.projectTitle || '', formatWhen(task?.updatedAt || task?.createdAt)]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function followPhase(task) {
+  return FOLLOW_WAIT.has(task?.status) ? 'wait' : 'done';
+}
+
+function followHidden(task) {
+  return Boolean(
+    followHide
+    && followHide.taskId === task.taskId
+    && followHide.phase === followPhase(task),
+  );
+}
+
+function cardHint(task) {
+  if (task.status === 'running' || task.status === 'queued') {
+    return 'Другие разделы можно открыть: ход перевода останется в окне.';
+  }
+  if (task.status === 'paused') return 'Пауза. Продолжение пойдёт с того же места.';
+  return '';
+}
+
+function followHint(task) {
+  const more = tasks.some((item) => (
+    item.taskId !== task.taskId && isRealTask(item) && FOLLOW_WAIT.has(item.status)
+  ));
+  const tail = more ? ' В очереди есть ещё переводы.' : '';
+  switch (task.status) {
+    case 'queued':
+      return `Файл в очереди. Это окно останется поверх других разделов.${tail}`;
+    case 'running':
+      return `Перевод идёт. Раздел под окном можно листать.${tail}`;
+    case 'paused':
+      return `Пауза. Продолжение пойдёт с того же места.${tail}`;
+    case 'complete':
+      return `Файл готов. Его можно открыть или вернуться к переводу.${tail}`;
+    case 'failed':
+      return 'Перевод остановился. Его можно продолжить.';
+    case 'cancelled':
+      return 'Перевод отменён.';
+    case 'interrupted':
+      return 'Перевод прерван. Его можно продолжить.';
+    default:
+      return tail.trim();
+  }
+}
+
+function statusLine(task) {
+  return el('p', {
+    class: 'run-card__status task-status',
+    dataset: { status: task.status || '' },
+  }, [
+    el('span', { class: 'run-card__dot', ariaHidden: 'true' }),
+    STATUS_LABELS[task.status] || 'Задача',
+  ]);
+}
+
+function progressMeter(task) {
+  if (!showMeter(task)) return null;
+  const pct = percentOf(task);
+  return el('div', { class: 'run-card__meter' }, [
+    el('div', {
+      class: 'run-card__track',
+      role: 'progressbar',
+      ariaValueNow: String(pct),
+      ariaValueMin: '0',
+      ariaValueMax: '100',
+      ariaLabel: 'Ход перевода',
+    }, [
+      el('div', {
+        class: 'run-card__fill',
+        dataset: { liveFill: '1' },
+        style: { width: `${pct}%` },
+      }),
+    ]),
+    el('p', { class: 'run-card__count', dataset: { liveProgress: '1' }, text: progressDetail(task) }),
+  ]);
+}
+
+function openTask(task) {
+  followHide = { taskId: task.taskId, phase: followPhase(task) };
+  dismissFollow();
+  staged = null;
+  selectedKey = task.taskId;
+  surface = 'file';
+  focusKind = 'work';
+  stageKey = '';
+  if (router.currentPage() !== 'chat') router.showPage('chat');
+  else {
+    paintList();
+    paintStage();
+  }
+}
+
+function taskActions(task, { navigate = false } = {}) {
+  const file = taskFile(task);
+  const real = isRealTask(task);
+  const waiting = FOLLOW_WAIT.has(task.status);
+  const actions = [];
+  const go = button({
+    label: 'К переводу',
+    size: 'sm',
+    variant: task.status === 'running' || task.status === 'queued' ? 'primary' : 'ghost',
+    title: 'Открыть эту задачу на экране перевода',
+    onClick: () => openTask(task),
+  });
+  const stop = button({
+    label: 'Стоп',
+    size: 'sm',
+    onClick: () => void stopJob({ taskId: task.taskId }),
+  });
+  const resume = button({
+    label: 'Продолжить',
+    size: 'sm',
+    variant: 'primary',
+    onClick: () => void resumeJob({ taskId: task.taskId }),
+  });
+  const again = button({
+    label: 'Ещё раз',
+    size: 'sm',
+    onClick: () => {
+      if (navigate) {
+        followHide = { taskId: task.taskId, phase: followPhase(task) };
+        dismissFollow();
+      }
+      stageRepeat(task);
+      if (router.currentPage() !== 'chat') router.showPage('chat');
+    },
+  });
+  const review = button({
+    label: 'Проверка',
+    size: 'sm',
+    onClick: () => router.showPage('review'),
+  });
+  if (!navigate || !waiting) {
+    if (file?.path) actions.push(...resultFileActions(file));
+    else if (real && (task.status === 'complete' || task.status === 'failed')) {
+      actions.push(button({
+        label: 'Собрать файл',
+        size: 'sm',
+        variant: task.status === 'complete' ? 'primary' : 'ghost',
+        onClick: () => void assembleResult(task).then(() => refreshTasks()),
+      }));
+    }
+  }
+  if (navigate) actions.push(go);
+  if (real && waiting) actions.push(stop);
+  if (real && ['paused', 'interrupted', 'failed', 'cancelled'].includes(task.status)) {
+    actions.push(resume);
+  }
+  if (!navigate || !waiting) {
+    if (task.documentId && task.projectId) actions.push(again);
+    actions.push(review);
+  }
+  return actions;
+}
+
 function taskDetail() {
   const task = tasks.find((item) => item.taskId === selectedKey);
   if (!task) return dropWell();
-  const file = (task.files || []).find((item) => item?.path);
-  const real = task.taskId && !String(task.taskId).startsWith('export:');
-  const actions = [];
-  if (real && ['running', 'queued', 'paused'].includes(task.status)) {
-    actions.push(button({ label: 'Стоп', size: 'sm', onClick: () => void stopJob({ taskId: task.taskId }) }));
-  }
-  if (real && ['paused', 'interrupted', 'failed', 'cancelled'].includes(task.status)) {
-    actions.push(button({
-      label: 'Продолжить',
-      size: 'sm',
-      variant: 'primary',
-      onClick: () => void resumeJob({ taskId: task.taskId }),
-    }));
-  }
-  if (file?.path) actions.push(...resultFileActions(file));
-  else if (real && (task.status === 'complete' || task.status === 'failed')) {
-    actions.push(button({
-      label: 'Собрать файл',
-      size: 'sm',
-      onClick: () => void assembleResult(task).then(() => refreshTasks()),
-    }));
-  }
-  if (task.documentId && task.projectId) {
-    actions.push(button({ label: 'Ещё раз', size: 'sm', onClick: () => stageRepeat(task) }));
-  }
-  actions.push(button({ label: 'Проверка', size: 'sm', onClick: () => router.showPage('review') }));
-  const width = task.total > 0 ? Math.min(100, Math.round((task.completed / task.total) * 100)) : 0;
-  const projectBit = task.projectTitle ? task.projectTitle : '';
-  return el('article', { class: 'sheet' }, [
-    el('p', { class: 'sheet__kicker', text: STATUS_LABELS[task.status] || 'Задача' }),
-    el('h2', { class: 'sheet__title', text: task.documentName || 'Файл' }),
-    el('p', {
-      class: 'sheet__where',
-      text: [pairOf(task), projectBit, formatWhen(task.updatedAt || task.createdAt)].filter(Boolean).join(' · '),
-    }),
-    progressText(task)
-      ? el('p', { class: 'sheet__where', dataset: { liveProgress: '1' }, text: progressText(task) })
-      : null,
-    task.total > 0
-      ? el('div', { class: 'work-file__track', ariaHidden: 'true' }, [
-        el('div', { class: 'work-file__fill', style: { width: `${width}%` } }),
-      ])
-      : null,
-    task.error ? el('p', { class: 'sheet__error', text: task.error }) : null,
-    file?.note ? el('p', { class: 'sheet__where', text: file.note }) : null,
-    actions.length ? el('div', { class: 'work-file__actions' }, actions) : null,
-    button({
-      label: 'Новый файл',
-      size: 'sm',
-      onClick: () => {
-        selectedKey = '';
-        stageKey = '';
-        paintList();
-        paintStage();
-      },
-    }),
+  const file = taskFile(task);
+  const hint = cardHint(task);
+  const actions = taskActions(task);
+  actions.push(button({
+    label: 'Новый файл',
+    size: 'sm',
+    onClick: () => {
+      selectedKey = '';
+      stageKey = '';
+      paintList();
+      paintStage();
+    },
+  }));
+  return el('article', { class: 'run-card', dataset: { status: task.status || '' } }, [
+    statusLine(task),
+    el('h2', { class: 'run-card__title', text: task.documentName || 'Файл' }),
+    el('p', { class: 'run-card__meta', text: taskMeta(task) }),
+    progressMeter(task),
+    hint ? el('p', { class: 'run-card__hint', text: hint }) : null,
+    task.error ? el('p', { class: 'run-card__error', text: task.error }) : null,
+    file?.note ? el('p', { class: 'run-card__meta', text: file.note }) : null,
+    actions.length ? el('div', { class: 'run-card__actions' }, actions) : null,
   ]);
+}
+
+function pickFollowTask() {
+  const usable = (task) => isRealTask(task)
+    && (FOLLOW_WAIT.has(task.status) || FOLLOW_SETTLED.has(task.status))
+    && !followHidden(task);
+  if (followWatchId) {
+    const watched = tasks.find((item) => item.taskId === followWatchId);
+    if (watched && usable(watched)) return watched;
+  }
+  const next = tasks.find((item) => usable(item) && FOLLOW_WAIT.has(item.status));
+  if (next) followWatchId = next.taskId;
+  return next || null;
+}
+
+function followSignature(task) {
+  const file = taskFile(task);
+  const more = tasks.some((item) => (
+    item.taskId !== task.taskId && isRealTask(item) && FOLLOW_WAIT.has(item.status)
+  ));
+  return [
+    task.taskId,
+    task.status || '',
+    file?.path || '',
+    task.error || '',
+    file?.note || '',
+    more ? '1' : '0',
+  ].join('|');
+}
+
+function dismissFollow() {
+  if (!follow) return;
+  const node = follow.root;
+  follow = null;
+  if (node.dataset.leaving === '1') return;
+  node.dataset.leaving = '1';
+  node.classList.add('is-leaving');
+  const remove = () => {
+    if (node.isConnected) node.remove();
+    if (!document.querySelector('.follow-pop')) {
+      document.documentElement.style.removeProperty('--follow-space');
+      document.body.classList.remove('has-follow');
+    }
+  };
+  const onEnd = (event) => {
+    if (event.target !== node) return;
+    node.removeEventListener('animationend', onEnd);
+    remove();
+  };
+  node.addEventListener('animationend', onEnd);
+  window.setTimeout(remove, 400);
+}
+
+function hideFollow() {
+  if (!follow) return;
+  const current = tasks.find((item) => item.taskId === follow.taskId);
+  if (current) followHide = { taskId: current.taskId, phase: followPhase(current) };
+  dismissFollow();
+  syncFollow();
+}
+
+function fillFollow(task) {
+  if (!follow?.body) return;
+  const title = follow.root.querySelector('.modal__title');
+  const subtitle = follow.root.querySelector('.modal__subtitle');
+  if (title) title.textContent = task.documentName || 'Файл';
+  if (subtitle) subtitle.textContent = taskMeta(task);
+  const file = taskFile(task);
+  const hint = followHint(task);
+  const actions = taskActions(task, { navigate: true });
+  follow.body.replaceChildren(el('div', {
+    class: 'follow-panel',
+    dataset: { status: task.status || '' },
+  }, [
+    statusLine(task),
+    progressMeter(task),
+    hint ? el('p', { class: 'run-card__hint', text: hint }) : null,
+    task.error ? el('p', { class: 'run-card__error', text: task.error }) : null,
+    file?.note ? el('p', { class: 'run-card__meta', text: file.note }) : null,
+    actions.length ? el('div', { class: 'run-card__actions' }, actions) : null,
+  ]));
+  placeFollowSpace();
+}
+
+function placeFollowSpace() {
+  const apply = () => {
+    if (!follow?.root?.isConnected) return;
+    const gap = Math.ceil(follow.root.getBoundingClientRect().height + 20);
+    document.documentElement.style.setProperty('--follow-space', `${gap}px`);
+    document.body.classList.add('has-follow');
+  };
+  apply();
+  window.requestAnimationFrame(apply);
+}
+
+function openFollow(task, signature) {
+  dismissFollow();
+  followWatchId = task.taskId;
+  const body = el('div', { class: 'modal__body' });
+  const root = el('div', {
+    class: 'follow-pop',
+    role: 'region',
+    ariaLabel: 'Ход перевода',
+  }, [
+    el('header', { class: 'modal__header' }, [
+      el('div', { class: 'follow-pop__titles' }, [
+        el('h2', { class: 'modal__title', text: task.documentName || 'Файл' }),
+        el('p', { class: 'modal__subtitle', text: taskMeta(task) }),
+      ]),
+      el('button', {
+        class: 'modal__close',
+        type: 'button',
+        title: 'Скрыть',
+        ariaLabel: 'Скрыть ход перевода',
+        onClick: () => hideFollow(),
+      }, [icon('close')]),
+    ]),
+    body,
+  ]);
+  follow = { taskId: task.taskId, signature, root, body };
+  const host = document.getElementById('modal-root') || document.body;
+  host.append(root);
+  fillFollow(task);
+}
+
+function syncFollow(reason) {
+  const page = router.currentPage();
+  if (reason === 'page' && page !== 'chat' && followHide?.phase === 'wait') followHide = null;
+  if (page === 'chat') {
+    dismissFollow();
+    return;
+  }
+  const task = pickFollowTask();
+  if (!task) {
+    dismissFollow();
+    return;
+  }
+  const signature = followSignature(task);
+  if (!follow || !follow.root.isConnected || follow.taskId !== task.taskId) {
+    openFollow(task, signature);
+    return;
+  }
+  if (follow.signature !== signature) {
+    follow.signature = signature;
+    fillFollow(task);
+    return;
+  }
+  paintProgress(follow.root, task);
 }
 
 function toggleSections() {
