@@ -92,6 +92,8 @@ def test_scaffold_echo_keeps_the_translation_after_the_source_label() -> None:
     assert clean_model_output(echoed) == "ГЛАВА I"
     labeled = "*[Источник текста]* Она размышляла про себя, когда мимо пробежал кролик."
     assert clean_model_output(labeled) == "Она размышляла про себя, когда мимо пробежал кролик."
+    bare = "[Источник текста] Пещера шла прямо, как туннель."
+    assert clean_model_output(bare) == "Пещера шла прямо, как туннель."
     packed = "Первый абзац.\n\nВторой абзац."
     assert clean_model_output("*[Текст источника]*\n" + packed) == packed
     repeated = "Алиса сидела на берегу и смотрела в книгу сестры без картинок. " * 2

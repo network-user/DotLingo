@@ -193,6 +193,10 @@ _SOURCE_LABELS = (
     "[source text]",
 )
 _LABEL_SPAN = re.compile(r"\*\[[^\]\n]{1,48}\]\*")
+_BARE_LABEL = re.compile(
+    r"\[(?:source text|background information|текст источника|источник текста|информация о фоне)\]",
+    re.IGNORECASE,
+)
 _ECHO_LINE = re.compile(
     r"^\s*(?:"
     r"\*\[(?:background information|source text|информация о фоне|текст источника)\]\*"
@@ -226,7 +230,7 @@ def clean_model_output(text: str) -> str:
         if not line.strip():
             kept.append("")
             continue
-        stripped = _LABEL_SPAN.sub("", line).strip()
+        stripped = _BARE_LABEL.sub("", _LABEL_SPAN.sub("", line)).strip()
         if not stripped or _ECHO_LINE.match(line) or _ECHO_LINE.match(stripped):
             continue
         kept.append(stripped)
@@ -262,7 +266,9 @@ def _has_scaffold(text: str) -> bool:
     lowered = text.casefold()
     if any(marker in lowered for marker in _SCAFFOLD_MARKERS):
         return True
-    return _LABEL_SPAN.search(text) is not None
+    if _LABEL_SPAN.search(text) is not None or _BARE_LABEL.search(text) is not None:
+        return True
+    return False
 
 
 def _model_error(exc: Exception) -> str:
