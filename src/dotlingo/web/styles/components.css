@@ -11,12 +11,12 @@
   align-items: center;
   justify-content: center;
   gap: var(--sp-2);
-  min-height: 34px;
+  min-height: 36px;
   padding: 0 16px;
   border: 1px solid transparent;
-  border-radius: var(--r-pill);
+  border-radius: 12px;
   font-size: var(--fs-body);
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
   color: var(--text);
   background: transparent;
@@ -63,6 +63,7 @@
 /* Ghost - прозрачная с hairline */
 .btn--ghost {
   border-color: var(--hairline);
+  background: var(--group);
   color: var(--text);
 }
 
@@ -81,9 +82,10 @@
 }
 
 .btn--sm {
-  min-height: 28px;
+  min-height: 32px;
   padding: 0 12px;
   font-size: var(--fs-small);
+  border-radius: 10px;
 }
 
 .btn--sm .icon {
@@ -100,8 +102,8 @@
 /* Иконочная кнопка-«стекло» для плотных мест (не по ТЗ, нужна страницам) */
 .btn--icon {
   padding: 0;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border-radius: var(--r-pill);
 }
 
@@ -115,9 +117,7 @@
   padding: var(--sp-4);
   border-radius: var(--r-lg);
   border: 1px solid var(--hairline);
-  background: var(--surface);
-  -webkit-backdrop-filter: var(--blur);
-  backdrop-filter: var(--blur);
+  background: var(--group);
 }
 
 .panel--raised {
@@ -158,18 +158,8 @@
   max-width: 100%;
 }
 
-/* Списки: под ними плоский фон, размытие каждой строки только грузит композитор. */
 .panel--flat {
-  background: var(--surface-solid);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-
-/* Fallback без backdrop-filter */
-@supports not (backdrop-filter: blur(1px)) {
-  .panel {
-    background: var(--surface-solid);
-  }
+  background: var(--group);
 }
 
 /* --------------------------------------------------------------------------
@@ -287,11 +277,11 @@
 .select,
 .textarea {
   width: 100%;
-  min-height: 34px;
+  min-height: 40px;
   padding: 0 12px;
-  border-radius: var(--r-sm);
+  border-radius: 12px;
   border: 1px solid var(--hairline);
-  background: var(--surface);
+  background: var(--field);
   color: var(--text);
   font-size: var(--fs-body);
   transition: border-color var(--dur-fast) var(--ease),
@@ -365,9 +355,9 @@
   display: flex;
   align-items: center;
   width: 100%;
-  min-height: 32px;
-  padding: 0 10px;
-  border-radius: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
   text-align: left;
   color: var(--text);
   background: transparent;
@@ -410,8 +400,6 @@
   text-align: left;
   font-size: var(--fs-caption);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
   background: var(--surface-solid);
   border-bottom: 1px solid var(--hairline);
@@ -516,15 +504,15 @@
   max-height: calc(100vh - 2 * var(--sp-5));
   display: flex;
   flex-direction: column;
-  border-radius: var(--r-xl);
+  border-radius: 20px;
   border: 1px solid var(--overlay-edge);
   background-color: var(--overlay);
   color: var(--overlay-text);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
   opacity: 0;
-  transform: translateY(12px) scale(0.98);
-  animation: modal-in 200ms var(--ease) forwards;
+  transform: translateY(18px) scale(0.96);
+  animation: modal-in var(--dur-slow) var(--ease) forwards;
   /* Дети читают эти токены: стекло страницы больше не подмешивается в текст. */
   --text: var(--overlay-text);
   --text-secondary: var(--overlay-muted);
@@ -647,14 +635,15 @@
    -------------------------------------------------------------------------- */
 .toasts {
   position: fixed;
-  right: var(--sp-4);
-  bottom: var(--sp-4);
+  top: 16px;
+  right: 0;
+  left: 0;
   z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: var(--sp-2);
-  width: min(380px, calc(100vw - 2 * var(--sp-4)));
+  width: auto;
   pointer-events: none;
 }
 
@@ -663,10 +652,10 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  width: 100%;
+  width: min(420px, calc(100vw - 32px));
   padding: 12px 14px 12px 16px;
   overflow: hidden;
-  border-radius: var(--r-md);
+  border-radius: 16px;
   border: 1px solid var(--overlay-edge);
   background-color: var(--overlay);
   color: var(--overlay-text);
@@ -674,8 +663,8 @@
   font-size: var(--fs-body);
   line-height: 1.45;
   opacity: 0;
-  transform: translateY(10px);
-  animation: toast-in var(--dur-base) var(--ease) forwards;
+  transform: translateY(-12px);
+  animation: toast-in var(--dur-slow) var(--ease) forwards;
   pointer-events: auto;
   --text: var(--overlay-text);
   --text-secondary: var(--overlay-muted);
@@ -829,13 +818,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 56px;
-  height: 56px;
-  margin-bottom: var(--sp-1);
-  border-radius: var(--r-md);
-  border: 1px solid var(--hairline);
-  background: var(--surface);
-  color: var(--text-tertiary);
+  width: 64px;
+  height: 64px;
+  margin-bottom: var(--sp-2);
+  border-radius: 18px;
+  background: var(--icon-tile);
+  color: var(--text);
 }
 
 .empty__icon .icon {
@@ -844,13 +832,15 @@
 }
 
 .empty__title {
-  font-size: var(--fs-body-lg);
-  font-weight: 600;
+  font-size: var(--fs-subtitle);
+  font-weight: 650;
+  letter-spacing: -0.02em;
 }
 
 .empty__text {
-  max-width: 380px;
-  font-size: var(--fs-small);
+  max-width: 42ch;
+  font-size: var(--fs-body);
+  line-height: 1.45;
   color: var(--text-secondary);
 }
 

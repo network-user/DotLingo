@@ -8,6 +8,7 @@ import { call, isDemo, tryCall } from '../bridge.js';
 import * as store from '../store.js';
 import * as router from '../router.js';
 import { el, button, toast, confirmDialog, helpMark, closeHelpMarks } from '../components.js';
+import { icon } from '../icons.js';
 import {
   consumeDeckRequest,
   mountProjectDeck,
@@ -67,7 +68,7 @@ let stick = true;
 let booted = false;
 let incognito = false;
 let listHidden = false;
-let meterNote = 'Контекст появится после выбора модели.';
+let meterShort = '';
 
 function installedModels() {
   return (store.get('models') || []).filter((model) => model.installed);
@@ -163,6 +164,7 @@ function ensureWire() {
     if (!request || router.currentPage() !== 'chat') return;
     openDeck(request);
   });
+  window.addEventListener('dl-work-chrome', () => paintSectionsButton());
 }
 
 function logElement() {
@@ -214,7 +216,12 @@ function bubble(turn) {
     class: `chat-bubble chat-bubble--${turn.role}${turn.error ? ' is-error' : ''}`,
     dataset: { turn: turn.id },
   }, [
-    el('p', { class: 'chat-bubble__role', text: turn.role === 'user' ? 'Вы' : 'Модель' }),
+    el('p', {
+      class: 'chat-bubble__role',
+      text: turn.role === 'user'
+        ? (mode === 'ask' ? 'Вы' : 'Фрагмент')
+        : (mode === 'ask' ? 'Ответ' : 'Перевод'),
+    }),
     el('p', {
       class: 'chat-bubble__text',
       text: turn.text || (turn.pending ? 'Модель отвечает…' : ''),
@@ -226,16 +233,20 @@ function bubble(turn) {
 function paintSend() {
   const send = document.querySelector('.chat-send');
   if (!send) return;
-  send.textContent = '';
-  send.append(sending ? 'Стоп' : 'Отправить');
+  send.textContent = sendLabel();
   send.disabled = !sending && !draft.trim() && attachments.length === 0;
   const counter = document.querySelector('.chat-counter');
   if (counter) counter.textContent = `${draft.length} / ${TEXT_LIMIT}`;
 }
 
+function sendLabel() {
+  if (sending) return 'Стоп';
+  return mode === 'ask' ? 'Спросить' : 'Перевести';
+}
+
 function paintMeter() {
   const node = document.querySelector('.chat-meter');
-  if (node) node.textContent = meterNote;
+  if (node) node.textContent = meterShort;
 }
 
 function paintFiles() {
@@ -296,10 +307,11 @@ function dialogRow(item) {
     ]),
     el('button', {
       type: 'button',
-      class: 'chat-dialog__delete',
-      text: 'Удалить',
+      class: 'btn btn--ghost btn--icon work-icon chat-dialog__delete',
+      title: 'Удалить диалог',
+      ariaLabel: 'Удалить диалог',
       onClick: () => void removeDialog(item.id),
-    }),
+    }, [icon('trash')]),
   ]);
 }
 
@@ -349,22 +361,14 @@ function queueMeter() {
 async function refreshMeter() {
   const model = currentModel();
   if (!model) {
-    meterNote = 'Сначала скачайте модель.';
+    meterShort = '';
     paintMeter();
     return;
   }
   const [data] = await tryCall('dialogMeter', { modelId: model.id, charCount: charCount() });
-  if (!data) {
-    meterNote = 'Нагрузку и контекст сейчас не прочитать.';
-    paintMeter();
-    return;
-  }
-  const cpu = Number.isFinite(data.cpuPercent) ? `CPU ${data.cpuPercent}%` : 'CPU —';
-  const ram = Number.isFinite(data.ramPercent) ? `RAM ${data.ramPercent}%` : 'RAM —';
-  meterNote = `${cpu} · ${ram} · ${data.placement || 'CPU'} · контекст ${data.contextPercent}% (оценка ${data.contextUsed} из ${data.contextLimit})`;
+  const percent = Number(data?.contextPercent);
+  meterShort = Number.isFinite(percent) ? `Контекст занят примерно на ${percent}%.` : '';
   paintMeter();
-  const bar = document.querySelector('.chat-meter__fill');
-  if (bar) bar.style.width = `${Math.min(100, data.contextPercent || 0)}%`;
 }
 
 async function loadDialogs() {
@@ -474,6 +478,23 @@ async function removeDialog(id) {
   } else paintDialogs();
 }
 
+function setDeckOpen(open) {
+  const chat = document.querySelector('.chat');
+  if (!chat) return;
+  chat.classList.toggle('is-deck-open', open);
+  const shelf = chat.querySelector('.chat-dialogs');
+  const split = chat.querySelector('.chat-split');
+  const quiet = open || listHidden;
+  if (shelf) {
+    shelf.toggleAttribute('inert', quiet);
+    shelf.setAttribute('aria-hidden', quiet ? 'true' : 'false');
+  }
+  if (split instanceof HTMLElement) {
+    split.toggleAttribute('inert', quiet);
+    split.tabIndex = quiet ? -1 : 0;
+  }
+}
+
 function setListHidden(hidden) {
   listHidden = hidden;
   store.set('chatListHidden', hidden);
@@ -481,8 +502,21 @@ function setListHidden(hidden) {
   const chat = document.querySelector('.chat');
   if (!chat) return;
   chat.classList.toggle('is-list-hidden', hidden);
+  const shelf = chat.querySelector('.chat-dialogs');
+  const split = chat.querySelector('.chat-split');
+  const quiet = hidden || focusKind === 'deck';
+  if (shelf) {
+    shelf.toggleAttribute('inert', quiet);
+    shelf.setAttribute('aria-hidden', quiet ? 'true' : 'false');
+  }
+  if (split instanceof HTMLElement) {
+    split.toggleAttribute('inert', quiet);
+    split.tabIndex = quiet ? -1 : 0;
+  }
   const show = chat.querySelector('.chat-list-show');
-  if (show) show.hidden = !hidden;
+  if (!(show instanceof HTMLElement)) return;
+  show.hidden = !hidden;
+  if (hidden) show.focus();
 }
 
 function setIncognito(next) {
@@ -491,11 +525,8 @@ function setIncognito(next) {
     return;
   }
   incognito = next;
-  const button = document.querySelector('.chat-incognito');
-  if (button) {
-    button.classList.toggle('is-selected', incognito);
-    button.setAttribute('aria-pressed', incognito ? 'true' : 'false');
-  }
+  const box = document.querySelector('.text-incognito');
+  if (box instanceof HTMLInputElement) box.checked = incognito;
   const note = document.querySelector('.chat-private');
   if (note) note.hidden = !incognito;
   if (!incognito) void persist();
@@ -636,8 +667,8 @@ const JOB_LABELS = {
 };
 
 function emptyLead() {
-  if (mode === 'ask') return 'Напишите сообщение. Модель ответит на этом компьютере, без сети.';
-  return 'Напишите фрагмент. Файл удобнее перевести в режиме «Файл».';
+  if (mode === 'ask') return 'Ответ появится здесь.';
+  return 'Перевод появится здесь. Целый документ откройте на «Файл».';
 }
 
 function tuneText() {
@@ -1004,10 +1035,19 @@ function stagePaths(paths) {
 }
 
 async function receiveFiles(fileList) {
-  const files = [...fileList];
+  const files = [...(fileList || [])];
   if (!files.length) {
     toast('В переносе нет файла.', 'info');
     return;
+  }
+  // WebView2 отдаёт полный путь только после FilesDropped, не из объекта File.
+  const webviewHost = window.chrome?.webview;
+  if (webviewHost?.postMessageWithAdditionalObjects) {
+    try {
+      webviewHost.postMessageWithAdditionalObjects('FilesDropped', fileList);
+    } catch {
+      // Дальше claimDroppedFile вернёт пусто, и останется просьба выбрать файл кнопкой.
+    }
   }
   const paths = [];
   for (const file of files) {
@@ -1148,6 +1188,7 @@ function openDeck(request) {
   focusKind = 'deck';
   work.hidden = true;
   deck.hidden = false;
+  setDeckOpen(true);
   mountProjectDeck(deck, request, {
     onSaved(project) {
       releaseProjectDeck();
@@ -1168,6 +1209,7 @@ function openDeck(request) {
       releaseProjectDeck();
       focusKind = 'work';
       stageKey = '';
+      setDeckOpen(false);
       const workNode = document.querySelector('.chat-work');
       const deckNode = document.querySelector('.chat-deck');
       if (workNode) workNode.hidden = false;
@@ -1323,7 +1365,7 @@ function paintList() {
     ? rows.map((task) => taskRow(task))
     : [el('p', {
       class: 'chat-empty',
-      text: query ? 'Ничего не нашлось.' : 'Задач пока нет. Бросьте файл справа.',
+      text: query ? 'Ничего не нашлось.' : 'Пока пусто. Файл можно перетащить в окно.',
     })]));
 }
 
@@ -1331,9 +1373,10 @@ function taskRow(task) {
   const selected = !staged && task.taskId === selectedKey;
   const status = STATUS_LABELS[task.status] || task.status || '';
   const projectBit = task.projectTitle && task.projectTitle !== 'Быстрые' ? task.projectTitle : '';
-  const meta = [pairOf(task), projectBit, status, progressText(task), formatWhen(task.updatedAt || task.createdAt)]
+  const quiet = [pairOf(task), projectBit, formatWhen(task.updatedAt || task.createdAt)]
     .filter(Boolean)
     .join(' · ');
+  const progress = progressText(task);
   return el('div', { class: `chat-dialog${selected ? ' is-selected' : ''}` }, [
     el('button', {
       type: 'button',
@@ -1349,7 +1392,11 @@ function taskRow(task) {
     }, [
       el('span', { class: 'chat-dialog__title', text: task.documentName || 'Файл' }),
       el('span', { class: 'chat-dialog__meta' }, [
-        el('span', { class: 'task-status', dataset: { status: task.status || '' }, text: meta }),
+        status
+          ? el('span', { class: 'task-status', dataset: { status: task.status || '' }, text: status })
+          : null,
+        progress ? el('span', { class: 'chat-dialog__quiet', text: progress }) : null,
+        quiet ? el('span', { class: 'chat-dialog__quiet', text: quiet }) : null,
       ]),
     ]),
   ]);
@@ -1418,7 +1465,7 @@ function paintProjectChoices() {
 
 function destinationLine() {
   const project = projects.find((item) => item.id === destinationValue());
-  if (!project) return 'Сохранится в «Быстрые».';
+  if (!project) return 'Сохранится в проект «Быстрые». Проект можно сменить после выбора файла.';
   return `Сохранится в «${project.title}».`;
 }
 
@@ -1435,18 +1482,14 @@ function sharedSuffixes(names) {
 
 function dropWell() {
   return el('div', { class: 'dropwell' }, [
-    el('p', { class: 'dropwell__title', text: 'Перетащите документ' }),
+    el('div', { class: 'brand__mark dropwell__mark', ariaHidden: 'true' }),
+    el('p', { class: 'dropwell__title', text: 'Начните с файла' }),
     el('p', {
       class: 'dropwell__hint',
-      text: 'TXT, Markdown, DOCX, EPUB или PDF с текстом. После выбора откроются язык, формат и модель. Оригинал не меняется.',
+      text: 'Перетащите документ сюда или выберите его кнопкой. Подходят TXT, Markdown, DOCX, EPUB и PDF с текстом. Оригинал не меняется.',
     }),
     el('div', { class: 'dropwell__actions' }, [
       button({ label: 'Выбрать файл', variant: 'primary', onClick: () => void pickFiles() }),
-      button({
-        label: 'Новый проект',
-        title: 'Название, языки и свой глоссарий',
-        onClick: () => requestProjectDeck({ mode: 'new' }),
-      }),
     ]),
     el('p', { class: 'sheet__where', text: destinationLine() }),
   ]);
@@ -1750,19 +1793,68 @@ function taskDetail() {
   ]);
 }
 
+function toggleSections() {
+  const open = document.documentElement.dataset.work === 'sections';
+  router.setWorkChrome(open ? 'focus' : 'sections');
+}
+
+function paintSectionsButton() {
+  const button = document.querySelector('.work-sections');
+  if (!(button instanceof HTMLButtonElement)) return;
+  const open = document.documentElement.dataset.work === 'sections';
+  const label = open ? 'Скрыть разделы' : 'Разделы';
+  button.title = open
+    ? 'Скрыть разделы и оставить перевод на весь экран'
+    : 'Проверка, очередь, модели и остальные разделы';
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-pressed', open ? 'true' : 'false');
+  button.replaceChildren(
+    icon(open ? 'chevron-left' : 'chevron-right'),
+    el('span', { class: 'work-sections__label', text: label }),
+  );
+}
+
 function topBar(host) {
+  const shelfHiddenLabel = surface === 'text' ? 'Показать диалоги' : 'Показать историю';
+  const sectionsOpen = document.documentElement.dataset.work === 'sections';
   return el('div', { class: 'chat-bar chat-bar--top' }, [
-    el('button', {
-      type: 'button',
-      class: 'btn btn--sm chat-list-show',
-      hidden: !listHidden,
-      title: 'Показать список',
-      text: 'Список',
-      onClick: () => setListHidden(false),
-    }),
+    el('div', { class: 'chat-bar__lead' }, [
+      el('button', {
+        type: 'button',
+        class: 'btn btn--ghost work-sections',
+        title: sectionsOpen
+          ? 'Скрыть разделы и оставить перевод на весь экран'
+          : 'Проверка, очередь, модели и остальные разделы',
+        ariaLabel: sectionsOpen ? 'Скрыть разделы' : 'Разделы',
+        ariaPressed: sectionsOpen ? 'true' : 'false',
+        onClick: () => toggleSections(),
+      }, [
+        icon(sectionsOpen ? 'chevron-left' : 'chevron-right'),
+        el('span', { class: 'work-sections__label', text: sectionsOpen ? 'Скрыть разделы' : 'Разделы' }),
+      ]),
+      el('button', {
+        type: 'button',
+        class: 'btn btn--ghost btn--icon work-icon chat-list-show',
+        hidden: !listHidden,
+        title: shelfHiddenLabel,
+        ariaLabel: shelfHiddenLabel,
+        onClick: () => setListHidden(false),
+      }, [icon(surface === 'text' ? 'message' : 'clock')]),
+    ]),
     el('div', { class: 'chat-modes', role: 'tablist', ariaLabel: 'Что переводим' }, [
       surfaceButton('file', 'Файл', host),
       surfaceButton('text', 'Текст', host),
+    ]),
+    el('div', { class: 'chat-bar__tail' }, [
+      surface === 'text'
+        ? button({ label: 'Новый', size: 'sm', title: 'Новый диалог', onClick: () => void startNew() })
+        : null,
+      button({
+        label: 'Проект',
+        size: 'sm',
+        title: 'Название, языки и свой глоссарий',
+        onClick: () => requestProjectDeck({ mode: 'new' }),
+      }),
     ]),
   ]);
 }
@@ -1782,16 +1874,38 @@ function surfaceButton(value, label, host) {
   }, [label]);
 }
 
-function textBody(host) {
+function textSettings(host) {
   const models = installedModels();
+  if (!models.length) {
+    return el('div', { class: 'chat-missing' }, [
+      el('p', { text: 'Чтобы переводить, скачайте локальную модель.' }),
+      button({ label: 'К моделям', variant: 'primary', onClick: () => router.showPage('models') }),
+    ]);
+  }
+  const modelField = field('Модель', modelControl(() => {
+    touchQuick();
+    render(host);
+  }));
+  if (mode === 'ask') return modelField;
+  return el('div', { class: 'sheet__grid text-compose__grid' }, [
+    field('Оригинал', sourceControl(() => touchQuick()), '«Авто» само определяет язык.'),
+    field('Перевод', targetControl(() => {
+      touchQuick();
+      void refreshMeter();
+    })),
+    el('div', { class: 'text-compose__model' }, [modelField]),
+  ]);
+}
+
+function textBody(host) {
   const model = currentModel();
   const log = el('div', { class: 'chat-log', role: 'log', tabindex: '0' });
   bindLog(log);
   const input = el('textarea', {
     class: 'textarea chat-input',
-    rows: 3,
+    rows: 4,
     title: 'Enter отправляет, Shift+Enter переносит строку',
-    placeholder: mode === 'ask' ? 'Сообщение…' : 'Фрагмент для перевода…',
+    placeholder: mode === 'ask' ? 'Вопрос модели…' : 'Вставьте фрагмент…',
     onInput: (event) => {
       draft = event.target.value;
       paintSend();
@@ -1819,7 +1933,7 @@ function textBody(host) {
   const hyNote = mode === 'ask' && model?.promptStyle === 'hy-mt2'
     ? el('p', {
       class: 'chat-note',
-      text: 'Эта модель обучена переводить. В общении она может пересказать фразу, а не поддержать разговор.',
+      text: 'Эта модель обучена переводить. Вопрос она может просто пересказать.',
     })
     : null;
   return el('div', { class: 'text-work' }, [
@@ -1838,89 +1952,57 @@ function textBody(host) {
       }),
     ]),
     el('form', {
-      class: 'chat-composer',
+      class: 'text-compose',
       onSubmit: (event) => {
         event.preventDefault();
         void send();
       },
     }, [
-      el('div', { class: 'chat-meter-row' }, [
-        el('div', { class: 'chat-meter-track', ariaHidden: 'true' }, [
-          el('div', { class: 'chat-meter__fill' }),
-        ]),
-        el('div', { class: 'chat-meter-line' }, [
-          el('p', { class: 'chat-meter', text: meterNote }),
-          helpMark('Оценка, сколько контекста модели уже занято. Это не ход перевода.'),
-        ]),
-      ]),
-      models.length && mode === 'translate'
-        ? el('div', { class: 'sheet__grid' }, [
-          field('Оригинал', sourceControl(() => touchQuick())),
-          field('Перевод', targetControl(() => {
-            touchQuick();
-            void refreshMeter();
-          })),
-          field('Модель', modelControl(() => {
-            touchQuick();
-            render(host);
-          })),
-        ])
-        : null,
-      models.length && mode === 'ask'
-        ? field('Модель', modelControl(() => {
-          touchQuick();
-          render(host);
-        }))
-        : null,
-      models.length
-        ? null
-        : el('div', { class: 'chat-missing' }, [
-          el('p', { text: 'Чтобы переводить, скачайте локальную модель.' }),
-          button({ label: 'К моделям', variant: 'primary', onClick: () => router.showPage('models') }),
-        ]),
-      el('div', { class: 'chat-mode-wrap' }, [
-        el('div', { class: 'chat-modes', role: 'radiogroup', ariaLabel: 'Режим текста' }, [
-          modeButton('translate', 'Перевод', host),
-          modeButton('ask', 'Общение', host),
-        ]),
-        el('button', {
-          type: 'button',
-          class: `btn btn--sm chat-incognito${incognito ? ' is-selected' : ''}`,
-          ariaPressed: incognito ? 'true' : 'false',
-          title: 'Не записывать этот диалог на диск',
-          text: 'Инкогнито',
-          onClick: () => setIncognito(!incognito),
-        }),
-      ]),
+      textSettings(host),
       hyNote,
-      el('details', { class: 'chat-context', open: Boolean(context.trim()) }, [
-        el('summary', {}, [
-          'Тон',
-          helpMark('Необязательно. Предмет, тон и имена уходят в запрос вместе с текстом, до 800 знаков.'),
-        ]),
-        tone,
-      ]),
-      el('div', { class: 'chat-files' }),
-      input,
-      el('div', { class: 'chat-composer__row' }, [
-        el('span', { class: 'chat-counter', text: `${draft.length} / ${TEXT_LIMIT}` }),
-        el('div', { class: 'chat-composer__actions' }, [
-          button({
-            label: 'Документ',
-            title: 'Перевести файл целиком',
-            onClick: () => void pickFiles(),
-          }),
-          button({
-            label: 'Как текст',
-            size: 'sm',
-            title: 'Короткая выдержка из файла в сообщение, без сборки документа',
-            onClick: () => void attachFiles(),
-          }),
+      el('div', { class: 'text-box' }, [
+        el('div', { class: 'chat-files' }),
+        input,
+        el('div', { class: 'text-box__bar' }, [
+          el('span', { class: 'chat-counter', text: `${draft.length} / ${TEXT_LIMIT}` }),
           el('button', {
             class: 'btn btn--primary chat-send',
             type: 'submit',
             disabled: !draft.trim() && attachments.length === 0 && !sending,
-          }, [sending ? 'Стоп' : 'Отправить']),
+          }, [sendLabel()]),
+        ]),
+      ]),
+      el('details', {
+        class: 'sheet__more',
+        open: Boolean(context.trim()) || mode === 'ask',
+      }, [
+        el('summary', {}, ['Ещё']),
+        el('div', { class: 'sheet__more-body' }, [
+          field('Тон', tone, 'Необязательно. Уходит вместе с фрагментом, до 800 знаков.'),
+          el('label', { class: 'sheet__check' }, [
+            el('input', {
+              type: 'checkbox',
+              class: 'text-incognito',
+              checked: incognito,
+              onChange: (event) => setIncognito(event.target.checked),
+            }),
+            el('span', { text: 'Не сохранять диалог' }),
+          ]),
+          button({
+            label: mode === 'ask' ? 'Вернуть перевод' : 'Спросить у модели',
+            size: 'sm',
+            onClick: () => {
+              mode = mode === 'ask' ? 'translate' : 'ask';
+              render(host);
+            },
+          }),
+          button({
+            label: 'Фрагмент из файла',
+            size: 'sm',
+            title: 'Короткая выдержка попадёт в сообщение. Целый документ переводится на «Файл».',
+            onClick: () => void attachFiles(),
+          }),
+          el('p', { class: 'chat-meter chat-note', text: meterShort }),
         ]),
       ]),
     ]),
@@ -1944,30 +2026,26 @@ function render(host) {
     class: `chat${listHidden ? ' is-list-hidden' : ''}`,
     dataset: { stack: 'col' },
   }, [
-    el('aside', { class: 'chat-dialogs', ariaLabel: surface === 'text' ? 'Диалоги' : 'Задачи' }, [
+    el('aside', {
+      class: 'chat-dialogs',
+      ariaLabel: surface === 'text' ? 'Диалоги' : 'История',
+      ariaHidden: listHidden ? 'true' : 'false',
+      inert: listHidden,
+    }, [
       el('div', { class: 'chat-dialogs__head' }, [
-        el('p', { class: 'chat-dialogs__label', text: surface === 'text' ? 'Диалоги' : 'Задачи' }),
-        el('div', { class: 'chat-dialogs__actions' }, [
-          button({
-            label: 'Скрыть',
-            size: 'sm',
-            title: 'Скрыть список',
-            onClick: () => setListHidden(true),
-          }),
-          surface === 'text'
-            ? button({ label: 'Новый', size: 'sm', title: 'Новый диалог', onClick: () => void startNew() })
-            : button({
-              label: 'Проект',
-              size: 'sm',
-              title: 'Новый проект: название, языки, модель',
-              onClick: () => requestProjectDeck({ mode: 'new' }),
-            }),
-        ]),
+        el('p', { class: 'chat-dialogs__label', text: surface === 'text' ? 'Диалоги' : 'История' }),
+        el('button', {
+          type: 'button',
+          class: 'btn btn--ghost btn--icon work-icon',
+          title: surface === 'text' ? 'Скрыть диалоги' : 'Скрыть историю',
+          ariaLabel: surface === 'text' ? 'Скрыть диалоги' : 'Скрыть историю',
+          onClick: () => setListHidden(true),
+        }, [icon('chevron-left')]),
       ]),
       el('input', {
         class: 'input task-search',
         type: 'search',
-        placeholder: 'Найти',
+        placeholder: surface === 'text' ? 'Найти диалог' : 'Найти перевод',
         value: taskQuery,
         ariaLabel: 'Найти в списке',
         onInput: (event) => {
@@ -1982,7 +2060,8 @@ function render(host) {
       role: 'separator',
       ariaOrientation: 'vertical',
       ariaLabel: 'Ширина списка',
-      tabIndex: 0,
+      tabIndex: listHidden ? -1 : 0,
+      inert: listHidden,
     }),
     el('div', { class: 'chat-main' }, [
       el('div', { class: 'chat-deck', hidden: true }),
@@ -2184,18 +2263,6 @@ function field(label, control, help) {
   ]);
 }
 
-function modeButton(value, label, host) {
-  return el('button', {
-    class: `chat-mode${mode === value ? ' is-selected' : ''}`,
-    type: 'button',
-    onClick: () => {
-      if (mode === value) return;
-      mode = value;
-      render(host);
-    },
-  }, [label]);
-}
-
 function destroy() {
   releaseProjectDeck();
 }
@@ -2208,7 +2275,7 @@ window.addEventListener('dl-focus-project', (event) => {
 
 router.registerPage('chat', {
   title: 'Перевод',
-  subtitle: 'Файл или короткий текст',
+  subtitle: 'Бросьте файл или напишите текст. Остальные разделы открываются кнопкой «Разделы».',
   help: 'Бросьте документ или нажмите «Выбрать файл». Дальше язык, формат и модель. Последний выбор запоминается. «Текст» переводит фрагмент до '
     + `${TEXT_LIMIT} знаков. Проект со своим глоссарием открывается кнопкой «Проект».`,
   layout: 'chat',

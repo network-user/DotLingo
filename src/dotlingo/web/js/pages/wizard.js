@@ -106,7 +106,7 @@ function render() {
         el('p', { class: 'setup__product', text: 'Локальный перевод на этом компьютере' }),
       ]),
     ]),
-    el('h1', { class: 'setup__title', id: 'setup-title', text: 'Настройка этого компьютера' }),
+    el('h1', { class: 'setup__title', id: 'setup-title', text: 'Можно переводить на этом компьютере' }),
     el('p', {
       class: 'setup__lead',
       text: running
@@ -127,7 +127,7 @@ function render() {
 
 function primaryButton() {
   const node = button({
-    label: running ? 'Настраиваем…' : 'Настроить',
+    label: running ? 'Готовим…' : 'Начать',
     variant: 'primary',
     disabled: running,
     onClick: () => void configure(),

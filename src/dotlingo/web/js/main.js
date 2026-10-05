@@ -384,8 +384,23 @@ function wireShell() {
   });
 
   document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
+    if (document.documentElement.dataset.work === 'sections') {
+      router.setWorkChrome('focus');
+      return;
+    }
     const collapsed = document.documentElement.dataset.sidebar !== 'collapsed';
     setSidebarCollapsed(collapsed);
+  });
+  window.addEventListener('dl-work-chrome', () => {
+    const toggle = document.getElementById('sidebar-toggle');
+    if (!toggle) return;
+    if (document.documentElement.dataset.work === 'sections') {
+      const label = 'Закрыть разделы';
+      toggle.title = label;
+      toggle.setAttribute('aria-label', label);
+      return;
+    }
+    setSidebarMode(collapsedNow());
   });
   applySidebar(false);
   bindSidebarResize();
@@ -467,8 +482,11 @@ function setSidebarMode(collapsed) {
     toggle.setAttribute('aria-label', label);
   }
   document.querySelectorAll('.nav-item').forEach((button) => {
-    const name = button.querySelector('.nav-item__label')?.textContent?.trim() || '';
-    if (collapsed && name) button.title = name;
+    const name = button.querySelector('.nav-item__name')?.textContent?.trim()
+      || button.querySelector('.nav-item__label')?.textContent?.trim()
+      || '';
+    const key = button.getAttribute('aria-keyshortcuts') || '';
+    if (collapsed && name) button.title = key ? `${name}. Клавиша ${key}` : name;
     else button.removeAttribute('title');
   });
 }
@@ -588,9 +606,16 @@ function renderActiveProject() {
   const button = document.getElementById('active-project');
   if (!label) return;
   const project = store.get('activeProject');
-  const title = project?.title || 'Не выбран';
-  label.textContent = title;
-  if (button) button.title = title;
+  const kicker = button?.querySelector('.active-project__kicker');
+  if (project?.title) {
+    if (kicker) kicker.textContent = 'Проект';
+    label.textContent = project.title;
+    if (button) button.title = `Проект «${project.title}». Открыть.`;
+  } else {
+    if (kicker) kicker.textContent = 'Проект';
+    label.textContent = 'Выбрать или создать';
+    if (button) button.title = 'Проект не выбран. Нажмите, чтобы создать или открыть.';
+  }
 }
 
 /** Применяет тему к <html data-theme> и обновляет кнопку-переключатель. */
@@ -598,13 +623,14 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
 
   const slot = document.querySelector('#theme-toggle .theme-toggle__icon');
-  if (slot) slot.replaceChildren(icon(theme === 'dark' ? 'sun' : 'moon'));
+  if (slot) slot.replaceChildren(icon(theme === 'dark' ? 'moon' : 'sun'));
 
   const label = document.getElementById('theme-label');
-  if (label) {
-    const next = theme === 'dark' ? 'light' : 'dark';
-    label.textContent = `${THEME_LABEL[next]} тема`;
-  }
+  const toggle = document.getElementById('theme-toggle');
+  const current = THEME_LABEL[theme] || theme;
+  const other = theme === 'dark' ? 'светлую' : 'тёмную';
+  if (label) label.textContent = `${current} тема`;
+  if (toggle) toggle.title = `Сейчас ${current.toLowerCase()}. Переключить на ${other}.`;
 }
 
 /**
@@ -630,7 +656,9 @@ function renderDeviceStatus(hw) {
 
   status.dataset.state = hw.llamaRuntimeAvailable ? 'ok' : 'warn';
   label.textContent = parts.join(' · ') || 'Готово';
-  status.title = label.textContent;
+  status.title = hw.llamaRuntimeAvailable
+    ? 'Компьютер готов к переводу'
+    : 'Программа перевода на этом компьютере не найдена';
 }
 
 /* -------------------------------------------------------------------------

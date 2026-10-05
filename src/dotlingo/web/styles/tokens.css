@@ -1,131 +1,127 @@
 /* ==========================================================================
-   DotLingo - токены дизайн-системы.
-   Акцентный монохром: стекло, чёрный приоритет, акцент только белый или чёрный.
+   DotLingo - токены.
+   Лента как в Telegram и группы как в iOS. Акцент только чёрный или белый.
+   Другие цвета умеренно и только у состояния: ошибка, успех, предупреждение.
    Обе темы через [data-theme]. Свои hex в экранах не добавлять.
    ========================================================================== */
 
-/* --------------------------------------------------------------------------
-   Статичные токены: радиусы, размытие, отступы, шрифты, тайминги, слои.
-   -------------------------------------------------------------------------- */
 :root {
-  /* Радиусы */
   --r-sm: 10px;
-  --r-md: 16px;
-  --r-lg: 22px;
-  --r-xl: 28px;
+  --r-md: 14px;
+  --r-lg: 18px;
+  --r-xl: 22px;
   --r-pill: 999px;
 
-  /* Стекло */
   --blur: 28px saturate(150%);
   --blur-modal: 8px;
 
-  /* Отступы */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 14px;
   --sp-4: 20px;
   --sp-5: 32px;
 
-  /* Шрифты */
   --font-sans: -apple-system, "SF Pro Text", "Segoe UI Variable Text",
     "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
 
-  /* Типографика. --text-scale меняет только буквы, --ui-scale зумит всё окно. */
   --ui-scale: 1;
   --text-scale: 1;
-  --fs-caption: calc(11px * var(--text-scale));
-  --fs-small: calc(12px * var(--text-scale));
-  --fs-body: calc(13px * var(--text-scale));
-  --fs-body-lg: calc(14px * var(--text-scale));
-  --fs-heading: calc(15px * var(--text-scale));
-  --fs-subtitle: calc(17px * var(--text-scale));
-  --fs-title: calc(22px * var(--text-scale));
-  --fs-display: calc(28px * var(--text-scale));
+  --fs-caption: calc(12px * var(--text-scale));
+  --fs-small: calc(13px * var(--text-scale));
+  --fs-body: calc(15px * var(--text-scale));
+  --fs-body-lg: calc(16px * var(--text-scale));
+  --fs-heading: calc(17px * var(--text-scale));
+  --fs-subtitle: calc(20px * var(--text-scale));
+  --fs-title: calc(28px * var(--text-scale));
+  --fs-display: calc(34px * var(--text-scale));
 
-  /* Анимации */
+  /* Пружина ближе к iOS. Существующие переходы читают --ease. */
   --dur-fast: 160ms;
-  --dur-base: 200ms;
-  --dur-slow: 240ms;
-  --ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --dur-base: 220ms;
+  --dur-slow: 320ms;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
 
-  /* Слои */
   --z-modal: 100;
   --z-popover: 400;
   --z-toast: 200;
   --z-banner: 300;
 
-  /* Каркас */
   --sidebar-w: 252px;
-  --header-h: 64px;
-  --content-max-w: 1120px;
+  --header-h: 76px;
+  --content-max-w: 1080px;
+
+  --mark-book: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='white' d='M2.15 4.35Q4.55 3.55 7.05 5.85V11.55Q4.45 11.35 2.15 12.35Z'/%3E%3Cpath fill='white' d='M13.85 4.35Q11.45 3.55 8.95 5.85V11.55Q11.55 11.35 13.85 12.35Z'/%3E%3C/svg%3E");
 }
 
 /* --------------------------------------------------------------------------
-   Тёмная тема (приоритетная).
+   Тёмная тема.
    -------------------------------------------------------------------------- */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* Фон: лёгкий вертикальный градиент */
-  --bg-top: #050507;
-  --bg-bottom: #0b0b0e;
+  --canvas: #0b0b0e;
+  --bg-top: var(--canvas);
+  --bg-bottom: var(--canvas);
 
-  /* Поверхности */
-  --surface: rgba(255, 255, 255, 0.06);
-  --surface-raised: rgba(255, 255, 255, 0.09);
-  --surface-hover: rgba(255, 255, 255, 0.13);
-  --surface-solid: #131316;        /* подложка, когда backdrop-filter недоступен */
-  --surface-raised-solid: #1a1a1e;
+  --group: #1c1c1e;
+  --surface: var(--group);
+  --surface-raised: #2c2c2e;
+  --surface-hover: rgba(255, 255, 255, 0.06);
+  --surface-solid: var(--group);
+  --surface-raised-solid: #2c2c2e;
+  --field: #2a2a2e;
+  --thread: #0b0b0e;
+  --list: #121214;
+  --selected: rgba(255, 255, 255, 0.1);
+  --selected-shadow: none;
+  --icon-tile: rgba(255, 255, 255, 0.08);
+  --segment-track: rgba(255, 255, 255, 0.08);
+  --segment-on: #636366;
 
-  /* Волосяные линии */
-  --hairline: rgba(255, 255, 255, 0.09);
-  --hairline-strong: rgba(255, 255, 255, 0.16);
+  --bubble-in: #1c1c1e;
+  --bubble-out: #f2f2f7;
+  --bubble-out-text: #1c1c1e;
 
-  /* Текст */
+  --hairline: rgba(255, 255, 255, 0.1);
+  --hairline-strong: rgba(255, 255, 255, 0.18);
+
   --text: #f5f5f7;
-  --text-secondary: rgba(235, 235, 245, 0.6);
-  --text-tertiary: rgba(235, 235, 245, 0.35);
+  --text-secondary: rgba(235, 235, 245, 0.62);
+  --text-tertiary: rgba(235, 235, 245, 0.4);
 
-  /* Акцент: монохромная светлая кнопка на тёмном */
   --accent: #f5f5f7;
   --accent-text: #0b0b0e;
   --accent-hover: #ffffff;
   --accent-active: #d9d9de;
 
-  /* Статусы: приглушённые, только семантика */
-  --error: #f18c8c;
-  --error-bg: rgba(241, 140, 140, 0.13);
-  --success: #8bc8aa;
-  --success-bg: rgba(139, 200, 170, 0.13);
-  --warning: #f0c67a;
-  --warning-bg: rgba(240, 198, 122, 0.13);
-  --info: rgba(235, 235, 245, 0.6);
+  --error: #e07a7a;
+  --error-bg: rgba(224, 122, 122, 0.16);
+  --success: #6ec89a;
+  --success-bg: rgba(110, 200, 154, 0.16);
+  --warning: #e2b15a;
+  --warning-bg: rgba(226, 177, 90, 0.16);
+  --info: rgba(235, 235, 245, 0.62);
   --info-bg: rgba(235, 235, 245, 0.08);
 
-  /* Плотные пластины тостов и окон. Сквозь них страница не просвечивает. */
-  --overlay: #222228;
-  --overlay-sink: #1a1a1f;
-  --overlay-edge: rgba(255, 255, 255, 0.18);
+  --overlay: #2c2c2e;
+  --overlay-sink: #1c1c1e;
+  --overlay-edge: rgba(255, 255, 255, 0.14);
   --overlay-text: #f5f5f7;
   --overlay-muted: #c8c8d0;
   --overlay-quiet: #9b9ba4;
 
-  /* Затемнение и фокус */
-  --scrim: rgba(0, 0, 0, 0.64);
-  --focus-ring: rgba(245, 245, 247, 0.55);
+  --scrim: rgba(0, 0, 0, 0.62);
+  --focus-ring: rgba(245, 245, 247, 0.7);
   --focus-halo: rgba(245, 245, 247, 0.18);
 
-  /* Скроллбары */
-  --scrollbar-thumb: rgba(255, 255, 255, 0.14);
-  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.24);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
 
-  /* Тени: чёрные, глубокие, многослойные */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 10px rgba(0, 0, 0, 0.28);
-  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4), 0 14px 36px rgba(0, 0, 0, 0.32);
-  --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.44), 0 28px 72px rgba(0, 0, 0, 0.42);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.48);
 
-  /* Стрелка селекта */
   --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239999A5' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.5 9.25 12 14.75l5.5-5.5'/%3E%3C/svg%3E");
 }
 
@@ -135,64 +131,67 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  /* Фон */
-  --bg-top: #f5f5f7;
-  --bg-bottom: #ececf0;
+  --canvas: #efeff3;
+  --bg-top: var(--canvas);
+  --bg-bottom: var(--canvas);
 
-  /* Поверхности */
-  --surface: rgba(255, 255, 255, 0.72);
+  --group: #ffffff;
+  --surface: var(--group);
   --surface-raised: #ffffff;
   --surface-hover: rgba(0, 0, 0, 0.045);
-  --surface-solid: #ffffff;
+  --surface-solid: var(--group);
   --surface-raised-solid: #ffffff;
+  --field: #f2f2f5;
+  --thread: #e6e6eb;
+  --list: #ffffff;
+  --selected: #ffffff;
+  --selected-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --icon-tile: rgba(0, 0, 0, 0.06);
+  --segment-track: rgba(0, 0, 0, 0.06);
+  --segment-on: #ffffff;
 
-  /* Волосяные линии */
-  --hairline: rgba(0, 0, 0, 0.08);
-  --hairline-strong: rgba(0, 0, 0, 0.14);
+  --bubble-in: #ffffff;
+  --bubble-out: #1c1c1e;
+  --bubble-out-text: #f5f5f7;
 
-  /* Текст */
-  --text: #1d1d1f;
-  --text-secondary: #6e6e73;
-  --text-tertiary: rgba(0, 0, 0, 0.35);
+  --hairline: rgba(60, 60, 67, 0.14);
+  --hairline-strong: rgba(60, 60, 67, 0.24);
 
-  /* Акцент: чёрная кнопка на светлом */
-  --accent: #1d1d1f;
+  --text: #1c1c1e;
+  --text-secondary: #6c6c70;
+  --text-tertiary: rgba(60, 60, 67, 0.45);
+
+  --accent: #1c1c1e;
   --accent-text: #ffffff;
-  --accent-hover: #303034;
+  --accent-hover: #2c2c2e;
   --accent-active: #000000;
 
-  /* Статусы: темнее, чем в тёмной теме */
-  --error: #b23a36;
-  --error-bg: rgba(178, 58, 54, 0.1);
-  --success: #35745e;
-  --success-bg: rgba(53, 116, 94, 0.1);
-  --warning: #8d6b33;
-  --warning-bg: rgba(141, 107, 51, 0.12);
-  --info: #6e6e73;
+  --error: #c43b3b;
+  --error-bg: rgba(196, 59, 59, 0.1);
+  --success: #1f7a4d;
+  --success-bg: rgba(31, 122, 77, 0.1);
+  --warning: #8a5a10;
+  --warning-bg: rgba(138, 90, 16, 0.12);
+  --info: #6c6c70;
   --info-bg: rgba(0, 0, 0, 0.05);
 
-  /* Плотные пластины тостов и окон. */
   --overlay: #ffffff;
-  --overlay-sink: #f3f3f6;
-  --overlay-edge: rgba(0, 0, 0, 0.16);
-  --overlay-text: #1d1d1f;
+  --overlay-sink: #f4f4f6;
+  --overlay-edge: rgba(0, 0, 0, 0.1);
+  --overlay-text: #1c1c1e;
   --overlay-muted: #3a3a3e;
-  --overlay-quiet: #5c5c62;
+  --overlay-quiet: #6c6c70;
 
-  /* Затемнение и фокус */
-  --scrim: rgba(20, 20, 24, 0.46);
-  --focus-ring: rgba(29, 29, 31, 0.45);
-  --focus-halo: rgba(29, 29, 31, 0.12);
+  --scrim: rgba(20, 20, 24, 0.4);
+  --focus-ring: rgba(28, 28, 30, 0.55);
+  --focus-halo: rgba(28, 28, 30, 0.12);
 
-  /* Скроллбары */
-  --scrollbar-thumb: rgba(0, 0, 0, 0.18);
-  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.28);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.2);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.32);
 
-  /* Тени: серые, мягкие */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06), 0 2px 10px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.08), 0 14px 36px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.1), 0 28px 72px rgba(0, 0, 0, 0.12);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.14);
 
-  /* Стрелка селекта */
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236E6E73' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.5 9.25 12 14.75l5.5-5.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236C6C70' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.5 9.25 12 14.75l5.5-5.5'/%3E%3C/svg%3E");
 }

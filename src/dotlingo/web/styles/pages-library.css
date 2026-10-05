@@ -719,21 +719,21 @@
 
 .st-segment {
   display: inline-flex;
-  padding: 3px;
-  border-radius: var(--r-pill);
-  border: 1px solid var(--hairline);
-  background: var(--surface);
+  padding: 2px;
+  border-radius: 12px;
+  border: 0;
+  background: var(--segment-track);
   gap: 2px;
 }
 
 .st-segment__btn {
-  min-height: 28px;
+  min-height: 32px;
   padding: 0 16px;
-  border-radius: var(--r-pill);
+  border-radius: 10px;
   border: none;
   background: transparent;
   font-size: var(--fs-small);
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-secondary);
   transition: background var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease);
@@ -744,8 +744,9 @@
 }
 
 .st-segment__btn.is-selected {
-  background: var(--accent);
-  color: var(--accent-text);
+  background: var(--segment-on);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
 }
 
 .st-check-row {
@@ -1001,15 +1002,17 @@
 }
 
 .setup__frame {
-  width: min(520px, 100%);
+  width: min(480px, 100%);
   margin: auto;
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
-  padding: var(--sp-5);
+  padding: 36px 32px 28px;
   border: 1px solid var(--hairline);
-  border-radius: var(--r-xl);
-  background-color: var(--surface-solid);
+  border-radius: 28px;
+  background-color: var(--group);
+  box-shadow: var(--shadow-lg);
+  animation: page-in var(--dur-slow) var(--ease) both;
 }
 
 .setup__brand {
@@ -1021,8 +1024,7 @@
 .setup__kicker {
   margin: 0;
   font-size: var(--fs-caption);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--text-tertiary);
 }
 
@@ -1169,6 +1171,13 @@
   flex-wrap: wrap;
   gap: 8px;
   margin-top: var(--sp-2);
+}
+
+.setup__primary {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 14px;
+  font-size: var(--fs-body-lg);
 }
 
 .setup__choice .progress {

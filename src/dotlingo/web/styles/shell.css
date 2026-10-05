@@ -1,5 +1,5 @@
 /* ==========================================================================
-   DotLingo - каркас: sidebar + main, glass-эффекты, шапка, страницы, банер.
+   DotLingo - каркас: боковая колонка, крупный заголовок, переход страниц.
    ========================================================================== */
 
 @property --sidebar-w {
@@ -17,11 +17,16 @@
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   height: 100%;
   min-height: 0;
-  transition: --sidebar-w var(--dur-base) var(--ease);
+  transition: --sidebar-w 480ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* «Перевод» забирает окно: разделы уезжают, шапка складывается. */
+html[data-work="focus"] #app {
+  --sidebar-w: 0px !important;
 }
 
 /* --------------------------------------------------------------------------
-   Sidebar - стеклянная колонка
+   Sidebar
    -------------------------------------------------------------------------- */
 html.is-sidebar-resizing #app {
   transition: none;
@@ -47,20 +52,17 @@ html[data-sidebar="collapsed"] {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: var(--sp-4) 12px var(--sp-3);
+  padding: 18px 10px 12px;
   container: side / inline-size;
-  /* Непрозрачная подложка: стекло не должно оставлять дыру, если размытие не нарисовалось. */
-  background-color: var(--surface-solid);
-  background-image: linear-gradient(var(--surface), var(--surface));
-  -webkit-backdrop-filter: var(--blur);
-  backdrop-filter: var(--blur);
+  background: var(--canvas);
   border-right: 1px solid var(--hairline);
+  transition: opacity 420ms var(--ease), border-color 420ms var(--ease);
 }
 
-@supports not (backdrop-filter: blur(1px)) {
-  .sidebar {
-    background: var(--surface-solid);
-  }
+html[data-work="focus"] .sidebar {
+  opacity: 0;
+  pointer-events: none;
+  border-right-color: transparent;
 }
 
 /* Бренд */
@@ -73,16 +75,14 @@ html[data-sidebar="collapsed"] {
 
 .brand__mark {
   position: relative;
-  width: 27px;
-  height: 27px;
+  width: 32px;
+  height: 32px;
   transition: width var(--dur-base) var(--ease), height var(--dur-base) var(--ease);
-  border-radius: 8px;
-  background: var(--bg-bottom);
-  color: var(--accent);
-  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-text);
   flex-shrink: 0;
-  /* Те же кривые, что у app_icon.svg. */
-  --brand-book: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='white' d='M2.15 4.35Q4.55 3.55 7.05 5.85V11.55Q4.45 11.35 2.15 12.35Z'/%3E%3Cpath fill='white' d='M13.85 4.35Q11.45 3.55 8.95 5.85V11.55Q11.55 11.35 13.85 12.35Z'/%3E%3C/svg%3E");
+  --brand-book: var(--mark-book);
 }
 
 .brand__mark::before {
@@ -154,6 +154,12 @@ html[data-sidebar="collapsed"] {
   width: 12px;
   touch-action: none;
   cursor: col-resize;
+  transition: opacity 280ms var(--ease);
+}
+
+html[data-work="focus"] .sidebar-resize {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sidebar-resize::before {
@@ -165,6 +171,8 @@ html[data-sidebar="collapsed"] {
   width: 2px;
   border-radius: 2px;
   background: var(--text-tertiary);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
 }
 
 .sidebar-resize::after {
@@ -177,6 +185,8 @@ html[data-sidebar="collapsed"] {
   margin-top: -20px;
   border-radius: 4px;
   background: var(--text-secondary);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
 }
 
 .sidebar-resize:hover::before,
@@ -186,6 +196,7 @@ html[data-sidebar="collapsed"] {
 .sidebar-resize.is-dragging::after,
 .sidebar-resize:focus-visible::after {
   background: var(--text);
+  opacity: 1;
 }
 
 .sidebar-resize:focus-visible {
@@ -215,13 +226,11 @@ html[data-sidebar="collapsed"] {
 }
 
 .nav-group__label {
-  padding: 0 10px;
+  padding: 0 12px;
   margin-bottom: 6px;
   overflow: hidden;
-  font-size: calc(10.5px * var(--text-scale));
+  font-size: var(--fs-caption);
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
   color: var(--text-tertiary);
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -230,16 +239,17 @@ html[data-sidebar="collapsed"] {
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  height: 34px;
-  padding: 0 10px;
-  border-radius: 9px;
+  min-height: 48px;
+  padding: 6px 10px;
+  border-radius: 12px;
   font-size: var(--fs-body);
-  font-weight: 450;
-  color: var(--text-secondary);
+  font-weight: 500;
+  color: var(--text);
   text-align: left;
   transition: background var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease),
@@ -256,47 +266,87 @@ html[data-sidebar="collapsed"] {
 }
 
 .nav-item.is-active {
-  background: var(--surface-hover);
+  background: var(--selected);
   color: var(--text);
-  font-weight: 500;
-  box-shadow: inset 0 0 0 1px var(--hairline);
+  font-weight: 650;
+  box-shadow: var(--selected-shadow);
 }
 
 .nav-item__icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--icon-tile);
+  color: var(--text);
   flex-shrink: 0;
 }
 
+.nav-item.is-active .nav-item__icon {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
 .nav-item__icon .icon {
-  width: 17px;
-  height: 17px;
-  opacity: 0.9;
+  width: 16px;
+  height: 16px;
   transition: width var(--dur-base) var(--ease), height var(--dur-base) var(--ease);
 }
 
 .nav-item__label {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.2;
+}
+
+.nav-item__name,
+.nav-item__purpose {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.nav-item__hint {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: calc(10.5px * var(--text-scale));
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-  transition: color var(--dur-fast) var(--ease);
+.nav-item__name {
+  font-size: var(--fs-body);
+  font-weight: 600;
 }
 
-.nav-item.is-active .nav-item__hint {
+.nav-item__purpose {
+  font-size: var(--fs-caption);
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+.nav-item.is-active .nav-item__purpose {
   color: var(--text-secondary);
+}
+
+.nav-item__hint {
+  position: absolute;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  background: var(--icon-tile);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.nav-item:hover .nav-item__hint,
+.nav-item:focus-visible .nav-item__hint {
+  opacity: 1;
 }
 
 /* Узкая колонка: подписи уходят из вёрстки, остаются значок и цифра. */
@@ -324,18 +374,20 @@ html[data-sidebar="collapsed"] .nav {
 html[data-sidebar="collapsed"] .nav-item {
   justify-content: center;
   gap: 6px;
-  height: 40px;
+  height: 48px;
+  min-height: 48px;
   padding: 0 4px;
 }
 
 html[data-sidebar="collapsed"] .nav-item__icon {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
 }
 
 html[data-sidebar="collapsed"] .nav-item__icon .icon {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 html[data-sidebar="collapsed"] .brand__mark {
@@ -376,10 +428,9 @@ html[data-sidebar="collapsed"] .device-status__dot {
 }
 
 html[data-sidebar="collapsed"] .nav-item__hint,
-html[data-sidebar="collapsed"] .nav-item.is-active .nav-item__hint {
-  display: inline;
-  flex-shrink: 0;
-  color: var(--text-secondary);
+html[data-sidebar="collapsed"] .nav-item:hover .nav-item__hint,
+html[data-sidebar="collapsed"] .nav-item:focus-visible .nav-item__hint {
+  display: none;
 }
 
 html[data-sidebar="collapsed"] .brand__text,
@@ -411,8 +462,30 @@ html[data-sidebar="collapsed"] .download-dock {
   padding-left: 0;
 }
 
-.active-project__icon {
+html[data-sidebar="collapsed"] .active-project {
+  display: flex;
+}
+
+html[data-sidebar="collapsed"] .active-project::after {
   display: none;
+}
+
+.active-project__icon {
+  display: flex;
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--icon-tile);
+  color: var(--text);
+}
+
+.active-project__icon .icon {
+  width: 16px;
+  height: 16px;
 }
 
 html[data-sidebar="collapsed"] .active-project__icon {
@@ -487,19 +560,44 @@ html[data-sidebar="collapsed"] .download-dock {
 }
 
 .active-project {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 14px;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  align-items: center;
   width: 100%;
+  min-height: 52px;
   margin-bottom: var(--sp-2);
   padding: 8px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--hairline);
-  background: var(--surface);
+  border-radius: 14px;
+  border: 0;
+  background: var(--selected);
+  box-shadow: var(--selected-shadow);
   text-align: left;
   transition: background var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.active-project::after {
+  content: "";
+  grid-row: 1 / span 2;
+  grid-column: 3;
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-right: 1.75px solid var(--text-tertiary);
+  border-bottom: 1.75px solid var(--text-tertiary);
+  transform: rotate(-45deg);
+}
+
+.active-project__kicker {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.active-project__label {
+  grid-column: 2;
+  grid-row: 2;
 }
 
 .active-project:hover {
@@ -526,11 +624,11 @@ html[data-sidebar="collapsed"] .download-dock {
   align-items: center;
   gap: 10px;
   width: 100%;
-  height: 34px;
+  height: 44px;
   padding: 0 10px;
-  border-radius: 9px;
+  border-radius: 12px;
   font-size: var(--fs-body);
-  color: var(--text-secondary);
+  color: var(--text);
   text-align: left;
   transition: background var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease);
@@ -545,8 +643,10 @@ html[data-sidebar="collapsed"] .download-dock {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--icon-tile);
   flex-shrink: 0;
 }
 
@@ -612,6 +712,16 @@ html[data-sidebar="collapsed"] .download-dock {
 .download-dock,
 .device-status {
   min-width: 0;
+}
+
+@container side (max-width: 210px) {
+  .nav-item__purpose {
+    display: none;
+  }
+
+  .nav-item {
+    min-height: 40px;
+  }
 }
 
 @container side (max-width: 150px) {
@@ -688,7 +798,23 @@ html[data-sidebar="collapsed"] .download-dock {
   gap: var(--sp-3) var(--sp-4);
   min-width: 0;
   min-height: var(--header-h);
+  max-height: 240px;
   padding: calc(var(--sp-4) + 2px) var(--sp-5) var(--sp-3);
+  transition:
+    max-height 480ms cubic-bezier(0.22, 1, 0.36, 1),
+    min-height 480ms cubic-bezier(0.22, 1, 0.36, 1),
+    padding 480ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 320ms var(--ease);
+}
+
+html[data-work] .main-header {
+  max-height: 0;
+  min-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .main-header__titles {
@@ -717,22 +843,25 @@ html[data-sidebar="collapsed"] .download-dock {
 
 .main-header__titles h1 {
   min-width: 0;
-  font-size: calc(21px * var(--text-scale));
+  font-size: var(--fs-title);
   font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
 .main-header__subtitle {
-  margin-top: 2px;
-  font-size: var(--fs-small);
+  margin-top: 4px;
+  max-width: 62ch;
+  font-size: var(--fs-body);
+  line-height: 1.35;
   color: var(--text-secondary);
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .main-header__actions {
@@ -791,6 +920,21 @@ html[data-sidebar="collapsed"] .download-dock {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
+  animation: page-in var(--dur-slow) var(--ease) both;
+}
+
+.page--chat {
+  animation: work-rise 420ms var(--ease) both;
+}
+
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes work-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
 }
 
 .boot {
