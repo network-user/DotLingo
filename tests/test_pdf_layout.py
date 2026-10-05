@@ -25,6 +25,7 @@ def test_normalize_collapses_old_style_spacing() -> None:
     assert normalize_text("Dinah  'll  miss  me !") == "Dinah'll miss me!"
     assert normalize_text("it ’s  late") == "it's late"
     assert join_line_texts(["There-", "fore I'm mad."]) == "Therefore I'm mad."
+    assert join_line_texts(["C H A P T E R" + "   " + "I ."]) == "CHAPTER I."
 
 
 def _line(
@@ -112,6 +113,56 @@ def test_finished_sentence_stays_its_own_paragraph() -> None:
         "Alice was beginning to get very tired.",
         "So she was considering in her own mind.",
     ]
+
+
+def test_running_head_joins_across_the_gutter_only() -> None:
+    lines = [
+        _line("DOWN THE", 150, 230, 470, size=8.2, page=2),
+        _line("Alice looked at the book.", 62, 300, 400, page=2),
+        _line("RABBIT-HOLE.", 500, 600, 470, size=8.2, page=2),
+        _line("DOWN THE", 150, 230, 470, size=8.2, page=3),
+        _line("RABBIT-HOLE.", 500, 600, 470, size=8.2, page=3),
+    ]
+    paragraphs = group_paragraphs(lines)
+    headers = [item for item in paragraphs if item.kind == "header"]
+    assert [item.source for item in headers] == ["DOWN THE RABBIT-HOLE.", "DOWN THE RABBIT-HOLE."]
+    assert [item.page for item in headers] == [2, 3]
+    assert len(headers[0].lines) == 2
+
+
+def test_finished_headers_on_one_line_stay_apart() -> None:
+    lines = [
+        _line("CHAPTER I.", 150, 280, 470, size=8.2),
+        _line("NOTES.", 500, 560, 470, size=8.2),
+    ]
+    paragraphs = group_paragraphs(lines)
+    assert [item.source for item in paragraphs] == ["CHAPTER I.", "NOTES."]
+
+
+def test_small_header_does_not_stick_to_the_body() -> None:
+    lines = [
+        _line("DOWN THE", 62, 140, 200, size=8.2),
+        _line("Alice was beginning to get very tired today.", 62, 340, 184),
+    ]
+    paragraphs = group_paragraphs(lines)
+    assert [item.source for item in paragraphs] == [
+        "DOWN THE",
+        "Alice was beginning to get very tired today.",
+    ]
+
+
+def test_running_head_keeps_a_slot_for_each_half() -> None:
+    from dotlingo.pdf_layout import _plan_paragraph, _register_font
+
+    _register_font()
+    lines = [
+        _line("DOWN THE", 150, 230, 470, size=8.2),
+        _line("RABBIT-HOLE.", 500, 600, 470, size=8.2),
+    ]
+    header = next(item for item in group_paragraphs(lines) if item.kind == "header")
+    _size, fitted, _left, _right = _plan_paragraph(header, "Вниз по кроличьей норе.", [])
+    assert len(fitted) == len(header.lines) == 2
+    assert " ".join(part for part in fitted if part) == "Вниз по кроличьей норе."
 
 
 def test_book_scope_keeps_page_numbers_and_chrome() -> None:

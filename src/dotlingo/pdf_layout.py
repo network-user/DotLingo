@@ -1,8 +1,10 @@
 """Укладка перевода в текстовый PDF без перерисовки иллюстраций.
 
 Строки книги закрываются цветом бумаги и набираются заново шрифтом
-Old Standard (OFL, Alexey Kryukov) в те же полосы. Режим ``book`` не
-трогает интерфейс и служебные шрифты. Режим ``all`` переводит весь текст.
+Old Standard (OFL, Alexey Kryukov) в те же полосы. Абзац, который не
+входит в свою строку, не срывает файл: он дописывается в конец PDF.
+Режим ``book`` не трогает интерфейс и служебные шрифты. Режим ``all``
+переводит весь текст.
 """
 
 from __future__ import annotations
@@ -22,6 +24,9 @@ _APOSTROPHE = re.compile(r"(?<=\w)\s+['’]\s*(?=\w)")
 _BEFORE_PUNCT = re.compile(r"\s+([,.;:!?])")
 _AFTER_QUOTE = re.compile(r"([«“\"])\s+")
 _LIGATURES = str.maketrans({"ﬁ": "fi", "ﬂ": "fl", "ﬀ": "ff", "ﬃ": "ffi", "ﬄ": "ffl"})
+_LETTERSPACED = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё])([A-ZА-ЯЁ](?:[ \t][A-ZА-ЯЁ]){3,})(?![A-Za-zА-Яа-яЁё])"
+)
 
 
 class LayoutError(Exception):
@@ -64,12 +69,21 @@ class Paragraph:
         return (self.page, self.index)
 
 
+def _collapse_letterspacing(text: str) -> str:
+    """Склеивает «C H A P T E R», но не трогает слово после двойного пробела."""
+    return _LETTERSPACED.sub(
+        lambda match: match.group(1).replace(" ", "").replace("\t", ""),
+        text,
+    )
+
+
 def normalize_text(text: str) -> str:
     """Склеивает разрядку старого набора в обычную строку."""
     cleaned = text.translate(_LIGATURES).replace("\u00a0", " ")
     cleaned = _APOSTROPHE.sub("'", cleaned)
     cleaned = _BEFORE_PUNCT.sub(r"\1", cleaned)
     cleaned = _AFTER_QUOTE.sub(r"\1", cleaned)
+    cleaned = _collapse_letterspacing(cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
@@ -77,7 +91,7 @@ def join_line_texts(parts: list[str]) -> str:
     """Собирает абзац и снимает переносы на конце строки."""
     joined: list[str] = []
     for raw in parts:
-        piece = re.sub(r"\s+", " ", raw).strip()
+        piece = re.sub(r"\s+", " ", _collapse_letterspacing(raw)).strip()
         if not piece:
             continue
         if joined and joined[-1].endswith("-") and piece[:1].islower():
@@ -209,7 +223,8 @@ def _split_column(lines: list[GlyphLine]) -> list[list[GlyphLine]]:
         gap = previous.baseline - line.baseline
         indent = line.x0 - previous.x0
         both_indented = line.x0 > column_left + 8 and previous.x0 > column_left + 8
-        new_paragraph = gap > median_gap * 1.35 or 8.0 <= indent <= 26.0 or both_indented
+        size_break = (previous.size < 11.4) != (line.size < 11.4)
+        new_paragraph = gap > median_gap * 1.35 or 8.0 <= indent <= 26.0 or both_indented or size_break
         if new_paragraph:
             groups.append([line])
         else:
@@ -343,8 +358,57 @@ def _attach_rights(paragraph: Paragraph) -> None:
         paragraph.line_rights = [paragraph.measure_right] * len(paragraph.lines)
 
 
+def _spread_header_partner(paragraphs: list[Paragraph], index: int) -> int | None:
+    """Правая половина бегущего заголовка на той же базовой линии."""
+    anchor = paragraphs[index]
+    if anchor.kind != "header" or not anchor.lines or _ends_sentence(anchor.source):
+        return None
+    line = anchor.lines[0]
+    if _column(line) != 0:
+        return None
+    best: int | None = None
+    best_distance = 3.0
+    for other_index, other in enumerate(paragraphs):
+        if other_index == index or other.kind != "header" or not other.lines:
+            continue
+        mate = other.lines[0]
+        if mate.page != line.page or _column(mate) != 1:
+            continue
+        distance = abs(mate.baseline - line.baseline)
+        if distance <= 2.0 and distance < best_distance:
+            best = other_index
+            best_distance = distance
+    return best
+
+
+def _stitch_spread_headers(paragraphs: list[Paragraph]) -> list[Paragraph]:
+    """Склеивает заголовок, который корешок разрезал на левую и правую половину."""
+    used: set[int] = set()
+    result: list[Paragraph] = []
+    for index, paragraph in enumerate(paragraphs):
+        if index in used:
+            continue
+        partner = _spread_header_partner(paragraphs, index)
+        if partner is None:
+            result.append(paragraph)
+            continue
+        used.add(partner)
+        other = paragraphs[partner]
+        left, right = (
+            (paragraph, other) if paragraph.lines[0].x0 <= other.lines[0].x0 else (other, paragraph)
+        )
+        _attach_rights(left)
+        _attach_rights(right)
+        left.lines = [*left.lines, *right.lines]
+        left.line_rights = [*left.line_rights, *right.line_rights]
+        left.source = join_line_texts([line.text for line in left.lines])
+        result.append(left)
+    return result
+
+
 def _stitch_continuations(paragraphs: list[Paragraph]) -> list[Paragraph]:
     """Склеивает абзац, который оборвался на границе полосы и продолжился со строчной."""
+    paragraphs = _stitch_spread_headers(paragraphs)
     kept: list[Paragraph] = []
     anchor: Paragraph | None = None
     for paragraph in paragraphs:
@@ -443,12 +507,20 @@ def _cover(canvas, x: float, y: float, width: float, height: float, paper: tuple
     canvas.rect(x, y, width, height, fill=1, stroke=0)
 
 
+def _header_widths(paragraph: Paragraph, kept: list[GlyphLine]) -> list[float]:
+    widths: list[float] = []
+    for line in paragraph.lines:
+        left, right = _header_limits(line, kept)
+        widths.append(max(12.0, right - left))
+    return widths
+
+
 def _plan_paragraph(paragraph: Paragraph, translation: str, kept: list[GlyphLine]) -> tuple[float, list[str], float, float]:
     try:
         if paragraph.kind == "header":
-            left, right = _header_limits(paragraph.lines[0], kept)
-            size, lines = choose_layout(translation, [max(12.0, right - left)], FONT_NAME, 11.0, 7.5)
-            return size, lines, left, right
+            widths = _header_widths(paragraph, kept)
+            size, lines = choose_layout(translation, widths, FONT_NAME, 11.0, 7.5)
+            return size, lines, 0.0, 0.0
         widths = _slot_widths(paragraph)
         start = min(paragraph.lines[0].size, 12.0)
         size, lines = choose_layout(translation, widths, FONT_NAME, start, 7.5)
@@ -458,6 +530,93 @@ def _plan_paragraph(paragraph: Paragraph, translation: str, kept: list[GlyphLine
     return size, lines, 0.0, 0.0
 
 
+def _markup(text: str) -> str:
+    from xml.sax.saxutils import escape
+
+    return escape(text).replace("\n", "<br/>")
+
+
+def _append_overflow(writer, items: list[tuple[str, str]]) -> None:
+    """Дописать в конец PDF абзацы, которые не вошли в свои строки."""
+    import io
+
+    from pypdf import PdfReader
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
+    buffer = io.BytesIO()
+    body = ParagraphStyle(
+        "dotlingo-overflow",
+        fontName=FONT_NAME,
+        fontSize=11,
+        leading=15,
+        alignment=TA_LEFT,
+    )
+    label = ParagraphStyle(
+        "dotlingo-overflow-label",
+        parent=body,
+        fontSize=9,
+        leading=12,
+        spaceBefore=12,
+    )
+    story = [Paragraph(_markup("Текст, который не вошёл в полосу"), body)]
+    for title, text in items:
+        story.append(Paragraph(_markup(title), label))
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(_markup(text or " "), body))
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=54,
+        rightMargin=54,
+        topMargin=56,
+        bottomMargin=56,
+    )
+    try:
+        document.build(story)
+    except Exception as exc:
+        raise LayoutError("Не удалось дописать текст, который не вошёл в полосу.") from exc
+    buffer.seek(0)
+    for page in PdfReader(buffer).pages:
+        writer.add_page(page)
+
+
+def _paint_header_line(
+    canvas,
+    line: GlyphLine,
+    value: str,
+    size: float,
+    kept: list[GlyphLine],
+    paper: tuple[float, float, float],
+    *,
+    cover: bool,
+) -> None:
+    """Закрывает половину бегущего заголовка и, если слот не пуст, пишет её перевод."""
+    left, right = _header_limits(line, kept)
+    text_width = _text_width(value, FONT_NAME, size) if value else 0.0
+    if text_width <= 0:
+        origin = left
+    else:
+        origin = min(max(line.center - text_width / 2, left), max(left, right - text_width))
+    if cover:
+        pad_y = 1.0
+        cover_left = min(line.x0, origin) - 1.0
+        cover_right = max(line.x1, origin + text_width) + 1.0
+        _cover(
+            canvas,
+            cover_left,
+            line.y0 - pad_y,
+            cover_right - cover_left,
+            line.y1 - line.y0 + pad_y * 2,
+            paper,
+        )
+        return
+    if value:
+        _draw_fitted(canvas, value, origin, line.baseline, max(text_width, 1.0), size, "left")
+
+
 def _paint_page(
     canvas,
     paragraphs: list[Paragraph],
@@ -465,8 +624,9 @@ def _paint_page(
     kept: list[GlyphLine],
     paper: tuple[float, float, float],
     page_no: int,
-) -> None:
+) -> list[tuple[str, str]]:
     """Рисует строки этой страницы. Абзац на две полосы планируется один раз."""
+    overflow: list[tuple[str, str]] = []
     ready: list[Paragraph] = []
     for paragraph in paragraphs:
         text = translations.get(paragraph.key)
@@ -476,25 +636,27 @@ def _paint_page(
         if not paragraph.planned:
             paragraph.planned = True
             normalized = normalize_text(text)
-            size, lines, _left, _right = _plan_paragraph(paragraph, normalized, kept)
+            try:
+                size, lines, _left, _right = _plan_paragraph(paragraph, normalized, kept)
+            except LayoutError:
+                title = f"Стр. {paragraph.page}. {paragraph.source[:70]}".strip()
+                overflow.append((title, normalized))
+                continue
             paragraph.fitted_size = size
             paragraph.fitted_lines = lines
+        if not paragraph.fitted_lines:
+            continue
         ready.append(paragraph)
 
     for paragraph in ready:
         lines = paragraph.fitted_lines
         size = paragraph.fitted_size
         if paragraph.kind == "header":
-            line = paragraph.lines[0]
-            if line.page != page_no:
-                continue
-            left, right = _header_limits(line, kept)
-            text_width = _text_width(lines[0], FONT_NAME, size)
-            origin = min(max(line.center - text_width / 2, left), right - text_width)
-            pad_y = 1.0
-            cover_left = min(line.x0, origin) - 1.0
-            cover_right = max(line.x1, origin + text_width) + 1.0
-            _cover(canvas, cover_left, line.y0 - pad_y, cover_right - cover_left, line.y1 - line.y0 + pad_y * 2, paper)
+            for index, line in enumerate(paragraph.lines):
+                if line.page != page_no:
+                    continue
+                value = lines[index] if index < len(lines) else ""
+                _paint_header_line(canvas, line, value, size, kept, paper, cover=True)
             continue
         for line in paragraph.lines:
             if line.page != page_no:
@@ -512,13 +674,11 @@ def _paint_page(
         lines = paragraph.fitted_lines
         size = paragraph.fitted_size
         if paragraph.kind == "header":
-            line = paragraph.lines[0]
-            if line.page != page_no:
-                continue
-            left, right = _header_limits(line, kept)
-            text_width = _text_width(lines[0], FONT_NAME, size)
-            origin = min(max(line.center - text_width / 2, left), right - text_width)
-            _draw_fitted(canvas, lines[0], origin, line.baseline, text_width, size, "left")
+            for index, line in enumerate(paragraph.lines):
+                if line.page != page_no:
+                    continue
+                value = lines[index] if index < len(lines) else ""
+                _paint_header_line(canvas, line, value, size, kept, paper, cover=False)
             continue
         widths = _slot_widths(paragraph)
         last = max((index for index, value in enumerate(lines) if value), default=0)
@@ -527,6 +687,7 @@ def _paint_page(
                 continue
             mode = "justify" if index != last and value else "left"
             _draw_fitted(canvas, value, line.x0, line.baseline, widths[index], size, mode)
+    return overflow
 
 
 def _open_reader(path: Path):
@@ -574,10 +735,11 @@ def place_translations(
         for page in targets:
             if page in by_page:
                 by_page[page].append(item)
+    overflow: list[tuple[str, str]] = []
     for page_no in pages:
         bitmap = document[page_no - 1].render(scale=1)
         paper = _sample_paper(bitmap.to_pil())
-        _paint_page(overlay, by_page[page_no], translations, kept, paper, page_no)
+        overflow.extend(_paint_page(overlay, by_page[page_no], translations, kept, paper, page_no))
         overlay.showPage()
     overlay.save()
     document.close()
@@ -588,6 +750,8 @@ def place_translations(
         # Страница должна уже лежать в writer, иначе pypdf 6 теряет шрифт наложения.
         writer.add_page(reader.pages[page_no - 1])
         writer.pages[-1].merge_page(stamps.pages[index])
+    if overflow:
+        _append_overflow(writer, overflow)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("wb") as handle:
