@@ -18,7 +18,14 @@ import webview
 from webview.dom import _dnd_state
 
 from dotlingo.dialogs import delete_dialog, list_dialogs, load_dialog, read_attachment, save_dialog
-from dotlingo.formats import DocumentError, export_document
+from dotlingo.formats import (
+    SUPPORTED_EXPORT,
+    DocumentError,
+    convert_document,
+    converted_destination,
+    export_document,
+    import_document,
+)
 from dotlingo.hardware import (
     HardwareSnapshot,
     assess_model,
@@ -74,13 +81,39 @@ IMPORT_EXTENSIONS = (
 )
 
 
+GENERIC_EXPORT = (
+    ".txt",
+    ".md",
+    ".html",
+    ".rtf",
+    ".fb2",
+    ".odt",
+    ".json",
+    ".docx",
+    ".epub",
+    ".pdf",
+)
+
 EXPORT_ALLOWED = {
-    "txt": (".txt", ".md"),
-    "markdown": (".md", ".txt"),
-    "docx": (".docx", ".txt", ".md"),
-    "epub": (".epub", ".txt", ".md"),
-    "pdf": (".pdf", ".txt", ".md"),
+    "txt": GENERIC_EXPORT,
+    "markdown": GENERIC_EXPORT,
+    "docx": GENERIC_EXPORT,
+    "epub": GENERIC_EXPORT,
+    "pdf": GENERIC_EXPORT,
 }
+
+CONVERSION_TARGETS = (
+    {"suffix": ".txt", "label": "Текст", "note": "Абзацы через пустую строку. Стили и картинки не переносятся."},
+    {"suffix": ".md", "label": "Markdown", "note": "Заголовки становятся решётками. Вёрстка внутри абзаца упрощается."},
+    {"suffix": ".html", "label": "HTML", "note": "Одна страница: заголовок и абзацы. Картинки и стили исходника не копируются."},
+    {"suffix": ".rtf", "label": "RTF", "note": "Открывается в Word и редакторах. Жирный и курсив исходника не сохраняются."},
+    {"suffix": ".fb2", "label": "FB2", "note": "Книга FictionBook: заголовки и абзацы. Обложка и сноски не собираются."},
+    {"suffix": ".odt", "label": "ODT", "note": "Текст OpenDocument. Стили абзацев исходника не копируются."},
+    {"suffix": ".docx", "label": "DOCX", "note": "Из DOCX сохраняются абзацы и таблицы. Из остальных форматов собирается новый документ."},
+    {"suffix": ".epub", "label": "EPUB", "note": "Из EPUB сохраняется книга. Из остальных форматов собирается одна глава."},
+    {"suffix": ".pdf", "label": "PDF", "note": "Книжная полоса сохраняется только у такого PDF. Остальное собирается новым текстом на страницах A4."},
+    {"suffix": ".json", "label": "JSON", "note": "Список блоков: вид и текст. Это данные, не страница для чтения."},
+)
 
 # Быстрый перевод без выбранного проекта живёт в одном локальном проекте.
 QUICK_PROJECT_TITLE = "Быстрые"
@@ -411,6 +444,7 @@ class Api:
         self._window_closer: Callable[[], None] | None = None
         self.hardware, self._hardware_detected_at = _load_hardware_cache(self.data_dir)
         self._scratch = ScratchTranslator(self.models_dir, self._push, self._document_busy)
+        self._converted: set[Path] = set()
         _arm_webview_file_drop()
         preferences = load_preferences(self.preferences_root)
         self._preferences = preferences
@@ -607,7 +641,7 @@ class Api:
             suffix = str(prefs["translate_suffix"] or "").strip().lower()
             if suffix and not suffix.startswith("."):
                 suffix = f".{suffix}"
-            if suffix not in {"", ".txt", ".md", ".docx", ".epub", ".pdf"}:
+            if suffix not in {"", *GENERIC_EXPORT}:
                 suffix = ""
             self._set_preference("translate_suffix", suffix)
         if "translate_model" in prefs:
@@ -1811,6 +1845,98 @@ class Api:
             allowed.insert(0, ".pdf")
         return _ok(allowed)
 
+    def listConversionTargets(self) -> dict[str, Any]:
+        """Форматы, в которые конвертер умеет собрать новый файл."""
+        return _ok(list(CONVERSION_TARGETS))
+
+    def resolveOutputDirectory(self) -> dict[str, Any]:
+        """Папка для результатов конвертера. Отмена диалога возвращает null."""
+        if self._window is None:
+            return _ok(None)
+        try:
+            paths = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+        except Exception:
+            return _ok(None)
+        if not paths:
+            return _ok(None)
+        chosen = paths[0] if isinstance(paths, (list, tuple)) else paths
+        return _ok(str(chosen))
+
+    def inspectConversion(self, paths: list[str]) -> dict[str, Any]:
+        """Прочитать файлы для конвертера, не записывая результат."""
+        files: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for raw in paths or []:
+            path = Path(str(raw))
+            try:
+                if not path.is_file():
+                    raise DocumentError("Файл не найден.")
+                parsed = import_document(path)
+            except (DocumentError, OSError) as exc:
+                errors.append({"name": path.name or str(raw), "error": str(exc)})
+                continue
+            files.append(
+                {
+                    "path": str(path),
+                    "name": path.name,
+                    "format": parsed.format,
+                    "title": parsed.title,
+                    "blocks": sum(
+                        1
+                        for block in parsed.blocks
+                        if block.translatable and block.kind != "gap" and block.text.strip()
+                    ),
+                    "warnings": list(parsed.warnings),
+                }
+            )
+        return _ok({"files": files, "errors": errors})
+
+    def convertDocuments(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Собрать новые файлы. Исходники не изменяются."""
+        if not isinstance(data, dict):
+            return _err("Некорректный запрос конвертации.")
+        paths = [str(item) for item in (data.get("paths") or []) if str(item).strip()]
+        if not paths:
+            return _err("Выберите хотя бы один файл.", "no_documents")
+        suffix = str(data.get("suffix") or "").strip().lower()
+        if suffix and not suffix.startswith("."):
+            suffix = f".{suffix}"
+        if suffix not in SUPPORTED_EXPORT:
+            return _err("Этот формат конвертер не собирает.", "unsupported")
+        folder_raw = str(data.get("directory") or "").strip()
+        folder = Path(folder_raw) if folder_raw else None
+        if folder is not None and not folder.is_dir():
+            return _err("Папка для результата не найдена.", "not_found")
+
+        def work() -> None:
+            written: list[dict[str, str]] = []
+            errors: list[dict[str, str]] = []
+            total = len(paths)
+            for index, raw in enumerate(paths, start=1):
+                source = Path(raw)
+                self._push(
+                    "convert_progress",
+                    {"index": index, "total": total, "name": source.name},
+                )
+                try:
+                    destination = converted_destination(source, suffix, folder)
+                    convert_document(source, destination)
+                except (DocumentError, OSError) as exc:
+                    errors.append({"name": source.name or raw, "error": str(exc)})
+                    continue
+                resolved = destination.resolve()
+                self._converted.add(resolved)
+                written.append(
+                    {"path": str(destination), "name": destination.name, "source": source.name}
+                )
+            self._push(
+                "convert_done",
+                {"ok": not errors, "files": written, "errors": errors},
+            )
+
+        self._spawn(work, "convert")
+        return _ok({"started": True, "count": len(paths)})
+
     def revealPath(self, path: str) -> dict[str, Any]:
         """Показать файл в проводнике. Каталог открывается как папка."""
         if not path:
@@ -1855,7 +1981,7 @@ class Api:
             return _err(str(exc), "not_found")
         suffix = target.suffix.lower()
         name = target.name
-        if suffix in {".txt", ".md", ".markdown"}:
+        if suffix in {".txt", ".md", ".markdown", ".html", ".rtf", ".fb2", ".json"}:
             text = target.read_text(encoding="utf-8", errors="replace")
             if len(text) > 200_000:
                 text = text[:200_000] + "\n\n…"
@@ -1876,7 +2002,7 @@ class Api:
             raise ValueError("Файл не найден.")
         root = self.projects_dir.resolve()
         under_output = root in target.parents and "output" in target.parts
-        if under_output or self._known_export(target):
+        if under_output or self._known_export(target) or target in self._converted:
             return target
         raise ValueError("Можно открыть только собранный результат.")
 

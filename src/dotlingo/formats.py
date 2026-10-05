@@ -13,7 +13,19 @@ from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree as ET
 
 SUPPORTED_IMPORT = {".txt", ".md", ".markdown", ".docx", ".epub", ".pdf"}
-SUPPORTED_EXPORT = {".txt", ".md", ".markdown", ".docx", ".epub", ".pdf"}
+SUPPORTED_EXPORT = {
+    ".txt",
+    ".md",
+    ".markdown",
+    ".html",
+    ".rtf",
+    ".fb2",
+    ".odt",
+    ".json",
+    ".docx",
+    ".epub",
+    ".pdf",
+}
 MAX_DOCUMENT_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 20_000
 MAX_ARCHIVE_UNPACKED = 512 * 1024 * 1024
@@ -703,6 +715,257 @@ def _export_pdf_layout(
         raise DocumentError(str(exc)) from exc
 
 
+def _export_pieces(parsed: ParsedDocument, translations: dict[int, str]) -> list[tuple[str, str]]:
+    """Абзацы для новой вёрстки. Служебные метки страниц и пустые куски не входят."""
+    pieces: list[tuple[str, str]] = []
+    for block in parsed.blocks:
+        if _is_page_marker(block) or block.kind == "gap":
+            continue
+        text = _translation_for(block, translations).strip()
+        if not text:
+            continue
+        pieces.append(("heading" if block.kind == "heading" else "paragraph", text))
+    return pieces
+
+
+def _xml_text(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _html_export(parsed: ParsedDocument, translations: dict[int, str]) -> str:
+    title = _xml_text(parsed.title or "Документ")
+    parts = [
+        "<!DOCTYPE html>",
+        '<html lang="und">',
+        "<head>",
+        '<meta charset="utf-8">',
+        f"<title>{title}</title>",
+        "</head>",
+        "<body>",
+        f"<article><h1>{title}</h1>",
+    ]
+    for kind, text in _export_pieces(parsed, translations):
+        body = "<br>\n".join(_xml_text(line) for line in text.splitlines()) or "<br>"
+        tag = "h2" if kind == "heading" else "p"
+        parts.append(f"<{tag}>{body}</{tag}>")
+    parts.extend(["</article>", "</body>", "</html>", ""])
+    return "\n".join(parts)
+
+
+def _rtf_escape(text: str) -> str:
+    chunks: list[str] = []
+    for char in text.replace("\r\n", "\n").replace("\r", "\n"):
+        if char == "\n":
+            chunks.append(r"\line ")
+            continue
+        if char in "\\{}":
+            chunks.append("\\" + char)
+            continue
+        code = ord(char)
+        if code < 128:
+            chunks.append(char)
+            continue
+        if code > 32767:
+            code -= 65536
+        chunks.append(f"\\u{code}?")
+    return "".join(chunks)
+
+
+def _rtf_export(parsed: ParsedDocument, translations: dict[int, str]) -> str:
+    body = [r"{\rtf1\ansi\ansicpg65001\uc1\deff0{\fonttbl{\f0\fnil Segoe UI;}}\f0\fs22"]
+    title = (parsed.title or "").strip()
+    if title:
+        body.append(r"\fs32\b " + _rtf_escape(title) + r"\b0\fs22\par ")
+    for kind, text in _export_pieces(parsed, translations):
+        if kind == "heading":
+            body.append(r"\fs28\b " + _rtf_escape(text) + r"\b0\fs22\par ")
+        else:
+            body.append(_rtf_escape(text) + r"\par ")
+    body.append("}")
+    return "".join(body)
+
+
+def _fb2_export(parsed: ParsedDocument, translations: dict[int, str]) -> str:
+    title = _xml_text(parsed.title or "Документ")
+    sections: list[str] = []
+    current: list[str] = []
+    heading = ""
+    for kind, text in _export_pieces(parsed, translations):
+        if kind == "heading":
+            if current or heading:
+                sections.append(_fb2_section(heading or title, current))
+            heading = text
+            current = []
+            continue
+        current.append(text)
+    sections.append(_fb2_section(heading or title, current))
+    body = "".join(sections)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">\n'
+        "<description><title-info>\n"
+        f"<book-title>{title}</book-title>\n"
+        "<lang>und</lang>\n"
+        "</title-info></description>\n"
+        f"<body>{body}</body>\n"
+        "</FictionBook>\n"
+    )
+
+
+def _fb2_section(title: str, paragraphs: list[str]) -> str:
+    lines = ["<section>", f"<title><p>{_xml_text(title)}</p></title>"]
+    lines.extend(f"<p>{_xml_text(item)}</p>" for item in paragraphs)
+    if not paragraphs:
+        lines.append("<p></p>")
+    lines.append("</section>")
+    return "".join(lines)
+
+
+def _odt_export(destination: Path, parsed: ParsedDocument, translations: dict[int, str]) -> None:
+    title = _xml_text(parsed.title or "Документ")
+    nodes = [f'<text:h text:outline-level="1">{title}</text:h>']
+    for kind, text in _export_pieces(parsed, translations):
+        tag = "text:h" if kind == "heading" else "text:p"
+        level = ' text:outline-level="2"' if kind == "heading" else ""
+        lines = text.splitlines() or [""]
+        inner = "<text:line-break/>".join(_xml_text(line) for line in lines)
+        nodes.append(f"<{tag}{level}>{inner}</{tag}>")
+    content = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.2">'
+        f'<office:body><office:text>{"".join(nodes)}</office:text></office:body>'
+        "</office:document-content>"
+    )
+    manifest = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" '
+        'manifest:version="1.2">'
+        '<manifest:file-entry manifest:full-path="/" '
+        'manifest:media-type="application/vnd.oasis.opendocument.text"/>'
+        '<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>'
+        "</manifest:manifest>"
+    )
+    with zipfile.ZipFile(destination, "w") as archive:
+        info = zipfile.ZipInfo("mimetype")
+        info.compress_type = zipfile.ZIP_STORED
+        archive.writestr(info, "application/vnd.oasis.opendocument.text")
+        archive.writestr("META-INF/manifest.xml", manifest)
+        archive.writestr("content.xml", content)
+
+
+def _json_export(parsed: ParsedDocument, translations: dict[int, str]) -> str:
+    return json.dumps(
+        {
+            "title": parsed.title,
+            "sourceFormat": parsed.format,
+            "blocks": [
+                {"kind": kind, "text": text} for kind, text in _export_pieces(parsed, translations)
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _export_docx_plain(destination: Path, parsed: ParsedDocument, translations: dict[int, str]) -> None:
+    from docx import Document
+
+    document = Document()
+    title = (parsed.title or "").strip()
+    if title:
+        document.core_properties.title = title[:200]
+        document.add_heading(title[:400], level=0)
+    for kind, text in _export_pieces(parsed, translations):
+        lines = text.splitlines() or [""]
+        if kind == "heading":
+            document.add_heading(lines[0][:400], level=1)
+            lines = lines[1:]
+            if not lines:
+                continue
+        paragraph = document.add_paragraph()
+        for index, line in enumerate(lines):
+            if index:
+                paragraph.add_run().add_break()
+            paragraph.add_run(line)
+    document.save(destination)
+
+
+def _export_epub_plain(destination: Path, parsed: ParsedDocument, translations: dict[int, str]) -> None:
+    title = _xml_text(parsed.title or "Документ")
+    body = [f"<h1>{title}</h1>"]
+    for kind, text in _export_pieces(parsed, translations):
+        inner = "<br/>".join(_xml_text(line) for line in text.splitlines())
+        tag = "h2" if kind == "heading" else "p"
+        body.append(f"<{tag}>{inner}</{tag}>")
+    chapter = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head>'
+        f"<title>{title}</title></head><body>{''.join(body)}</body></html>"
+    )
+    container = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+        '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+        'media-type="application/oebps-package+xml"/></rootfiles></container>'
+    )
+    package = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">'
+        "<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">"
+        f"<dc:title>{title}</dc:title><dc:language>und</dc:language>"
+        '<dc:identifier id="id">dotlingo-converted</dc:identifier></metadata>'
+        '<manifest><item id="c1" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>'
+        "<spine><itemref idref=\"c1\"/></spine></package>"
+    )
+    with zipfile.ZipFile(destination, "w") as archive:
+        info = zipfile.ZipInfo("mimetype")
+        info.compress_type = zipfile.ZIP_STORED
+        archive.writestr(info, "application/epub+zip")
+        archive.writestr("META-INF/container.xml", container)
+        archive.writestr("OEBPS/content.opf", package)
+        archive.writestr("OEBPS/chapter.xhtml", chapter)
+
+
+def converted_destination(source: Path, suffix: str, folder: Path | None = None) -> Path:
+    """Новый путь рядом с файлом или в выбранной папке. Исходное имя не занимается."""
+    directory = folder if folder is not None else source.parent
+    stem = source.stem or "document"
+    candidate = directory / f"{stem}{suffix}"
+    try:
+        same = candidate.resolve() == source.resolve()
+    except OSError:
+        same = False
+    if same or candidate.exists():
+        candidate = directory / f"{stem}.converted{suffix}"
+    index = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}.converted-{index}{suffix}"
+        index += 1
+    return candidate
+
+
+def convert_document(source: Path, destination: Path) -> None:
+    """Собрать другой формат из текста файла. Исходный файл не открывается на запись."""
+    source = Path(source)
+    destination = Path(destination)
+    try:
+        if destination.resolve() == source.resolve():
+            raise DocumentError("Нельзя записать результат поверх исходного файла.")
+    except OSError as exc:
+        raise DocumentError("Не удалось сравнить пути исходного файла и результата.") from exc
+    before = source.read_bytes()
+    parsed = import_document(source)
+    export_document(source, destination, parsed, {})
+    if source.read_bytes() != before:
+        raise DocumentError("Исходный файл изменился во время конвертации.")
+
+
 def export_document(
     source_path: Path,
     destination: Path,
@@ -720,18 +983,28 @@ def export_document(
         if suffix in {".txt", ".md", ".markdown"}:
             content = _text_export(parsed, translations, suffix != ".txt")
             temporary.write_text(content, encoding="utf-8", newline="")
+        elif suffix == ".html":
+            temporary.write_text(_html_export(parsed, translations), encoding="utf-8", newline="\n")
+        elif suffix == ".rtf":
+            temporary.write_text(_rtf_export(parsed, translations), encoding="utf-8", newline="\n")
+        elif suffix == ".fb2":
+            temporary.write_text(_fb2_export(parsed, translations), encoding="utf-8", newline="\n")
+        elif suffix == ".json":
+            temporary.write_text(_json_export(parsed, translations), encoding="utf-8", newline="\n")
+        elif suffix == ".odt":
+            _odt_export(temporary, parsed, translations)
         elif suffix == ".docx":
-            if parsed.format != "docx":
-                raise DocumentError("DOCX-экспорт доступен только из импортированного DOCX.")
-            _export_docx(source_path, temporary, parsed, translations)
+            if parsed.format == "docx":
+                _export_docx(source_path, temporary, parsed, translations)
+            else:
+                _export_docx_plain(temporary, parsed, translations)
         elif suffix == ".epub":
-            if parsed.format != "epub":
-                raise DocumentError("EPUB-экспорт доступен только из импортированного EPUB.")
-            _export_epub(source_path, temporary, parsed, translations)
+            if parsed.format == "epub":
+                _export_epub(source_path, temporary, parsed, translations)
+            else:
+                _export_epub_plain(temporary, parsed, translations)
         elif suffix == ".pdf":
-            if parsed.format != "pdf":
-                raise DocumentError("PDF-экспорт доступен только из импортированного PDF.")
-            if parsed.metadata.get("pdfLayout") == "book":
+            if parsed.format == "pdf" and parsed.metadata.get("pdfLayout") == "book":
                 _export_pdf_layout(source_path, temporary, parsed, translations)
             else:
                 _export_pdf_text(temporary, parsed, translations)

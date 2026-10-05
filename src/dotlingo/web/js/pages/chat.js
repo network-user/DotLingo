@@ -1378,21 +1378,28 @@ const STATUS_LABELS = {
   saved: 'Файл',
 };
 
+const TEXT_EXPORTS = ['.txt', '.md', '.html', '.rtf', '.fb2', '.odt', '.docx', '.epub', '.pdf', '.json'];
+
 const FORMAT_BY_EXT = {
-  txt: ['.txt', '.md'],
-  md: ['.md', '.txt'],
-  markdown: ['.md', '.txt'],
-  docx: ['.docx', '.txt', '.md'],
-  epub: ['.epub', '.txt', '.md'],
-  pdf: ['.pdf', '.md', '.txt'],
+  txt: TEXT_EXPORTS,
+  md: TEXT_EXPORTS,
+  markdown: TEXT_EXPORTS,
+  docx: TEXT_EXPORTS,
+  epub: TEXT_EXPORTS,
+  pdf: TEXT_EXPORTS,
 };
 
 const FORMAT_LABEL = {
   '.txt': 'Текст',
   '.md': 'Markdown',
+  '.html': 'HTML',
+  '.rtf': 'RTF',
+  '.fb2': 'FB2',
+  '.odt': 'ODT',
   '.docx': 'DOCX',
   '.epub': 'EPUB',
   '.pdf': 'PDF',
+  '.json': 'JSON',
 };
 
 function takeQuickMemory() {

@@ -558,6 +558,27 @@ def test_hardware_cached_until_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert cached["detectedAt"]
 
 
+def test_convert_writes_beside_the_source_without_touching_it(tmp_path: Path) -> None:
+    source = tmp_path / "letter.txt"
+    source.write_text("Одна строка письма.", encoding="utf-8")
+    original = source.read_bytes()
+    api = _make_api(tmp_path / "data", sync=True)
+    inspected = api.inspectConversion([str(source)])
+    assert inspected["ok"] is True
+    assert inspected["data"]["files"][0]["blocks"] == 1
+    started = api.convertDocuments({"paths": [str(source)], "suffix": ".html", "directory": ""})
+    assert started["ok"] is True
+    written = tmp_path / "letter.html"
+    assert written.is_file()
+    assert "Одна строка письма." in written.read_text(encoding="utf-8")
+    assert source.read_bytes() == original
+    preview = api.previewExport(str(written))
+    assert preview["ok"] is True
+    assert "Одна строка письма." in preview["data"]["text"]
+    targets = api.listConversionTargets()["data"]
+    assert {item["suffix"] for item in targets} >= {".html", ".fb2", ".odt", ".docx", ".json"}
+
+
 def test_inconclusive_gpu_probe_is_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from dotlingo.hardware import HardwareSnapshot
 

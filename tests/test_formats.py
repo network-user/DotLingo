@@ -124,6 +124,53 @@ def test_epub_keeps_inline_code_breaks_and_parent_text(tmp_path: Path) -> None:
     assert any("Item" in item and "tail" in item for item in texts)
 
 
+def test_generic_exports_keep_the_text_and_the_source(tmp_path: Path) -> None:
+    import hashlib
+    import zipfile
+
+    from docx import Document
+
+    from dotlingo.formats import convert_document
+
+    source = tmp_path / "note.txt"
+    source.write_text("Глава\n\nПервый абзац про гавань.", encoding="utf-8")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    expected = {
+        ".html": ("<p>", "Первый абзац про гавань."),
+        ".rtf": ("\\u", "rtf1"),
+        ".fb2": ("<p>", "Первый абзац про гавань."),
+        ".json": ('"text"', "Первый абзац про гавань."),
+    }
+    for suffix, needles in expected.items():
+        destination = tmp_path / f"note{suffix}"
+        convert_document(source, destination)
+        text = destination.read_text(encoding="utf-8")
+        for needle in needles:
+            assert needle in text
+    odt = tmp_path / "note.odt"
+    convert_document(source, odt)
+    with zipfile.ZipFile(odt) as archive:
+        assert "Первый абзац про гавань." in archive.read("content.xml").decode("utf-8")
+    docx_path = tmp_path / "note.docx"
+    convert_document(source, docx_path)
+    paragraphs = [item.text for item in Document(docx_path).paragraphs]
+    assert any("Первый абзац про гавань." in item for item in paragraphs)
+    epub_path = tmp_path / "note.epub"
+    convert_document(source, epub_path)
+    with zipfile.ZipFile(epub_path) as archive:
+        assert archive.read("mimetype") == b"application/epub+zip"
+        chapter = archive.read("OEBPS/chapter.xhtml").decode("utf-8")
+    assert "Первый абзац про гавань." in chapter
+    again = tmp_path / "note.txt"
+    try:
+        convert_document(source, again)
+    except Exception as exc:
+        assert "поверх" in str(exc)
+    else:
+        raise AssertionError("конвертер не должен затирать исходник")
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+
+
 def test_plain_export_separates_blocks_without_their_own_breaks() -> None:
     from dotlingo.formats import Block, ParsedDocument, _text_export
 
