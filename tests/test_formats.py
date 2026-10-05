@@ -93,6 +93,61 @@ def _make_epub(path: Path) -> None:
         archive.writestr("OEBPS/image.svg", "<svg />")
 
 
+def test_epub_keeps_inline_code_breaks_and_parent_text(tmp_path: Path) -> None:
+    source = tmp_path / "inline.epub"
+    container = """<?xml version="1.0"?>
+    <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+      <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+    </container>"""
+    package = """<?xml version="1.0"?>
+    <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+      <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Inline</dc:title></metadata>
+      <manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest>
+      <spine><itemref idref="c1"/></spine>
+    </package>"""
+    chapter = (
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>"
+        "<p>See <code>fig. 1</code> above.</p>"
+        "<p>line1<br/>line2</p>"
+        "<ul><li>Item <p>nested</p> tail</li></ul>"
+        "</body></html>"
+    )
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        archive.writestr("META-INF/container.xml", container)
+        archive.writestr("OEBPS/content.opf", package)
+        archive.writestr("OEBPS/c1.xhtml", chapter)
+    texts = [block.text for block in import_document(source).blocks]
+    assert "See fig. 1 above." in texts
+    assert any("line1" in item and "line2" in item and "\n" in item for item in texts)
+    assert any(item.strip() == "nested" for item in texts)
+    assert any("Item" in item and "tail" in item for item in texts)
+
+
+def test_plain_export_separates_blocks_without_their_own_breaks() -> None:
+    from dotlingo.formats import Block, ParsedDocument, _text_export
+
+    parsed = ParsedDocument(
+        "Doc",
+        "docx",
+        (
+            Block(0, "main", "Документ", "heading", "Chapter"),
+            Block(1, "main", "Документ", "paragraph", "First paragraph."),
+            Block(2, "main", "Документ", "paragraph", "Second paragraph."),
+        ),
+    )
+    assert _text_export(parsed, {}, False) == "Chapter\n\nFirst paragraph.\n\nSecond paragraph."
+    kept = ParsedDocument(
+        "Doc",
+        "txt",
+        (
+            Block(0, "main", "Документ", "paragraph", "One", suffix="\n\n"),
+            Block(1, "main", "Документ", "paragraph", "Two"),
+        ),
+    )
+    assert _text_export(kept, {}, False) == "One\n\nTwo"
+
+
 def test_epub_round_trip_keeps_spine_order_and_non_text_assets(tmp_path: Path) -> None:
     source = tmp_path / "book.epub"
     _make_epub(source)

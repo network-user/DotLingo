@@ -241,26 +241,38 @@ def _import_docx(path: Path) -> ParsedDocument:
 
 
 _EPUB_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "dt", "dd", "td", "th", "figcaption", "title", "div"}
-_EPUB_SKIP = {"pre", "code", "script", "style", "svg", "math"}
 
 
 def _tag(element: ET.Element) -> str:
     return element.tag.rsplit("}", 1)[-1].lower() if isinstance(element.tag, str) else ""
 
 
+def _inline_text(element: ET.Element) -> str:
+    """Текст абзаца: inline и <br> остаются, вложенный абзац идёт отдельным блоком."""
+    tag = _tag(element)
+    if tag in {"script", "style", "svg", "math"}:
+        return ""
+    if tag == "br":
+        return "\n"
+    parts: list[str] = [element.text or ""]
+    for child in list(element):
+        child_tag = _tag(child)
+        if child_tag in _EPUB_TAGS:
+            pass
+        elif child_tag == "br":
+            parts.append("\n")
+        elif child_tag not in {"script", "style", "svg", "math"}:
+            parts.append(_inline_text(child))
+        parts.append(child.tail or "")
+    return "".join(parts)
+
+
 def _epub_text_elements(root: ET.Element) -> list[ET.Element]:
-    all_elements = list(root.iter())
-    semantic = [item for item in all_elements if _tag(item) in _EPUB_TAGS]
-    result: list[ET.Element] = []
-    semantic_ids = {id(item) for item in semantic}
-    for element in semantic:
-        if any(id(child) in semantic_ids for child in element.iter() if child is not element):
-            continue
-        if any(_tag(child) in _EPUB_SKIP for child in element.iter()):
-            continue
-        if "".join(element.itertext()).strip():
-            result.append(element)
-    return result
+    return [
+        element
+        for element in root.iter()
+        if _tag(element) in _EPUB_TAGS and _inline_text(element).strip()
+    ]
 
 
 def _epub_package(zf: zipfile.ZipFile) -> tuple[str, str, list[tuple[str, str]]]:
@@ -305,7 +317,7 @@ def _import_epub(path: Path) -> ParsedDocument:
                     raise DocumentError(f"Повреждён раздел EPUB: {href}") from exc
                 current_section, current_title = f"chapter-{chapter_no}", f"Глава {chapter_no}"
                 for item_index, element in enumerate(_epub_text_elements(root)):
-                    text = "".join(element.itertext())
+                    text = _inline_text(element)
                     tag = _tag(element)
                     kind = "heading" if tag.startswith("h") and len(tag) == 2 else "paragraph"
                     if kind == "heading" and text.strip():
@@ -405,7 +417,16 @@ def _import_pdf(path: Path) -> ParsedDocument:
         raise ScannedPdfError(image_only)
     blocks: list[Block] = []
     for page_no, content in enumerate(page_texts, 1):
-        blocks.append(Block(len(blocks), f"page-{page_no}", f"Страница {page_no}", "heading", f"Страница {page_no}"))
+        blocks.append(
+            Block(
+                len(blocks),
+                f"page-{page_no}",
+                f"Страница {page_no}",
+                "heading",
+                f"Страница {page_no}",
+                translatable=False,
+            )
+        )
         for block in _plain_blocks(content):
             blocks.append(
                 Block(
@@ -467,6 +488,8 @@ def _text_export(parsed: ParsedDocument, translations: dict[int, str], markdown:
     chunks: list[str] = []
     previous_section = None
     for block in parsed.blocks:
+        if _is_page_marker(block):
+            continue
         if markdown and block.section != previous_section and block.section_title and block.kind != "heading":
             if chunks and chunks[-1] and not chunks[-1].endswith("\n\n"):
                 chunks.append("\n\n")
@@ -477,7 +500,10 @@ def _text_export(parsed: ParsedDocument, translations: dict[int, str], markdown:
             heading_prefix = block.prefix if block.prefix.lstrip().startswith("#") else "# "
             chunks.append(f"{heading_prefix}{body}{block.suffix or chr(10)}")
         else:
-            chunks.append(block.prefix + _translation_for(block, translations) + block.suffix)
+            piece = block.prefix + _translation_for(block, translations) + block.suffix
+            if chunks and piece and not chunks[-1][-1].isspace() and not piece[0].isspace():
+                chunks.append("\n\n")
+            chunks.append(piece)
     return "".join(chunks)
 
 
