@@ -9,7 +9,12 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from dotlingo.engine import InferenceCancelled, InferenceError, InferenceProcess
+from dotlingo.engine import (
+    InferenceCancelled,
+    InferenceError,
+    InferenceProcess,
+    model_runtime_options,
+)
 from dotlingo.hardware import detect, gpu_layers_for
 from dotlingo.models import get_model, model_path, verify_model
 from dotlingo.task_queue import build_translation_prompt, clean_model_output
@@ -139,7 +144,7 @@ class ScratchTranslator:
         with self._lock:
             thread = self._thread
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout=3)
+            thread.join(timeout=8)
         with self._lock:
             engine = self._engine
             self._engine = None
@@ -231,29 +236,30 @@ class ScratchTranslator:
         threads = max(1, min(8, max(1, (os.cpu_count() or 2) - 1)))
         snapshot = detect(self.model_root)
         sampling = model.get("sampling") if isinstance(model.get("sampling"), dict) else None
-        profile = str(model.get("prompt_profile") or "")
-        gemma = profile == "gemma"
-        if gemma:
-            stop_sequences: tuple[str, ...] | None = ("<end_of_turn>",)
-        elif model.get("append_no_think"):
-            stop_sequences = ("<|im_end|>", "<|fim_suffix|>")
-        else:
-            stop_sequences = None
+        runtime = model_runtime_options(model)
         engine = InferenceProcess(
             path,
             int(model.get("default_context", 4096)),
             threads,
             gpu_layers=gpu_layers_for(snapshot, model),
             sampling=sampling,
-            stop_sequences=stop_sequences,
-            append_no_think=False if gemma else bool(model.get("append_no_think")),
-            user_only=gemma or model.get("prompt_style") == "hy-mt2",
-            plain_gemma_turns=gemma,
+            stop_sequences=runtime["stop_sequences"],
+            append_no_think=runtime["append_no_think"],
+            user_only=runtime["user_only"],
+            plain_gemma_turns=runtime["plain_gemma_turns"],
+            close_think=runtime["close_think"],
+            startup_timeout=600,
+            idle_timeout=900,
         )
-        engine.start()
+        # Ссылка до start: «Стоп» во время загрузки GGUF находит процесс и обрывает её.
         with self._lock:
             self._engine = engine
             self._model_id = model_id
+        try:
+            engine.start()
+        except Exception:
+            self._drop_engine()
+            raise
         return engine
 
     def _drop_engine(self) -> None:

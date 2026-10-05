@@ -25,6 +25,48 @@ class InferenceTimeout(InferenceError):
     pass
 
 
+def model_runtime_options(model: dict[str, Any]) -> dict[str, Any]:
+    """Стоп-строки и флаги шаблона. Документ и диалог берут один и тот же набор."""
+    profile = str(model.get("prompt_profile") or "")
+    prompt_style = str(model.get("prompt_style") or "general")
+    qwen_style = model.get("append_no_think")
+    if qwen_style is None:
+        # Свой файл без явного флага не получает /no_think: строка попала бы в текст.
+        # Блок рассуждения всё равно закрывается пустым <think>, как у перевода документа.
+        qwen_style = not model.get("custom")
+    if profile == "gemma":
+        return {
+            "stop_sequences": ("<end_of_turn>",),
+            "append_no_think": False,
+            "user_only": True,
+            "plain_gemma_turns": True,
+            "close_think": False,
+        }
+    if prompt_style == "hy-mt2":
+        return {
+            "stop_sequences": None,
+            "append_no_think": bool(model.get("append_no_think")),
+            "user_only": True,
+            "plain_gemma_turns": False,
+            "close_think": False,
+        }
+    if qwen_style:
+        return {
+            "stop_sequences": ("<|im_end|>", "<|fim_suffix|>"),
+            "append_no_think": True,
+            "user_only": False,
+            "plain_gemma_turns": False,
+            "close_think": True,
+        }
+    return {
+        "stop_sequences": None,
+        "append_no_think": False,
+        "user_only": False,
+        "plain_gemma_turns": False,
+        "close_think": True,
+    }
+
+
 def prepare_llama_env() -> None:
     """Drop a CUDA_PATH that points at a missing toolkit so the CPU wheel can load.
 
@@ -339,6 +381,8 @@ class InferenceProcess:
         self._request_id = 0
 
     def _launch(self) -> dict[str, Any]:
+        if self._cancelled.is_set():
+            return {"type": "cancelled", "message": "Задача отменена."}
         self._process = self._ctx.Process(
             target=_worker_main,
             args=(
@@ -363,18 +407,44 @@ class InferenceProcess:
         )
         self._process.start()
         self._started = True
-        try:
-            event = self._responses.get(timeout=self.startup_timeout)
-        except queue.Empty:
-            self.terminate()
-            minutes = max(1, round(self.startup_timeout / 60))
-            return {
-                "type": "startup_timeout",
-                "message": f"Backend не сообщил о готовности за {minutes} мин.",
-            }
-        return event if isinstance(event, dict) else {"type": "startup_error", "message": "Пустой ответ backend."}
+        return self._wait_for_startup()
+
+    def _wait_for_startup(self) -> dict[str, Any]:
+        """Ждать готовность короткими шагами, чтобы «Стоп» оборвал загрузку GGUF."""
+        deadline = time.monotonic() + self.startup_timeout
+        while True:
+            if self._cancelled.is_set():
+                self.terminate()
+                return {"type": "cancelled", "message": "Задача отменена."}
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.terminate()
+                minutes = max(1, round(self.startup_timeout / 60))
+                return {
+                    "type": "startup_timeout",
+                    "message": f"Backend не сообщил о готовности за {minutes} мин.",
+                }
+            try:
+                event = self._responses.get(timeout=min(0.2, remaining))
+            except queue.Empty:
+                process = self._process
+                if self._started and (process is None or not process.is_alive()):
+                    self.terminate()
+                    return {
+                        "type": "startup_error",
+                        "message": "Процесс модели завершился до готовности.",
+                    }
+                continue
+            if self._cancelled.is_set():
+                self.terminate()
+                return {"type": "cancelled", "message": "Задача отменена."}
+            if isinstance(event, dict):
+                return event
+            return {"type": "startup_error", "message": "Пустой ответ backend."}
 
     def start(self) -> None:
+        if self._cancelled.is_set():
+            raise InferenceCancelled("Задача отменена.")
         if self._started and self._process is not None and self._process.is_alive():
             return
         if not self.model_path.is_file():
@@ -386,6 +456,9 @@ class InferenceProcess:
         except OSError as exc:
             raise InferenceUnavailable("Не удалось прочитать файл модели.") from exc
         event = self._launch()
+        if event.get("type") == "cancelled":
+            self.terminate()
+            raise InferenceCancelled("Задача отменена.")
         if event.get("type") != "ready" and self.gpu_layers != 0 and _memory_failure(str(event.get("message", ""))):
             self.terminate()
             self._cancelled.clear()
@@ -433,6 +506,9 @@ class InferenceProcess:
             except queue.Empty:
                 if self._process is None or not self._process.is_alive():
                     raise InferenceError("Процесс inference завершился без результата.")
+                if not self._paused.is_set():
+                    last_event = time.monotonic()
+                    continue
                 if time.monotonic() - last_event > self.idle_timeout:
                     self.terminate()
                     minutes = max(1, round(self.idle_timeout / 60))

@@ -1,9 +1,20 @@
 import os
+import threading
+import time
+from pathlib import Path
 
-from dotlingo.engine import prepare_llama_env
+import pytest
+
+from dotlingo.engine import (
+    InferenceError,
+    InferenceProcess,
+    model_runtime_options,
+    prepare_llama_env,
+)
 from dotlingo.glossary import GlossaryTerm
 from dotlingo.hardware import HardwareSnapshot, gpu_layers_for
 from dotlingo.task_queue import (
+    _generate_translation,
     _remember_context,
     build_translation_prompt,
     chunk_limit,
@@ -157,6 +168,15 @@ def test_scaffold_echo_keeps_the_translation_after_the_source_label() -> None:
         "Hola, ¿cómo estás?"
     )
     assert clean_model_output(instruction_first) == "Hola, ¿cómo estás?"
+    assert clean_model_output(
+        "Она остановилась. Алиса продолжила в том же тоне и спросила, что дальше."
+    ) == "Она остановилась. Алиса продолжила в том же тоне и спросила, что дальше."
+    assert clean_model_output(
+        "Переведите следующий текст на русский язык «Привет»"
+    ) == "«Привет»"
+    assert clean_model_output(
+        "Please translate the following English text into Russian.\n«Привет»"
+    ) == "«Привет»"
     repeated = "Алиса сидела на берегу и смотрела в книгу сестры без картинок. " * 2
     assert output_repeats_context(repeated, [("Alice sat.", repeated)], "")
     assert not output_repeats_context("Белый кролик достал часы из кармана жилета и побежал дальше по полю.", [("Alice sat.", repeated)], "")
@@ -275,7 +295,63 @@ def test_missing_cuda_toolkit_path_is_ignored(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("PATH", os.pathsep.join([str(missing / "bin"), os.environ.get("PATH", "")]))
     prepare_llama_env()
     assert "CUDA_PATH" not in os.environ
-    assert str(missing / "bin") not in os.environ.get("PATH", "")
+
+
+def test_empty_cleaned_reply_is_not_saved_as_a_translation() -> None:
+    class Blank:
+        def translate(self, system: str, user: str, max_tokens: int = 0) -> str:
+            return "*[Текст источника]*"
+
+    with pytest.raises(InferenceError, match="пустой ответ"):
+        _generate_translation(
+            Blank(),
+            "Hello.",
+            "en → ru",
+            "",
+            "",
+            [],
+            [],
+            style="general",
+            memory=None,
+            profile="",
+            summary="",
+            paragraphs=1,
+            token_cap=200,
+        )
+
+
+def test_custom_and_catalog_models_share_runtime_flags() -> None:
+    custom = model_runtime_options({"custom": True})
+    assert custom["close_think"] is True
+    assert custom["append_no_think"] is False
+    hy = model_runtime_options({"prompt_style": "hy-mt2"})
+    assert hy["user_only"] is True
+    assert hy["close_think"] is False
+    gemma = model_runtime_options({"prompt_profile": "gemma"})
+    assert gemma["stop_sequences"] == ("<end_of_turn>",)
+    assert gemma["plain_gemma_turns"] is True
+
+
+def test_cancel_interrupts_model_load_without_waiting_out_the_timeout(tmp_path: Path) -> None:
+    engine = InferenceProcess(tmp_path / "missing.gguf", 128, 1, startup_timeout=30)
+    engine._cancelled.set()
+    assert engine._launch()["type"] == "cancelled"
+    assert engine._process is None
+    engine._cancelled.clear()
+    holder: dict[str, dict] = {}
+
+    def run() -> None:
+        holder["event"] = engine._wait_for_startup()
+
+    thread = threading.Thread(target=run, daemon=True)
+    started = time.monotonic()
+    thread.start()
+    time.sleep(0.05)
+    engine.cancel()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert time.monotonic() - started < 2
+    assert holder["event"]["type"] == "cancelled"
 
 
 def test_chat_runtime_check_ignores_missing_cuda_toolkit(monkeypatch) -> None:

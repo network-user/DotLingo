@@ -10,7 +10,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from dotlingo.engine import InferenceCancelled, InferenceError, InferenceProcess, InferenceTimeout
+from dotlingo.engine import (
+    InferenceCancelled,
+    InferenceError,
+    InferenceProcess,
+    InferenceTimeout,
+    model_runtime_options,
+)
 from dotlingo.formats import Block
 from dotlingo.glossary import GlossaryTerm, protect_terms, restore_terms
 from dotlingo.hardware import detect, gpu_layers_for
@@ -214,7 +220,7 @@ _ECHO_START = re.compile(
     r"недавн\w+\s+перевод\w*"
     r"|предыдущ\w+\s+предложен\w+"
     r"|для описания тона"
-    r"|продолж\w+\s+в\s+т(?:ом|ой)\s+же"
+    r"|продолж\w+\s+в\s+т(?:ом|ой)\s+же\s+стил"
     r"|recent translation\b"
     r"|story so far\b"
     r"|continue in the same voice"
@@ -241,7 +247,7 @@ _INSTRUCTION_LINE = re.compile(
     r"|возвраща\w+(?:ся)?\s+(?:только|ровно)"
     r"|return exactly\s+\d+"
     r"|(?:пожалуйста[, ]+)?перевед\w+\s+следующ\w+\s+текст"
-    r"|translate the following text"
+    r"|translate the following (?:\w+\s+)?text"
     r"|identify the source language"
     r"|taking the provided background"
     r"|only output the translated"
@@ -281,7 +287,12 @@ def _drop_instruction_prefix(line: str) -> str | None:
         after = rest[match.end() :]
         end = re.search(r"[.!?…]", after)
         if end is None:
-            return None
+            # «Переведите следующий текст … «Привет»» без точки: перевод в кавычках остаётся.
+            quote = re.search(r"[«\"“]", after)
+            if quote is None:
+                return None
+            rest = after[quote.start() :].strip()
+            return rest or None
         rest = after[end.end() :].lstrip(" \t")
         if not rest:
             return None
@@ -466,9 +477,17 @@ class TaskQueue:
         self._pending.put(task_id)
         self._emit(task_id, "queued", "Задача добавлена в очередь.")
 
+    def _status(self, task_id: str) -> str:
+        try:
+            return str(self.store.task(task_id)["status"])
+        except KeyError:
+            return ""
+
     def pause(self, task_id: str) -> None:
         with self._lock:
             if task_id != self._current_task:
+                if self._status(task_id) != "queued":
+                    return
                 self.store.set_task_status(task_id, "paused", "Задача приостановлена до запуска.")
                 self._emit(task_id, "paused", "Задача приостановлена до запуска.")
                 return
@@ -500,6 +519,8 @@ class TaskQueue:
                 if engine:
                     engine.cancel()
                 return
+        if self._status(task_id) not in {"queued", "paused"}:
+            return
         self.store.set_task_status(task_id, "cancelled", "Задача отменена.")
         self._emit(task_id, "cancelled", "Задача отменена.")
 
@@ -608,34 +629,12 @@ class TaskQueue:
             sampling = model.get("sampling") if isinstance(model.get("sampling"), dict) else None
             profile = str(model.get("prompt_profile") or "")
             prompt_style = str(model.get("prompt_style") or "general")
-            qwen_style = model.get("append_no_think")
-            if qwen_style is None:
-                qwen_style = not model.get("custom")
-            close_think = False
-            if profile == "gemma":
-                stop_sequences: tuple[str, ...] | None = ("<end_of_turn>",)
-                append_no_think = False
-                user_only = True
-                plain_gemma = True
-            elif prompt_style == "hy-mt2":
-                stop_sequences = None
-                append_no_think = bool(model.get("append_no_think"))
-                user_only = True
-                plain_gemma = False
-                close_think = False
-            elif qwen_style:
-                stop_sequences = ("<|im_end|>", "<|fim_suffix|>")
-                append_no_think = True
-                user_only = False
-                plain_gemma = False
-                close_think = True
-            else:
-                stop_sequences = None
-                append_no_think = False
-                user_only = False
-                plain_gemma = False
-                # Обычная сеть, в том числе свой Qwen3: ответ перевода, не ход рассуждения.
-                close_think = True
+            runtime = model_runtime_options(model)
+            stop_sequences = runtime["stop_sequences"]
+            append_no_think = runtime["append_no_think"]
+            user_only = runtime["user_only"]
+            plain_gemma = runtime["plain_gemma_turns"]
+            close_think = runtime["close_think"]
             engine = InferenceProcess(
                 path,
                 context_size,
@@ -653,6 +652,8 @@ class TaskQueue:
                 idle_timeout=900,
             )
             with self._lock:
+                if self._closing or task_id in self._cancelled:
+                    raise InferenceCancelled("Задача отменена.")
                 self._engine = engine
                 if self._paused:
                     engine.pause()
@@ -1018,7 +1019,10 @@ def _generate_translation(
     if (previous or story) and echoed:
         raw = once([], "")
         cleaned = clean_model_output(raw)
-    return polish_translation(cleaned, _target_code(direction))
+    result = polish_translation(cleaned, _target_code(direction))
+    if not result.strip():
+        raise InferenceError("Модель вернула пустой ответ. Фрагмент можно повторить.")
+    return result
 
 
 def build_translation_prompt(
