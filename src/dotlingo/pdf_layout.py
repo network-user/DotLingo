@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 FONT_DIR = Path(__file__).resolve().parent / "assets" / "fonts"
@@ -55,6 +55,9 @@ class Paragraph:
     kind: str
     measure_right: float = 0.0
     fitted_size: float = 0.0
+    line_rights: list[float] = field(default_factory=list)
+    fitted_lines: list[str] = field(default_factory=list)
+    planned: bool = False
 
     @property
     def key(self) -> tuple[int, int]:
@@ -138,7 +141,17 @@ def extract_lines(path: Path, pages: list[int]) -> list[GlyphLine]:
     return lines
 
 
+def _is_signature(line: GlyphLine) -> bool:
+    """Сигнатура печатного листа: мелкая буква с номером, не текст книги."""
+    if line.size >= 11.0:
+        return False
+    compact = re.sub(r"\s+", "", line.text)
+    return re.fullmatch(r"[A-Z]\d{0,3}", compact) is not None
+
+
 def is_translatable(line: GlyphLine, scope: str) -> bool:
+    if _is_signature(line):
+        return False
     if scope == "all":
         return True
     if any(marker in line.font for marker in _CHROME_FONTS):
@@ -237,8 +250,9 @@ def group_paragraphs(lines: list[GlyphLine]) -> list[Paragraph]:
                 column = _column(paragraph.lines[0])
                 mates = body_by_column.get(column) or paragraph.lines
                 paragraph.measure_right = max(item.x1 for item in mates)
+            paragraph.line_rights = [paragraph.measure_right] * len(paragraph.lines)
         paragraphs.extend(built)
-    return paragraphs
+    return _stitch_continuations(paragraphs)
 
 
 def extract_paragraphs(path: Path, pages: list[int], scope: str = "book") -> list[Paragraph]:
@@ -300,7 +314,62 @@ def _register_font() -> None:
 
 
 def _slot_widths(paragraph: Paragraph) -> list[float]:
-    return [max(12.0, paragraph.measure_right - line.x0) for line in paragraph.lines]
+    widths: list[float] = []
+    for index, line in enumerate(paragraph.lines):
+        right = paragraph.measure_right
+        if index < len(paragraph.line_rights):
+            right = paragraph.line_rights[index]
+        widths.append(max(12.0, right - line.x0))
+    return widths
+
+
+_SENTENCE_END = re.compile(r"""[.!?…]['"”’)\]]*$""")
+
+
+def _ends_sentence(text: str) -> bool:
+    return _SENTENCE_END.search(text.rstrip()) is not None
+
+
+def _starts_lower(text: str) -> bool:
+    for char in text.lstrip("«“\"'’([ "):
+        if char.isalpha():
+            return char.islower()
+        return False
+    return False
+
+
+def _attach_rights(paragraph: Paragraph) -> None:
+    if not paragraph.line_rights:
+        paragraph.line_rights = [paragraph.measure_right] * len(paragraph.lines)
+
+
+def _stitch_continuations(paragraphs: list[Paragraph]) -> list[Paragraph]:
+    """Склеивает абзац, который оборвался на границе полосы и продолжился со строчной."""
+    kept: list[Paragraph] = []
+    anchor: Paragraph | None = None
+    for paragraph in paragraphs:
+        _attach_rights(paragraph)
+        if paragraph.kind != "body":
+            kept.append(paragraph)
+            continue
+        if (
+            anchor is not None
+            and not _ends_sentence(anchor.source)
+            and _starts_lower(paragraph.source)
+        ):
+            anchor.lines.extend(paragraph.lines)
+            anchor.line_rights.extend(paragraph.line_rights)
+            anchor.source = join_line_texts([line.text for line in anchor.lines])
+            continue
+        kept.append(paragraph)
+        anchor = paragraph
+    next_index: dict[int, int] = {}
+    for paragraph in kept:
+        page = paragraph.lines[0].page if paragraph.lines else paragraph.page
+        paragraph.page = page
+        paragraph.index = next_index.get(page, 0)
+        next_index[page] = paragraph.index + 1
+    return kept
 
 
 def _header_limits(line: GlyphLine, kept: list[GlyphLine]) -> tuple[float, float]:
@@ -395,29 +464,41 @@ def _paint_page(
     translations: dict[tuple[int, int], str],
     kept: list[GlyphLine],
     paper: tuple[float, float, float],
+    page_no: int,
 ) -> None:
-    plans: list[tuple[Paragraph, float, list[str], float, float]] = []
+    """Рисует строки этой страницы. Абзац на две полосы планируется один раз."""
+    ready: list[Paragraph] = []
     for paragraph in paragraphs:
         text = translations.get(paragraph.key)
         if text is None:
             preview = paragraph.source[:80]
             raise LayoutError(f"Нет перевода для стр. {paragraph.page}, абзац {paragraph.index}: {preview}")
-        size, lines, left, right = _plan_paragraph(paragraph, normalize_text(text), kept)
-        paragraph.fitted_size = size
-        plans.append((paragraph, size, lines, left, right))
+        if not paragraph.planned:
+            paragraph.planned = True
+            normalized = normalize_text(text)
+            size, lines, _left, _right = _plan_paragraph(paragraph, normalized, kept)
+            paragraph.fitted_size = size
+            paragraph.fitted_lines = lines
+        ready.append(paragraph)
 
-    for paragraph, size, lines, left, right in plans:
+    for paragraph in ready:
+        lines = paragraph.fitted_lines
+        size = paragraph.fitted_size
         if paragraph.kind == "header":
             line = paragraph.lines[0]
+            if line.page != page_no:
+                continue
+            left, right = _header_limits(line, kept)
             text_width = _text_width(lines[0], FONT_NAME, size)
-            origin = line.center - text_width / 2
-            origin = min(max(origin, left), right - text_width)
+            origin = min(max(line.center - text_width / 2, left), right - text_width)
             pad_y = 1.0
             cover_left = min(line.x0, origin) - 1.0
             cover_right = max(line.x1, origin + text_width) + 1.0
             _cover(canvas, cover_left, line.y0 - pad_y, cover_right - cover_left, line.y1 - line.y0 + pad_y * 2, paper)
             continue
         for line in paragraph.lines:
+            if line.page != page_no:
+                continue
             _cover(
                 canvas,
                 line.x0 - 0.8,
@@ -427,17 +508,25 @@ def _paint_page(
                 paper,
             )
 
-    for paragraph, size, lines, left, right in plans:
+    for paragraph in ready:
+        lines = paragraph.fitted_lines
+        size = paragraph.fitted_size
         if paragraph.kind == "header":
             line = paragraph.lines[0]
+            if line.page != page_no:
+                continue
+            left, right = _header_limits(line, kept)
             text_width = _text_width(lines[0], FONT_NAME, size)
             origin = min(max(line.center - text_width / 2, left), right - text_width)
             _draw_fitted(canvas, lines[0], origin, line.baseline, text_width, size, "left")
             continue
+        widths = _slot_widths(paragraph)
         last = max((index for index, value in enumerate(lines) if value), default=0)
         for index, (line, value) in enumerate(zip(paragraph.lines, lines, strict=True)):
+            if line.page != page_no:
+                continue
             mode = "justify" if index != last and value else "left"
-            _draw_fitted(canvas, value, line.x0, line.baseline, paragraph.measure_right - line.x0, size, mode)
+            _draw_fitted(canvas, value, line.x0, line.baseline, widths[index], size, mode)
 
 
 def _open_reader(path: Path):
@@ -479,11 +568,16 @@ def place_translations(
     width = float(first.mediabox.width)
     height = float(first.mediabox.height)
     overlay = canvas.Canvas(overlay_buffer, pagesize=(width, height))
-    by_page = {page: [item for item in paragraphs if item.page == page] for page in pages}
+    by_page: dict[int, list[Paragraph]] = {page: [] for page in pages}
+    for item in paragraphs:
+        targets = {line.page for line in item.lines} or {item.page}
+        for page in targets:
+            if page in by_page:
+                by_page[page].append(item)
     for page_no in pages:
         bitmap = document[page_no - 1].render(scale=1)
         paper = _sample_paper(bitmap.to_pil())
-        _paint_page(overlay, by_page[page_no], translations, kept, paper)
+        _paint_page(overlay, by_page[page_no], translations, kept, paper, page_no)
         overlay.showPage()
     overlay.save()
     document.close()
