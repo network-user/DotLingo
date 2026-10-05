@@ -147,6 +147,20 @@ function mockResponse(method) {
       return { ok: true, data: null };
     case 'previewExport':
       return { ok: true, data: { kind: 'text', name: 'demo.txt', text: 'Демонстрационный просмотр.' } };
+    case 'listConversionTargets':
+      return {
+        ok: true,
+        data: [
+          { suffix: '.txt', label: 'Текст', note: 'Демонстрация без записи файла.' },
+          { suffix: '.html', label: 'HTML', note: 'Демонстрация без записи файла.' },
+        ],
+      };
+    case 'inspectConversion':
+      return { ok: true, data: { files: [], errors: [] } };
+    case 'convertDocuments':
+      return { ok: false, error: 'Конвертация запускается в окне приложения.', code: 'no_window' };
+    case 'resolveOutputDirectory':
+      return { ok: true, data: null };
     default:
       console.warn(`[bridge] demo: нет мока для метода ${method}`);
       return { ok: true, data: null };

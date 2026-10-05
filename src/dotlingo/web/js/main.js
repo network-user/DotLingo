@@ -19,8 +19,8 @@ import {
   UI_SCALE_MIN,
 } from './appearance.js';
 
-/** Порядок страниц для клавиш 1..7 (совпадает с навигацией в index.html). */
-const PAGE_ORDER = ['chat', 'review', 'queue', 'history', 'models', 'glossary', 'settings'];
+/** Порядок страниц для клавиш 1..8 (совпадает с навигацией в index.html). */
+const PAGE_ORDER = ['chat', 'review', 'queue', 'history', 'convert', 'models', 'glossary', 'settings'];
 
 const DEFAULT_PAGE = 'chat';
 const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая' };
@@ -148,6 +148,7 @@ const PAGE_LOADERS = {
   review: () => import('./pages/review.js'),
   queue: () => import('./pages/queue.js'),
   history: () => import('./pages/results.js'),
+  convert: () => import('./pages/convert.js'),
   models: () => import('./pages/models.js'),
   glossary: () => import('./pages/glossary.js'),
   settings: () => import('./pages/settings.js'),
@@ -352,6 +353,12 @@ const pushHandlers = {
   },
   market_refreshed(payload) {
     store.emit('market_refreshed', payload);
+  },
+  convert_progress(payload) {
+    store.emit('convert_progress', payload);
+  },
+  convert_done(payload) {
+    store.emit('convert_done', payload);
   },
 };
 
@@ -658,7 +665,7 @@ function renderDeviceStatus(hw) {
 }
 
 /* -------------------------------------------------------------------------
- * Клавиатура: 1..7 и Ctrl+1..7, Esc для модалок
+ * Клавиатура: 1..8 и Ctrl+1..8, Esc для модалок
  * ------------------------------------------------------------------------- */
 
 function typingTarget(target) {
@@ -674,7 +681,7 @@ function typingTarget(target) {
 
 function pageIndexFromKey(event) {
   const key = event.key;
-  if (key.length !== 1 || key < '1' || key > '7') return null;
+  if (key.length !== 1 || key < '1' || key > '8') return null;
   const index = Number(key) - 1;
   if (index >= PAGE_ORDER.length) return null;
   return index;

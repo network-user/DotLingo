@@ -17,6 +17,7 @@ const PAGE_TITLES = {
   review: 'Проверка',
   queue: 'Очередь',
   history: 'История',
+  convert: 'Конвертер',
   models: 'Модели',
   glossary: 'Глоссарий',
   settings: 'Настройки',

@@ -8,6 +8,7 @@ import './projects.js';
 import './documents.js';
 import './queue.js';
 import './results.js';
+import './convert.js';
 import './review.js';
 import './models.js';
 import './glossary.js';
