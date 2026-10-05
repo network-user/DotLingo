@@ -138,7 +138,10 @@ def test_task_narrative_is_kept_for_the_next_run(tmp_path: Path) -> None:
 
 def test_short_blocks_share_one_call_and_the_story_memory_is_saved(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "book.txt"
-    source.write_text("\n\n".join(f"Line {index}." for index in range(24)), encoding="utf-8")
+    source.write_text(
+        "\n\n".join(f"Line {index} keeps the story moving." for index in range(24)),
+        encoding="utf-8",
+    )
     original = source.read_bytes()
     store = ProjectStore.create(tmp_path / "projects", "Test")
     document = store.import_file(source)
@@ -202,7 +205,7 @@ def test_short_blocks_share_one_call_and_the_story_memory_is_saved(tmp_path: Pat
     assert second.index("*[Background Information]*") < second.index(
         "taking the provided background information into consideration"
     )
-    assert "Строка 0." in second
+    assert "Строка 0 keeps" in second
     assert "Line 0." not in second
     assert engine.calls[5][2] == 220
     assert "Память книги о строках." in engine.calls[6][1]

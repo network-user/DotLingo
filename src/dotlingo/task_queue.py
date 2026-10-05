@@ -540,6 +540,7 @@ class TaskQueue:
                 [
                     (row["source"], row["translation"])
                     for row in self.store.completed_segments(task_id, limit=8)
+                    if _worth_context(str(row["source"]))
                 ],
                 budget,
             )
@@ -596,7 +597,7 @@ class TaskQueue:
                     output = preserve_whitespace(source, output)
                     _remember_short(known_short, source, output)
                 self.store.save_segment(task_id, segment["block_ord"], segment["segment_ord"], output)
-                context_tail = fit_context_window([*context_tail, (source, output)], budget)
+                context_tail = _remember_context(context_tail, source, output, budget)
                 chars_done += len(source)
                 done += 1
                 since_summary += 1
@@ -650,7 +651,7 @@ class TaskQueue:
                             self.store.save_segment(
                                 task_id, segment["block_ord"], segment["segment_ord"], output
                             )
-                            context_tail = fit_context_window([*context_tail, (source, output)], budget)
+                            context_tail = _remember_context(context_tail, source, output, budget)
                             chars_done += len(source)
                             done += 1
                             since_summary += 1
@@ -952,21 +953,30 @@ def _recent_translations(previous: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _hy_mt2_clause(paragraphs: int, has_markers: bool) -> str:
-    parts: list[str] = []
-    if has_markers:
-        parts.append(
-            "Keep every marker of the form ZXQTERM0000XZ exactly as written. "
-            "Do not translate, split, or remove markers."
-        )
-    if paragraphs > 1:
-        parts.append(
-            f"The source has {paragraphs} paragraphs separated by a blank line. "
-            f"Return exactly {paragraphs} paragraphs separated by a blank line."
-        )
-    if not parts:
+def _hy_mt2_clause(has_markers: bool) -> str:
+    if not has_markers:
         return ""
-    return " " + " ".join(parts)
+    return (
+        " Keep every marker of the form ZXQTERM0000XZ exactly as written."
+        " Do not translate, split, or remove markers."
+    )
+
+
+def _worth_context(source: str) -> bool:
+    """Короткий колонтитул не должен задавать слова следующим абзацам."""
+    words = re.findall(r"[^\W\d_]{2,}", source, re.UNICODE)
+    return len(words) >= 4
+
+
+def _remember_context(
+    window: list[tuple[str, str]],
+    source: str,
+    output: str,
+    budget: int,
+) -> list[tuple[str, str]]:
+    if not _worth_context(source):
+        return window
+    return fit_context_window([*window, (source, output)], budget)
 
 
 def _hy_mt2_user(
@@ -1000,7 +1010,8 @@ def _hy_mt2_user(
     ]
     if recent:
         background.append("\n".join(recent))
-    extra = _hy_mt2_clause(paragraphs, has_markers)
+    extra = _hy_mt2_clause(has_markers)
+    del paragraphs
     parts: list[str] = []
     if references:
         parts.append("*Reference the following translations:*\n" + "\n".join(references))

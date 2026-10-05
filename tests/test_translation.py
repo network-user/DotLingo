@@ -4,6 +4,7 @@ from dotlingo.engine import prepare_llama_env
 from dotlingo.glossary import GlossaryTerm
 from dotlingo.hardware import HardwareSnapshot, gpu_layers_for
 from dotlingo.task_queue import (
+    _remember_context,
     build_translation_prompt,
     chunk_limit,
     clean_model_output,
@@ -124,6 +125,13 @@ def test_chunk_and_context_budgets_follow_the_model_window() -> None:
     assert output_token_budget("Hi", 2048) == 128
     assert output_token_budget("x" * 500, 2048) == 500
     assert output_token_budget("x" * 3000, 768) == 768
+
+
+def test_short_header_does_not_steer_the_next_paragraph() -> None:
+    window = _remember_context([], "RABBIT-HOLE.", "РЕБЯТНЫЙ ПОДВАЛ.", 2400)
+    assert window == []
+    window = _remember_context([], "Alice saw a white rabbit.", "Алиса увидела белого кролика.", 2400)
+    assert window == [("Alice saw a white rabbit.", "Алиса увидела белого кролика.")]
 
 
 def test_context_window_keeps_the_newest_pairs_inside_the_budget() -> None:
