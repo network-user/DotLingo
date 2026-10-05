@@ -171,6 +171,78 @@ def split_packed(output: str, count: int) -> list[str] | None:
     return parts
 
 
+_SCAFFOLD_MARKERS = (
+    "*[source text]*",
+    "*[текст источника]*",
+    "*[background information]*",
+    "*[информация о фоне]*",
+    "[source text]",
+    "[background information]",
+)
+_SOURCE_LABELS = ("*[source text]*", "*[текст источника]*", "[source text]")
+_ECHO_LINE = re.compile(
+    r"^\s*(?:"
+    r"\*\[(?:background information|source text|информация о фоне|текст источника)\]\*"
+    r"|\[(?:background information|source text)\]"
+    r"|recent translation\b"
+    r"|недавн\w* перевод\w*"
+    r"|story so far\b"
+    r"|(?:source|translation|источник|перевод)\s*:"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def clean_model_output(text: str) -> str:
+    """Убирает из ответа метки промпта, которые модель перевела вместе с источником."""
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return ""
+    lowered = cleaned.casefold()
+    cut_at = -1
+    cut_len = 0
+    for marker in _SOURCE_LABELS:
+        index = lowered.rfind(marker)
+        if index > cut_at:
+            cut_at = index
+            cut_len = len(marker)
+    if cut_at >= 0:
+        cleaned = cleaned[cut_at + cut_len:].strip()
+    kept: list[str] = []
+    for line in cleaned.splitlines():
+        if not line.strip():
+            kept.append("")
+            continue
+        if _ECHO_LINE.match(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def output_repeats_context(
+    output: str,
+    previous: list[tuple[str, str]],
+    summary: str,
+) -> bool:
+    """Ответ почти целиком повторяет уже переданный фон, а не новый фрагмент."""
+    compact = " ".join(output.split())
+    if len(compact) < 80:
+        return False
+    hay = " ".join(
+        " ".join(part.split())
+        for part in [summary, *[translation for _source, translation in previous]]
+        if str(part).strip()
+    )
+    if len(hay) < 80:
+        return False
+    return compact[:120] in hay
+
+
+def _has_scaffold(text: str) -> bool:
+    lowered = text.casefold()
+    return any(marker in lowered for marker in _SCAFFOLD_MARKERS)
+
+
 def _model_error(exc: Exception) -> str:
     if isinstance(exc, SourceIntegrityError):
         return str(exc)
@@ -272,7 +344,12 @@ class TaskQueue:
             self._worker.join(timeout=timeout)
         if task_id:
             try:
-                self.store.set_task_status(task_id, "interrupted", "Приложение закрывается; незавершённый фрагмент можно продолжить.")
+                if self.store.task(task_id).get("status") != "complete":
+                    self.store.set_task_status(
+                        task_id,
+                        "interrupted",
+                        "Приложение закрывается; незавершённый фрагмент можно продолжить.",
+                    )
             except Exception:
                 pass
 
@@ -448,6 +525,7 @@ class TaskQueue:
             since_summary = 0
             keep_summary = context_size >= 4096
             memory_pairs = self.store.confirmed_pairs(task["target_lang"])
+            known_short: dict[str, str] = {}
             prompt_style = str(model.get("prompt_style") or "general")
             token_cap = int(model.get("max_output_tokens") or 1800)
             run_started = time.monotonic()
@@ -474,29 +552,27 @@ class TaskQueue:
                 wait_ready()
                 source = str(segment["source"])
                 block = block_by_order[int(segment["block_ord"])]
-                memory = select_memory_examples(source, memory_pairs)
-                system, user, replacements = build_translation_prompt(
-                    source,
-                    direction,
-                    task.get("context", ""),
-                    task.get("rules", ""),
-                    terms,
-                    context_tail,
-                    style=prompt_style,
-                    memory=memory,
-                    profile=profile,
-                    summary=narrative,
-                )
-                output = engine.translate(
-                    system,
-                    user,
-                    max_tokens=output_token_budget(source, token_cap),
-                )
-                try:
-                    output = restore_terms(output, replacements)
-                except ValueError as exc:
-                    raise InferenceError(str(exc)) from exc
-                output = preserve_whitespace(source, output)
+                cached = _short_reuse(known_short, source)
+                if cached is not None:
+                    output = preserve_whitespace(source, cached)
+                else:
+                    output = _generate_translation(
+                        engine,
+                        source,
+                        direction,
+                        str(task.get("context", "") or ""),
+                        str(task.get("rules", "") or ""),
+                        terms,
+                        context_tail,
+                        style=prompt_style,
+                        memory=select_memory_examples(source, memory_pairs),
+                        profile=profile,
+                        summary=narrative,
+                        paragraphs=1,
+                        token_cap=token_cap,
+                    )
+                    output = preserve_whitespace(source, output)
+                    _remember_short(known_short, source, output)
                 self.store.save_segment(task_id, segment["block_ord"], segment["segment_ord"], output)
                 context_tail = fit_context_window([*context_tail, (source, output)], budget)
                 chars_done += len(source)
@@ -520,30 +596,26 @@ class TaskQueue:
                     translate_one(group[0])
                 else:
                     joined = "\n\n".join(str(item["source"]).strip() for item in group)
-                    memory = select_memory_examples(joined, memory_pairs)
-                    system, user, replacements = build_translation_prompt(
-                        joined,
-                        direction,
-                        task.get("context", ""),
-                        task.get("rules", ""),
-                        terms,
-                        context_tail,
-                        style=prompt_style,
-                        memory=memory,
-                        profile=profile,
-                        summary=narrative,
-                        paragraphs=len(group),
-                    )
-                    packed = engine.translate(
-                        system,
-                        user,
-                        max_tokens=output_token_budget(joined, token_cap),
-                    )
-                    try:
-                        packed = restore_terms(packed, replacements)
-                    except ValueError as exc:
-                        raise InferenceError(str(exc)) from exc
-                    parts = split_packed(packed, len(group))
+                    cached_parts = [_short_reuse(known_short, str(item["source"])) for item in group]
+                    if all(part is not None for part in cached_parts):
+                        parts = [str(part) for part in cached_parts]
+                    else:
+                        packed = _generate_translation(
+                            engine,
+                            joined,
+                            direction,
+                            str(task.get("context", "") or ""),
+                            str(task.get("rules", "") or ""),
+                            terms,
+                            context_tail,
+                            style=prompt_style,
+                            memory=select_memory_examples(joined, memory_pairs),
+                            profile=profile,
+                            summary=narrative,
+                            paragraphs=len(group),
+                            token_cap=token_cap,
+                        )
+                        parts = split_packed(packed, len(group))
                     if parts is None:
                         for segment in group:
                             translate_one(segment)
@@ -551,6 +623,7 @@ class TaskQueue:
                         for segment, part in zip(group, parts, strict=True):
                             source = str(segment["source"])
                             output = preserve_whitespace(source, part)
+                            _remember_short(known_short, source, output)
                             block = block_by_order[int(segment["block_ord"])]
                             self.store.save_segment(
                                 task_id, segment["block_ord"], segment["segment_ord"], output
@@ -691,6 +764,73 @@ def _pair_block(title: str, pairs: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _short_key(text: str) -> str:
+    return " ".join(str(text).split())
+
+
+def _short_reuse(known: dict[str, str], source: str) -> str | None:
+    """Повтор короткой строки, например колонтитула, берётся из уже сделанного перевода."""
+    key = _short_key(source)
+    if not key or len(key) > 48:
+        return None
+    return known.get(key)
+
+
+def _remember_short(known: dict[str, str], source: str, output: str) -> None:
+    key = _short_key(source)
+    cleaned = _short_key(output)
+    if key and len(key) <= 48 and cleaned:
+        known[key] = output.strip()
+
+
+def _generate_translation(
+    engine: InferenceProcess,
+    source: str,
+    direction: str,
+    project_context: str,
+    rules: str,
+    glossary: list[GlossaryTerm],
+    previous: list[tuple[str, str]],
+    *,
+    style: str,
+    memory: list[tuple[str, str]] | None,
+    profile: str,
+    summary: str,
+    paragraphs: int,
+    token_cap: int,
+) -> str:
+    """Один вызов модели. Если ответ повторяет фон, повтор без этого фона."""
+
+    def once(prior: list[tuple[str, str]], story: str) -> str:
+        system, user, replacements = build_translation_prompt(
+            source,
+            direction,
+            project_context,
+            rules,
+            glossary,
+            prior,
+            style=style,
+            memory=memory,
+            profile=profile,
+            summary=story,
+            paragraphs=paragraphs,
+        )
+        raw = engine.translate(system, user, max_tokens=output_token_budget(source, token_cap))
+        try:
+            return restore_terms(raw, replacements)
+        except ValueError as exc:
+            raise InferenceError(str(exc)) from exc
+
+    raw = once(previous, summary)
+    cleaned = clean_model_output(raw)
+    story = summary.strip()
+    echoed = _has_scaffold(raw) or output_repeats_context(cleaned, previous, story)
+    if (previous or story) and echoed:
+        raw = once([], "")
+        cleaned = clean_model_output(raw)
+    return cleaned
+
+
 def build_translation_prompt(
     text: str,
     direction: str,
@@ -768,14 +908,43 @@ def build_translation_prompt(
     if summary.strip():
         user_parts.append(f"Story so far, do not include this in the output:\n{summary.strip()[:900]}")
     if previous:
-        user_parts.append(_pair_block("Recent translation, continue in the same voice:", previous))
+        user_parts.append(_recent_translations(previous))
     if paragraphs > 1:
         user_parts.append(
             f"The source has {paragraphs} paragraphs separated by a blank line. "
             f"Return exactly {paragraphs} paragraphs separated by a blank line."
         )
+    if user_parts:
+        user_parts.append("Translate only the source below. Do not repeat the background.")
     user_parts.append(protected)
     return "\n".join(system_lines), "\n\n".join(user_parts), replacements
+
+
+def _recent_translations(previous: list[tuple[str, str]]) -> str:
+    """Недавний перевод только на целевом языке: английский источник модель переводит заново."""
+    lines = ["Recent translation, continue in the same voice:"]
+    for _source, translation in previous:
+        text = " ".join(str(translation).split())
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def _hy_mt2_clause(paragraphs: int, has_markers: bool) -> str:
+    parts: list[str] = []
+    if has_markers:
+        parts.append(
+            "Keep every marker of the form ZXQTERM0000XZ exactly as written. "
+            "Do not translate, split, or remove markers."
+        )
+    if paragraphs > 1:
+        parts.append(
+            f"The source has {paragraphs} paragraphs separated by a blank line. "
+            f"Return exactly {paragraphs} paragraphs separated by a blank line."
+        )
+    if not parts:
+        return ""
+    return " " + " ".join(parts)
 
 
 def _hy_mt2_user(
@@ -792,51 +961,48 @@ def _hy_mt2_user(
     summary: str = "",
     paragraphs: int = 1,
 ) -> str:
-    """Промпт карточки Hy-MT2. Стабильная инструкция стоит первой, меняется только хвост."""
-    parts: list[str] = []
-    # Глоссарий не зависит от фрагмента, поэтому стоит в стабильном префиксе кэша.
-    if glossary or has_markers:
-        parts.append(
-            "Keep every marker of the form ZXQTERM0000XZ exactly as written. "
-            "Do not translate, split, or remove markers."
-        )
-    if glossary:
-        lines = ["*Reference the following translations:*"]
-        for item in glossary[:40]:
-            lines.append(f"`{item.source}` translates to `{item.target}`")
-        parts.append("\n".join(lines))
-    if source_code == AUTO_LANGUAGE:
-        instruction = (
-            f"Identify the source language from the text, then translate it into {target_language}."
-        )
-    else:
-        instruction = f"Translate the following text into {target_language}."
-    instruction += (
-        " Translate the meaning in natural prose, not word for word."
-        " Keep names, tense, and terms already used."
-        " Note that you must ONLY output the translated result without any additional explanation."
-    )
-    parts.append(instruction)
+    """Шаблоны карточки Hy-MT2. Инструкция стоит сразу перед источником, фон — до неё."""
+    references = [f"`{item.source}` translates to `{item.target}`" for item in glossary[:40]]
+    references.extend(f"`{source}` translates to `{translation}`" for source, translation in memory)
     background: list[str] = []
     if project_context.strip():
         background.append(project_context.strip()[:800])
     if rules.strip():
-        background.append(f"Translation rules: {rules.strip()[:800]}")
+        background.append(rules.strip()[:800])
     if summary.strip():
-        background.append(f"Story so far, do not include this in the output:\n{summary.strip()[:900]}")
-    if memory:
-        background.append(_pair_block("Confirmed translations, keep the same names and terms:", memory))
-    if previous:
-        background.append(_pair_block("Recent translation, continue in the same voice:", previous))
+        background.append(summary.strip()[:900])
+    recent = [
+        " ".join(str(translation).split())
+        for _source, translation in previous
+        if str(translation).strip()
+    ]
+    if recent:
+        background.append("\n".join(recent))
+    extra = _hy_mt2_clause(paragraphs, has_markers)
+    parts: list[str] = []
+    if references:
+        parts.append("*Reference the following translations:*\n" + "\n".join(references))
     if background:
         parts.append("*[Background Information]*\n" + "\n\n".join(background))
-    source = protected
-    if paragraphs > 1:
-        source = (
-            f"The source has {paragraphs} paragraphs separated by a blank line. "
-            f"Return exactly {paragraphs} paragraphs separated by a blank line.\n\n{protected}"
+        instruction = (
+            f"Please translate the following text into {target_language}, "
+            "taking the provided background information into consideration."
         )
-    parts.append(f"*[Source Text]*\n{source}")
+        if source_code == AUTO_LANGUAGE:
+            instruction = f"Identify the source language from the text. {instruction}"
+        parts.append(instruction + extra)
+        parts.append(f"*[Source Text]*\n{protected}")
+        return "\n\n".join(parts)
+    if source_code == AUTO_LANGUAGE:
+        lead = f"Identify the source language from the text, then translate it into {target_language}."
+    else:
+        lead = f"Translate the following text into {target_language}."
+    if references:
+        note = "Note that you must ONLY output the translated result without any additional explanation:"
+    else:
+        note = "Note that you should only output the translated result without any additional explanation:"
+    parts.append(f"{lead} {note}{extra}")
+    parts.append(protected)
     return "\n\n".join(parts)
 
 
@@ -900,8 +1066,7 @@ def _gemma_prompt(
     if summary.strip():
         extras.append(f"Story so far, do not include this in the output:\n{summary.strip()[:900]}")
     if previous:
-        context = "\n".join(f"Source: {src}\nTranslation: {dst}" for src, dst in previous)
-        extras.append(f"Recent translation, continue in the same voice:\n{context}")
+        extras.append(_recent_translations(previous))
     if paragraphs > 1:
         extras.append(
             f"The source has {paragraphs} paragraphs separated by a blank line. "

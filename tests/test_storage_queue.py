@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 
 import dotlingo.task_queue as task_queue_module
@@ -170,9 +169,10 @@ def test_short_blocks_share_one_call_and_the_story_memory_is_saved(tmp_path: Pat
             self.calls.append((system, user, max_tokens))
             if "Update a brief story memory" in user:
                 return "Память книги о строках."
-            match = re.search(r"Return exactly (\d+) paragraphs", user)
-            count = int(match.group(1)) if match else 1
-            return "\n\n".join(f"Строка {index}." for index in range(count))
+            lines = [line for line in user.splitlines() if line.startswith("Line ")]
+            if not lines:
+                lines = ["Line 0."]
+            return "\n\n".join(f"Строка {line.removeprefix('Line ').strip()}" for line in lines)
 
     monkeypatch.setattr(task_queue_module, "get_model", lambda model_id, root=None: {
         "id": model_id,
@@ -197,10 +197,15 @@ def test_short_blocks_share_one_call_and_the_story_memory_is_saved(tmp_path: Pat
     assert engine.kwargs["n_batch"] == 1024
     assert engine.args[1] == 8192
     assert len(engine.calls) == 7
-    assert "not word for word" in engine.calls[0][1]
-    assert "Recent translation, continue in the same voice:" in engine.calls[1][1]
+    assert "only output the translated result" in engine.calls[0][1]
+    second = engine.calls[1][1]
+    assert second.index("*[Background Information]*") < second.index(
+        "taking the provided background information into consideration"
+    )
+    assert "Строка 0." in second
+    assert "Line 0." not in second
     assert engine.calls[5][2] == 220
-    assert "Story so far" in engine.calls[6][1]
+    assert "Память книги о строках." in engine.calls[6][1]
     assert store.task(task_id)["status"] == "complete"
     assert store.narrative(task_id) == "Память книги о строках."
     assert len(store.translations(document.id)) == 24

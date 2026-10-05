@@ -6,9 +6,11 @@ from dotlingo.hardware import HardwareSnapshot, gpu_layers_for
 from dotlingo.task_queue import (
     build_translation_prompt,
     chunk_limit,
+    clean_model_output,
     context_char_budget,
     fit_context_window,
     group_segments,
+    output_repeats_context,
     output_token_budget,
     select_memory_examples,
     split_packed,
@@ -46,14 +48,52 @@ def test_hy_mt2_prompt_is_a_single_user_translation_request() -> None:
     assert replacements == {"ZXQTERM0000XZ": "река"}
     assert "ZXQTERM0000XZ" in user
     assert "Russian" in user
-    assert "ONLY output the translated result" in user
+    assert "taking the provided background information into consideration" in user
     assert "Background Information" in user
     assert "harbour" in user
+    assert "The road was long." not in user
+    assert "Дорога была долгой." in user
     assert "/no_think" not in user
+    background_at = user.index("*[Background Information]*")
+    instruction_at = user.index("taking the provided background information into consideration")
     source_at = user.rfind("*[Source Text]*")
-    assert source_at > user.index("*[Background Information]*")
+    assert background_at < instruction_at < source_at
     assert "harbour" not in user[source_at:]
+    assert "Дорога была долгой." not in user[source_at:]
     assert "ZXQTERM0000XZ" in user[source_at:]
+
+
+def test_hy_mt2_without_context_uses_the_default_template() -> None:
+    system, user, _replacements = build_translation_prompt(
+        "Hello.",
+        "en → ru",
+        "",
+        "",
+        [],
+        [],
+        style="hy-mt2",
+    )
+    assert system == ""
+    assert "*[Background Information]*" not in user
+    assert "*[Source Text]*" not in user
+    assert "only output the translated result" in user
+    assert user.endswith("Hello.")
+
+
+def test_scaffold_echo_keeps_the_translation_after_the_source_label() -> None:
+    echoed = (
+        "*[Информация о фоне]*\n"
+        "Недавний перевод, продолжение в том же стиле:\n"
+        "Источник: ГЛАВА I.\n"
+        "*[Текст источника]*\n"
+        "ГЛАВА I"
+    )
+    assert clean_model_output(echoed) == "ГЛАВА I"
+    packed = "Первый абзац.\n\nВторой абзац."
+    assert clean_model_output("*[Текст источника]*\n" + packed) == packed
+    repeated = "Алиса сидела на берегу и смотрела в книгу сестры без картинок. " * 2
+    assert output_repeats_context(repeated, [("Alice sat.", repeated)], "")
+    assert not output_repeats_context("Белый кролик достал часы из кармана жилета и побежал дальше по полю.", [("Alice sat.", repeated)], "")
 
 
 def test_recent_context_stays_out_of_the_stable_system_prompt() -> None:
