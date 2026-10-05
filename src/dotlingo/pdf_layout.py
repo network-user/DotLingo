@@ -20,7 +20,10 @@ FONT_NAME = "OldStandard"
 
 _BOOK_FONT = "ModernMT"
 _CHROME_FONTS = ("Berkeley", "Courier")
-_APOSTROPHE = re.compile(r"(?<=\w)\s+['’]\s*(?=\w)")
+_APOSTROPHE = re.compile(
+    r"(?<=\w)\s+['’]\s*(?=(?:ll|ve|re|d|m|s|t)\b)",
+    re.IGNORECASE,
+)
 _BEFORE_PUNCT = re.compile(r"\s+([,.;:!?])")
 _AFTER_QUOTE = re.compile(r"([«“\"])\s+")
 _LIGATURES = str.maketrans({"ﬁ": "fi", "ﬂ": "fl", "ﬀ": "ff", "ﬃ": "ffi", "ﬄ": "ffl"})
@@ -117,11 +120,27 @@ def _walk_lines(container):
         yield from _walk_lines(child)
 
 
+def _chars_to_text(chars) -> str:
+    """Пробел слова не путает с разрядкой: зазор букв около 1 pt, между словами около 4 pt."""
+    pieces: list[str] = []
+    previous = None
+    for char in chars:
+        glyph = char.get_text()
+        if previous is not None and glyph and not glyph.isspace():
+            gap = float(char.x0) - float(previous.x1)
+            size = float(getattr(previous, "size", 0) or getattr(char, "size", 0) or 10)
+            if gap > max(1.8, size * 0.22) and (not pieces or not pieces[-1].endswith(" ")):
+                pieces.append(" ")
+        pieces.append(glyph)
+        previous = char
+    return "".join(pieces).replace("\n", " ").strip()
+
+
 def _line_from_layout(page: int, layout_line, page_width: float) -> GlyphLine | None:
     from pdfminer.layout import LTChar
 
     chars = [item for item in layout_line if isinstance(item, LTChar)]
-    text = layout_line.get_text().replace("\n", " ").strip()
+    text = _chars_to_text(chars) if chars else layout_line.get_text().replace("\n", " ").strip()
     if not text or not chars:
         return None
     fonts = [char.fontname.split("+")[-1] for char in chars]
@@ -224,7 +243,13 @@ def _split_column(lines: list[GlyphLine]) -> list[list[GlyphLine]]:
         indent = line.x0 - previous.x0
         both_indented = line.x0 > column_left + 8 and previous.x0 > column_left + 8
         size_break = (previous.size < 11.4) != (line.size < 11.4)
-        new_paragraph = gap > median_gap * 1.35 or 8.0 <= indent <= 26.0 or both_indented or size_break
+        new_paragraph = (
+            gap > median_gap * 1.35
+            or 8.0 <= indent <= 26.0
+            or indent <= -8.0
+            or both_indented
+            or size_break
+        )
         if new_paragraph:
             groups.append([line])
         else:
@@ -406,9 +431,24 @@ def _stitch_spread_headers(paragraphs: list[Paragraph]) -> list[Paragraph]:
     return result
 
 
+def _column_lefts(paragraphs: list[Paragraph]) -> dict[tuple[int, int], float]:
+    buckets: dict[tuple[int, int], list[float]] = {}
+    for paragraph in paragraphs:
+        if paragraph.kind != "body" or not paragraph.lines:
+            continue
+        line = paragraph.lines[0]
+        buckets.setdefault((line.page, _column(line)), []).append(line.x0)
+    return {key: min(values) for key, values in buckets.items()}
+
+
 def _stitch_continuations(paragraphs: list[Paragraph]) -> list[Paragraph]:
-    """Склеивает абзац, который оборвался на границе полосы и продолжился со строчной."""
+    """Склеивает абзац, который оборвался на границе полосы.
+
+    Строчная склейка работает и внутри страницы. Заглавная - только через
+    страницу и только с левого края колонки, не с абзацного отступа.
+    """
     paragraphs = _stitch_spread_headers(paragraphs)
+    lefts = _column_lefts(paragraphs)
     kept: list[Paragraph] = []
     anchor: Paragraph | None = None
     for paragraph in paragraphs:
@@ -416,10 +456,17 @@ def _stitch_continuations(paragraphs: list[Paragraph]) -> list[Paragraph]:
         if paragraph.kind != "body":
             kept.append(paragraph)
             continue
+        line = paragraph.lines[0] if paragraph.lines else None
+        at_edge = False
+        cross_page = False
+        if line is not None and anchor is not None and anchor.lines:
+            edge = lefts.get((line.page, _column(line)), line.x0)
+            at_edge = line.x0 <= edge + 3.0
+            cross_page = anchor.lines[-1].page != line.page
         if (
             anchor is not None
             and not _ends_sentence(anchor.source)
-            and _starts_lower(paragraph.source)
+            and (_starts_lower(paragraph.source) or (cross_page and at_edge))
         ):
             anchor.lines.extend(paragraph.lines)
             anchor.line_rights.extend(paragraph.line_rights)

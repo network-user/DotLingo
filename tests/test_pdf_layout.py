@@ -24,6 +24,7 @@ from dotlingo.pdf_layout import (  # noqa: E402
 def test_normalize_collapses_old_style_spacing() -> None:
     assert normalize_text("Dinah  'll  miss  me !") == "Dinah'll miss me!"
     assert normalize_text("it ’s  late") == "it's late"
+    assert normalize_text("said 'hello' there") == "said 'hello' there"
     assert join_line_texts(["There-", "fore I'm mad."]) == "Therefore I'm mad."
     assert join_line_texts(["C H A P T E R" + "   " + "I ."]) == "CHAPTER I."
 
@@ -101,6 +102,38 @@ def test_sentence_continues_in_the_next_column() -> None:
     assert len(paragraphs) == 1
     assert paragraphs[0].source.endswith("across the field.")
     assert paragraphs[0].line_rights == [340.0, 680.0]
+
+
+def test_hanging_indent_does_not_glue_the_next_verse_line() -> None:
+    lines = [
+        _line("Imperious Prima flashes forth", 98, 320, 200),
+        _line("Her edict to begin it", 109, 300, 184),
+        _line("In gentler tone Secunda hopes", 98, 330, 168),
+    ]
+    paragraphs = group_paragraphs(lines)
+    assert [item.source for item in paragraphs] == [
+        "Imperious Prima flashes forth",
+        "Her edict to begin it",
+        "In gentler tone Secunda hopes",
+    ]
+
+
+def test_capital_continuation_joins_only_from_the_left_edge() -> None:
+    continued = [
+        _line("And yet", 62, 140, 80, page=1),
+        _line("I wish I could show you our cat Dinah.", 62, 360, 400, page=2),
+    ]
+    joined = group_paragraphs(continued)
+    assert len(joined) == 1
+    assert "I wish I could show you" in joined[0].source
+    indented = [
+        _line("And yet", 62, 140, 80, page=1),
+        _line("So she was considering.", 78, 360, 400, page=2),
+        _line("another line of the column.", 62, 300, 384, page=2),
+    ]
+    apart = group_paragraphs(indented)
+    assert apart[0].source == "And yet"
+    assert apart[1].source.startswith("So she was considering.")
 
 
 def test_finished_sentence_stays_its_own_paragraph() -> None:
