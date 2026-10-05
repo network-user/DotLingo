@@ -373,6 +373,15 @@ def _record(
         "ui_details": f"{source['caveat']} {_ROLE_NOTES[role]}",
         "notes": source["summary"],
     }
+    if source.get("prompt_profile") == "hy" and source.get("family") == "Hy-MT2":
+        # Те же карточка и сэмплинг, что у закреплённого Hy-MT2 в каталоге.
+        record["prompt_style"] = "hy-mt2"
+        record["sampling"] = {
+            "temperature": 0.7,
+            "top_p": 0.6,
+            "top_k": 20,
+            "repeat_penalty": 1.05,
+        }
     if not _valid_market_record(record):
         return None
     return record

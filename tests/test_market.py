@@ -43,6 +43,25 @@ def _tree() -> list[dict]:
     ]
 
 
+def test_hy_mt2_market_uses_the_catalog_prompt_and_sampling() -> None:
+    source = {
+        **SOURCE,
+        "repo": "tencent/Hy-MT2-1.8B-GGUF",
+        "family": "Hy-MT2",
+    }
+    tree = [_file("Hy-MT2-1.8B-Q4_K_M.gguf", 1133080512, SHA_Q4)]
+    offer = select_offers(source, REV, "apache-2.0", tree)[0]
+    assert offer["prompt_style"] == "hy-mt2"
+    assert offer["sampling"] == {
+        "temperature": 0.7,
+        "top_p": 0.6,
+        "top_k": 20,
+        "repeat_penalty": 1.05,
+    }
+    plain = select_offers(SOURCE, REV, "apache-2.0", _tree())[0]
+    assert "prompt_style" not in plain
+
+
 def test_select_offers_keeps_q4_and_q6_only() -> None:
     offers = select_offers(SOURCE, REV, "apache-2.0", _tree())
     assert [item["quantization"] for item in offers] == ["Q4_K_M", "Q6_K"]
