@@ -3,7 +3,16 @@ import os
 from dotlingo.engine import prepare_llama_env
 from dotlingo.glossary import GlossaryTerm
 from dotlingo.hardware import HardwareSnapshot, gpu_layers_for
-from dotlingo.task_queue import build_translation_prompt, select_memory_examples
+from dotlingo.task_queue import (
+    build_translation_prompt,
+    chunk_limit,
+    context_char_budget,
+    fit_context_window,
+    group_segments,
+    output_token_budget,
+    select_memory_examples,
+    split_packed,
+)
 
 
 def _snapshot(**overrides: object) -> HardwareSnapshot:
@@ -41,6 +50,64 @@ def test_hy_mt2_prompt_is_a_single_user_translation_request() -> None:
     assert "Background Information" in user
     assert "harbour" in user
     assert "/no_think" not in user
+    source_at = user.rfind("*[Source Text]*")
+    assert source_at > user.index("*[Background Information]*")
+    assert "harbour" not in user[source_at:]
+    assert "ZXQTERM0000XZ" in user[source_at:]
+
+
+def test_recent_context_stays_out_of_the_stable_system_prompt() -> None:
+    system, user, _replacements = build_translation_prompt(
+        "Hello.",
+        "en → ru",
+        "",
+        "",
+        [],
+        [("The road was long.", "Дорога была долгой.")],
+        summary="Алиса уже в норе.",
+    )
+    assert "Дорога была долгой." not in system
+    assert "Алиса уже в норе." not in system
+    assert "Recent translation, continue in the same voice:" in user
+    assert "Story so far" in user
+    assert user.endswith("Hello.")
+
+
+def test_chunk_and_context_budgets_follow_the_model_window() -> None:
+    assert chunk_limit(2048) == 700
+    assert chunk_limit(4096) == 1600
+    assert chunk_limit(8192) == 2400
+    assert context_char_budget(2048) == 480
+    assert context_char_budget(8192) == 2400
+    assert output_token_budget("Hi", 2048) == 128
+    assert output_token_budget("x" * 500, 2048) == 500
+    assert output_token_budget("x" * 3000, 768) == 768
+
+
+def test_context_window_keeps_the_newest_pairs_inside_the_budget() -> None:
+    pairs = [("one", "a" * 100), ("two", "b" * 100), ("three", "c" * 100)]
+    assert fit_context_window(pairs, 0) == []
+    assert fit_context_window(pairs, 150) == [("three", "c" * 100)]
+    window = fit_context_window(pairs, 250)
+    assert [source for source, _translation in window] == ["two", "three"]
+
+
+def test_short_whole_blocks_pack_and_a_split_paragraph_stays_alone() -> None:
+    segments = [
+        {"block_ord": 0, "segment_ord": 0, "source": "A" * 100},
+        {"block_ord": 0, "segment_ord": 1, "source": "B" * 100},
+        {"block_ord": 1, "segment_ord": 0, "source": "C"},
+        {"block_ord": 2, "segment_ord": 0, "source": "D"},
+        {"block_ord": 3, "segment_ord": 0, "source": "E" * 400},
+    ]
+    groups = group_segments(segments, 250)
+    assert groups[0] == [segments[0]]
+    assert groups[1] == [segments[1]]
+    assert groups[2] == [segments[2], segments[3]]
+    assert groups[3] == [segments[4]]
+    assert split_packed("Первый.\n\nВторой.", 2) == ["Первый.", "Второй."]
+    assert split_packed("Первый.\nВторой.", 2) is None
+    assert split_packed("Один.", 1) == ["Один."]
 
 
 def test_memory_picks_overlapping_confirmed_pairs_and_skips_the_same_source() -> None:

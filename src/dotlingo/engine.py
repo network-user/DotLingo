@@ -128,6 +128,7 @@ def _worker_main(
     append_no_think: bool,
     user_only: bool,
     plain_gemma_turns: bool = False,
+    n_batch: int = 512,
 ) -> None:
     """Load untrusted data weights in a child process and expose only text requests."""
     prepare_llama_env()
@@ -137,6 +138,7 @@ def _worker_main(
         model = Llama(
             model_path=model_path,
             n_ctx=context_size,
+            n_batch=max(64, min(int(n_batch), context_size)),
             n_threads=max(1, threads),
             n_gpu_layers=gpu_layers,
             verbose=False,
@@ -250,6 +252,7 @@ class InferenceProcess:
         append_no_think: bool = False,
         user_only: bool = False,
         plain_gemma_turns: bool = False,
+        n_batch: int = 512,
         startup_timeout: float = 180,
         idle_timeout: float = 240,
     ) -> None:
@@ -267,6 +270,7 @@ class InferenceProcess:
         self.append_no_think = append_no_think
         self.user_only = user_only
         self.plain_gemma_turns = plain_gemma_turns
+        self.n_batch = max(64, min(int(n_batch), self.context_size))
         self.fell_back_to_cpu = False
         self.startup_timeout = startup_timeout
         self.idle_timeout = idle_timeout
@@ -297,6 +301,7 @@ class InferenceProcess:
                 self.append_no_think,
                 self.user_only,
                 self.plain_gemma_turns,
+                self.n_batch,
             ),
             name="DotLingo inference",
             daemon=True,

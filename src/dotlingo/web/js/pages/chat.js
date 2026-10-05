@@ -730,7 +730,7 @@ async function refreshProjects() {
 function pdfJobNote(doc) {
   const warnings = Array.isArray(doc?.warnings) ? doc.warnings : [];
   if (warnings.some((item) => String(item).includes('вернётся PDF'))) return 'Вернётся PDF.';
-  if (doc?.format === 'pdf') return 'Вернётся как Markdown.';
+  if (doc?.format === 'pdf') return 'Соберётся новым PDF.';
   return '';
 }
 
@@ -1239,7 +1239,7 @@ const FORMAT_BY_EXT = {
   markdown: ['.md', '.txt'],
   docx: ['.docx', '.txt', '.md'],
   epub: ['.epub', '.txt', '.md'],
-  pdf: ['.md', '.txt', '.pdf'],
+  pdf: ['.pdf', '.md', '.txt'],
 };
 
 const FORMAT_LABEL = {
@@ -1611,7 +1611,7 @@ function settingsSheet() {
         field(
           'Формат',
           formatSelect,
-          'Как у файла сохраняет привычный вид. Обычный PDF приходит как Markdown. Книжный PDF может вернуться PDF.',
+          'Как у файла оставляет тот же тип. Книга сохраняет полосу. Обычный PDF собирается заново, по страницам.',
         ),
         field('Модель', modelControl(() => {
           touchQuick();

@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   target_lang TEXT NOT NULL DEFAULT '',
   context TEXT NOT NULL DEFAULT '',
   rules TEXT NOT NULL DEFAULT '',
+  narrative TEXT NOT NULL DEFAULT '',
   output_suffix TEXT NOT NULL DEFAULT '',
   use_glossary INTEGER NOT NULL DEFAULT 1,
   completed INTEGER NOT NULL DEFAULT 0,
@@ -231,6 +232,8 @@ class ProjectStore:
             db.execute("ALTER TABLE tasks ADD COLUMN output_suffix TEXT NOT NULL DEFAULT ''")
         if "use_glossary" not in task_columns:
             db.execute("ALTER TABLE tasks ADD COLUMN use_glossary INTEGER NOT NULL DEFAULT 1")
+        if "narrative" not in task_columns:
+            db.execute("ALTER TABLE tasks ADD COLUMN narrative TEXT NOT NULL DEFAULT ''")
         if added_source or added_target or added_context or added_rules:
             db.execute(
                 "UPDATE tasks SET source_lang=(SELECT source_lang FROM project LIMIT 1), "
@@ -664,6 +667,18 @@ class ProjectStore:
                 "INSERT INTO task_events(task_id,status,message,created_at) VALUES(?,?,?,?)",
                 (task_id, status, message or error, _now()),
             )
+
+    def narrative(self, task_id: str) -> str:
+        with _connect(self.db_path) as db:
+            row = db.execute("SELECT narrative FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        return str(row["narrative"] or "")
+
+    def save_narrative(self, task_id: str, text: str) -> None:
+        cleaned = " ".join(str(text).split())[:900]
+        with _connect(self.db_path) as db:
+            db.execute("UPDATE tasks SET narrative=? WHERE id=?", (cleaned, task_id))
 
     def pending_segments(self, task_id: str) -> list[dict[str, Any]]:
         with _connect(self.db_path) as db:

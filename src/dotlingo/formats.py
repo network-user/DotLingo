@@ -419,7 +419,10 @@ def _import_pdf(path: Path) -> ParsedDocument:
                     translatable=block.translatable,
                 )
             )
-    warning = "Из PDF извлекается только текстовый слой. Вёрстка, таблицы, колонтитулы и изображения не переносятся; PDF-экспорт недоступен."
+    warning = (
+        "Из PDF извлекается только текстовый слой. "
+        "Вёрстка, таблицы и изображения не переносятся. Перевод собирается новым PDF."
+    )
     return ParsedDocument(path.stem, "pdf", tuple(blocks), (warning,))
 
 
@@ -546,6 +549,104 @@ def _layout_translations(parsed: ParsedDocument, translations: dict[int, str]) -
     return placed
 
 
+_PAGE_MARKER = re.compile(r"Страница \d+")
+
+
+def _is_page_marker(block: Block) -> bool:
+    """Служебный заголовок страницы, который импорт добавляет к обычному PDF."""
+    return (
+        block.kind == "heading"
+        and not block.locator
+        and _PAGE_MARKER.fullmatch(block.text.strip()) is not None
+    )
+
+
+def _pdf_markup(text: str) -> str:
+    from xml.sax.saxutils import escape
+
+    return escape(text).replace("\n", "<br/>")
+
+
+def _export_pdf_text(
+    destination: Path,
+    parsed: ParsedDocument,
+    translations: dict[int, str],
+) -> None:
+    """Новый PDF с текстом перевода. Полоса оригинала здесь не копируется."""
+    try:
+        from reportlab.lib.enums import TA_LEFT
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
+    except ImportError as exc:
+        raise DocumentError("Для сборки PDF не хватает библиотеки reportlab.") from exc
+    try:
+        from dotlingo.pdf_layout import FONT_NAME, LayoutError, _register_font
+
+        _register_font()
+    except ImportError as exc:
+        raise DocumentError("Для сборки PDF не хватает библиотек укладки.") from exc
+    except LayoutError as exc:
+        raise DocumentError(str(exc)) from exc
+
+    body = ParagraphStyle(
+        "dotlingo-body",
+        fontName=FONT_NAME,
+        fontSize=11,
+        leading=15,
+        alignment=TA_LEFT,
+    )
+    heading = ParagraphStyle(
+        "dotlingo-heading",
+        parent=body,
+        fontSize=14,
+        leading=18,
+        spaceBefore=10,
+        spaceAfter=4,
+    )
+    sections: list[list[Block]] = []
+    current: str | None = None
+    group: list[Block] = []
+    for block in parsed.blocks:
+        if _is_page_marker(block):
+            continue
+        if block.section != current:
+            if group:
+                sections.append(group)
+            group = []
+            current = block.section
+        group.append(block)
+    if group:
+        sections.append(group)
+
+    story: list[Any] = []
+    for index, blocks in enumerate(sections):
+        if index:
+            story.append(PageBreak())
+        for block in blocks:
+            raw = f"{block.prefix}{_translation_for(block, translations)}{block.suffix}".strip()
+            if not raw:
+                continue
+            story.append(Paragraph(_pdf_markup(raw), heading if block.kind == "heading" else body))
+            story.append(Spacer(1, 8))
+    if not story:
+        story.append(Paragraph(" ", body))
+
+    document = SimpleDocTemplate(
+        str(destination),
+        pagesize=A4,
+        leftMargin=54,
+        rightMargin=54,
+        topMargin=56,
+        bottomMargin=56,
+        title=(parsed.title or "")[:120],
+    )
+    try:
+        document.build(story)
+    except Exception as exc:
+        raise DocumentError("Не удалось собрать PDF.") from exc
+
+
 def _export_pdf_layout(
     source_path: Path,
     destination: Path,
@@ -553,7 +654,7 @@ def _export_pdf_layout(
     translations: dict[int, str],
 ) -> None:
     if parsed.metadata.get("pdfLayout") != "book":
-        raise DocumentError("Для этого PDF нет записи в тот же файл. Доступны TXT и Markdown.")
+        raise DocumentError("Для этого PDF нет книжной полосы.")
     try:
         page_count = int(parsed.metadata.get("pageCount") or 0)
     except (TypeError, ValueError) as exc:
@@ -604,7 +705,10 @@ def export_document(
         elif suffix == ".pdf":
             if parsed.format != "pdf":
                 raise DocumentError("PDF-экспорт доступен только из импортированного PDF.")
-            _export_pdf_layout(source_path, temporary, parsed, translations)
+            if parsed.metadata.get("pdfLayout") == "book":
+                _export_pdf_layout(source_path, temporary, parsed, translations)
+            else:
+                _export_pdf_text(temporary, parsed, translations)
         os.replace(temporary, destination)
     except Exception:
         temporary.unlink(missing_ok=True)

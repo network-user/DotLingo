@@ -64,7 +64,7 @@ from dotlingo.scratch import (
     load_model_for_scratch,
 )
 from dotlingo.storage import ProjectStore, delete_project, list_projects
-from dotlingo.task_queue import TaskQueue, build_chunks
+from dotlingo.task_queue import TaskQueue, build_chunks, chunk_limit
 
 # Формат фильтра: «описание (*.ext)». Строка без описания pywebview отвергает,
 # и диалог тогда не открывается. То же правило, что у GGUF_FILE_TYPES.
@@ -79,20 +79,20 @@ EXPORT_ALLOWED = {
     "markdown": (".md", ".txt"),
     "docx": (".docx", ".txt", ".md"),
     "epub": (".epub", ".txt", ".md"),
-    "pdf": (".txt", ".md"),
+    "pdf": (".pdf", ".txt", ".md"),
 }
 
 # Быстрый перевод без выбранного проекта живёт в одном локальном проекте.
 QUICK_PROJECT_TITLE = "Быстрые"
 
-# Тот же контейнер, что у оригинала. Книжная укладка подменяет PDF на .pdf в publishTranslation.
-# Обычный PDF без полосы книги остаётся Markdown.
+# Тот же контейнер, что у оригинала. У PDF это всегда .pdf:
+# книга сохраняет полосу, обычный текстовый PDF собирается заново.
 SAME_FORMAT_SUFFIX = {
     "txt": ".txt",
     "markdown": ".md",
     "docx": ".docx",
     "epub": ".epub",
-    "pdf": ".md",
+    "pdf": ".pdf",
 }
 
 
@@ -151,11 +151,8 @@ def _stamp(value: str = "") -> str:
 
 
 def _translation_suffix(fmt: str, book: bool) -> tuple[str, str]:
-    suffix = ".pdf" if book else SAME_FORMAT_SUFFIX.get(fmt, ".txt")
-    note = ""
-    if fmt == "pdf" and not book:
-        note = "PDF возвращается как Markdown: запись PDF в PDF в программе нет."
-    return suffix, note
+    del book
+    return SAME_FORMAT_SUFFIX.get(fmt, ".txt"), ""
 
 
 def _resolve_output_suffix(fmt: str, book: bool, requested: str) -> tuple[str, str]:
@@ -1162,7 +1159,10 @@ class Api:
         try:
             queue = self._queue_for(store)
             for document in documents:
-                chunks = build_chunks(store.blocks(document.id))
+                chunks = build_chunks(
+                    store.blocks(document.id),
+                    max_chars=chunk_limit(int(model.get("default_context") or 4096)),
+                )
                 for target in targets:
                     task_id = store.create_task(
                         document.id,

@@ -112,6 +112,14 @@ def test_epub_round_trip_keeps_spine_order_and_non_text_assets(tmp_path: Path) -
         assert "T:Chapter two" in "".join(chapter2.itertext())
 
 
+def test_same_format_for_pdf_stays_pdf() -> None:
+    from dotlingo.api import _resolve_output_suffix
+
+    assert _resolve_output_suffix("pdf", False, "") == (".pdf", "")
+    assert _resolve_output_suffix("pdf", True, "") == (".pdf", "")
+    assert _resolve_output_suffix("pdf", False, "md") == (".md", "")
+
+
 def test_pdf_text_layer_supported_and_scan_explicitly_rejected(tmp_path: Path) -> None:
     pytest.importorskip("pypdf")
     fitz = pytest.importorskip("fitz")
@@ -122,8 +130,19 @@ def test_pdf_text_layer_supported_and_scan_explicitly_rejected(tmp_path: Path) -
         document.save(text_pdf)
     parsed = import_document(text_pdf)
     assert any("текстовый слой" in item.lower() for item in parsed.warnings)
-    with pytest.raises(DocumentError):
-        export_document(text_pdf, tmp_path / "translated.pdf", parsed, {})
+    pytest.importorskip("reportlab")
+    output = tmp_path / "translated.pdf"
+    translations = {
+        block.order: "Это искаемый текст."
+        for block in parsed.blocks
+        if block.translatable
+    }
+    export_document(text_pdf, output, parsed, translations)
+    from pypdf import PdfReader
+
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(str(output)).pages)
+    assert "Это искаемый текст." in text
+    assert "Страница 1" not in text
 
     scan_pdf = tmp_path / "scan.pdf"
     with fitz.open() as document:

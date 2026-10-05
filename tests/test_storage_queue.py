@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 import dotlingo.task_queue as task_queue_module
@@ -116,3 +117,84 @@ def test_retranslation_replaces_only_translation_not_source(tmp_path: Path) -> N
     store.finish_task(task2)
     assert store.translations(document.id) == {0: "Другой."}
     assert document.source_path.read_text(encoding="utf-8") == "Original."
+
+
+def test_task_narrative_is_kept_for_the_next_run(tmp_path: Path) -> None:
+    source = tmp_path / "doc.txt"
+    source.write_text("Original.", encoding="utf-8")
+    store = ProjectStore.create(tmp_path / "projects", "Test")
+    document = store.import_file(source)
+    task_id = store.create_task(document.id, "model-a", build_chunks(store.blocks(document.id)))
+    store.save_narrative(task_id, "  Алиса   уже в норе. ")
+    assert store.narrative(task_id) == "Алиса уже в норе."
+    assert ProjectStore(store.root).narrative(task_id) == "Алиса уже в норе."
+
+
+def test_short_blocks_share_one_call_and_the_story_memory_is_saved(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "book.txt"
+    source.write_text("\n\n".join(f"Line {index}." for index in range(24)), encoding="utf-8")
+    original = source.read_bytes()
+    store = ProjectStore.create(tmp_path / "projects", "Test")
+    document = store.import_file(source)
+    task_id = store.create_task(
+        document.id,
+        "hy-mt2-1.8b-q4km",
+        build_chunks(store.blocks(document.id)),
+    )
+
+    class FakeEngine:
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+            self.gpu_layers = 0
+            self.fell_back_to_cpu = False
+            self.calls: list[tuple[str, str, int]] = []
+
+        def start(self) -> None:
+            return None
+
+        def pause(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        def translate(self, system: str, user: str, max_tokens: int = 128) -> str:
+            self.calls.append((system, user, max_tokens))
+            if "Update a brief story memory" in user:
+                return "Память книги о строках."
+            match = re.search(r"Return exactly (\d+) paragraphs", user)
+            count = int(match.group(1)) if match else 1
+            return "\n\n".join(f"Строка {index}." for index in range(count))
+
+    monkeypatch.setattr(task_queue_module, "get_model", lambda model_id, root=None: {
+        "id": model_id,
+        "default_context": 8192,
+        "max_output_tokens": 2048,
+        "prompt_style": "hy-mt2",
+        "prompt_profile": "",
+        "append_no_think": False,
+        "custom": True,
+        "sampling": {"temperature": 0.7, "top_p": 0.6, "top_k": 20, "repeat_penalty": 1.05},
+    })
+    monkeypatch.setattr(task_queue_module, "verify_model", lambda path, model: None)
+    monkeypatch.setattr(task_queue_module, "model_path", lambda model, root: tmp_path / "model.gguf")
+    monkeypatch.setattr(task_queue_module, "_placement_snapshot", lambda root: object())
+    monkeypatch.setattr(task_queue_module, "gpu_layers_for", lambda snapshot, model: 0)
+    monkeypatch.setattr(task_queue_module, "InferenceProcess", FakeEngine)
+
+    queue = TaskQueue(store, tmp_path / "models")
+    queue._execute(task_id)
+    engine = queue._engine
+    assert isinstance(engine, FakeEngine)
+    assert engine.kwargs["n_batch"] == 1024
+    assert engine.args[1] == 8192
+    assert len(engine.calls) == 7
+    assert "not word for word" in engine.calls[0][1]
+    assert "Recent translation, continue in the same voice:" in engine.calls[1][1]
+    assert engine.calls[5][2] == 220
+    assert "Story so far" in engine.calls[6][1]
+    assert store.task(task_id)["status"] == "complete"
+    assert store.narrative(task_id) == "Память книги о строках."
+    assert len(store.translations(document.id)) == 24
+    assert source.read_bytes() == original
