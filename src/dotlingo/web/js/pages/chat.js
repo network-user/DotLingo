@@ -8,7 +8,7 @@ import { call, isDemo, tryCall } from '../bridge.js';
 import { catalogFailure, isInstalledModel, refreshCatalog } from '../device.js';
 import * as store from '../store.js';
 import * as router from '../router.js';
-import { el, button, toast, confirmDialog, helpMark, closeHelpMarks } from '../components.js';
+import { el, button, modal, toast, confirmDialog, helpMark, closeHelpMarks } from '../components.js';
 import { icon } from '../icons.js';
 import {
   consumeDeckRequest,
@@ -114,8 +114,54 @@ function modelGap() {
   }
   return el('div', { class: 'chat-missing' }, [
     el('p', { text: 'Чтобы переводить, скачайте локальную модель.' }),
-    button({ label: 'К моделям', variant: 'primary', onClick: () => router.showPage('models') }),
+    modelsLink(() => router.showPage('models')),
   ]);
+}
+
+function modelsLink(onClick) {
+  return el('button', {
+    type: 'button',
+    class: 'model-pick__open',
+    onClick,
+  }, ['К моделям']);
+}
+
+function openModelPicker(onChange) {
+  const models = installedModels();
+  if (!models.length) {
+    router.showPage('models');
+    return;
+  }
+  const dialog = modal({
+    title: 'Модель',
+    subtitle: 'Скачанные',
+    render(body) {
+      body.append(el('div', { class: 'model-picker', role: 'listbox', ariaLabel: 'Скачанные модели' }, (
+        models.map((item) => {
+          const selected = item.id === modelId;
+          return el('button', {
+            type: 'button',
+            class: `model-option${selected ? ' is-selected' : ''}`,
+            role: 'option',
+            ariaSelected: selected ? 'true' : 'false',
+            onClick: () => {
+              modelId = item.id;
+              normalizeModel();
+              store.set('translateModel', modelId);
+              touchQuick();
+              onChange?.();
+              dialog.close();
+            },
+          }, [
+            el('span', { class: 'model-option__main' }, [
+              el('span', { class: 'model-option__name', text: item.name }),
+            ]),
+            selected ? el('span', { class: 'model-option__meta text-tertiary', text: 'Сейчас' }) : null,
+          ]);
+        })
+      )));
+    },
+  });
 }
 
 function syncModelChrome() {
@@ -1669,18 +1715,15 @@ function targetControl(onChange) {
 }
 
 function modelControl(onChange) {
-  const models = installedModels();
-  const select = el('select', {
-    class: 'select',
-    ariaLabel: 'Модель',
-    onChange: (event) => {
-      modelId = event.target.value;
-      normalizeModel();
-      onChange?.();
-    },
-  }, models.map((item) => el('option', { value: item.id, text: item.name })));
-  select.value = modelId;
-  return select;
+  normalizeModel();
+  const model = currentModel();
+  return el('div', { class: 'model-pick' }, [
+    el('p', {
+      class: 'model-pick__name',
+      text: model?.name || 'Модель не выбрана',
+    }),
+    modelsLink(() => openModelPicker(onChange)),
+  ]);
 }
 
 function settingsSheet() {
