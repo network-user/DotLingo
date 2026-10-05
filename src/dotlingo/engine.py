@@ -95,6 +95,49 @@ def install_gemma_turn_handler(model: Any) -> None:
     ).to_chat_handler()
 
 
+# Qwen3 думает, пока в шаблон не передан enable_thinking=false.
+# create_chat_completion этот аргумент не прокидывает, поэтому перевод
+# подставляет пустой блок и модель сразу пишет ответ.
+_THINKING_SWITCH = re.compile(
+    r"\{%-?\s*if enable_thinking is defined and enable_thinking is false\s*-?%\}"
+    r".*?"
+    r"\{%-?\s*endif\s*-?%\}",
+    re.DOTALL,
+)
+_EMPTY_THINK = "{{- '<think>\\n\\n</think>\\n\\n' }}"
+
+
+def force_closed_think(template: str) -> str | None:
+    """Вернуть шаблон, который начинает ответ после пустого блока размышления."""
+    if "enable_thinking" not in template:
+        return None
+    updated, count = _THINKING_SWITCH.subn(_EMPTY_THINK, template, count=1)
+    if count != 1:
+        return None
+    return updated
+
+
+def install_closed_think_handler(model: Any) -> bool:
+    """Закрыть размышление Qwen3. Для шаблона без этого переключателя ничего не меняет."""
+    metadata = getattr(model, "metadata", None) or {}
+    forced = force_closed_think(str(metadata.get("tokenizer.chat_template") or ""))
+    if forced is None:
+        return False
+    from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+
+    eos_id = int(model.token_eos())
+    bos_id = int(model.token_bos())
+    im_end = _special_token_id(model, "<|im_end|>")
+    stop_ids = [token_id for token_id in (eos_id, im_end) if token_id >= 0]
+    model.chat_handler = Jinja2ChatFormatter(
+        template=forced,
+        eos_token=_token_piece(model, eos_id) or "<|im_end|>",
+        bos_token=_token_piece(model, bos_id),
+        stop_token_ids=stop_ids or None,
+    ).to_chat_handler()
+    return True
+
+
 def _token_piece(model: Any, token_id: int) -> str:
     if token_id < 0:
         return ""
@@ -129,6 +172,7 @@ def _worker_main(
     user_only: bool,
     plain_gemma_turns: bool = False,
     n_batch: int = 512,
+    close_think: bool = False,
 ) -> None:
     """Load untrusted data weights in a child process and expose only text requests."""
     prepare_llama_env()
@@ -145,6 +189,14 @@ def _worker_main(
         )
         if plain_gemma_turns:
             install_gemma_turn_handler(model)
+        elif close_think and install_closed_think_handler(model):
+            # Строка /no_think этому шаблону не нужна и попала бы в текст пользователя.
+            append_no_think = False
+            stops = list(stop_sequences or ())
+            for token in ("<|im_end|>", "<|fim_suffix|>"):
+                if token not in stops:
+                    stops.append(token)
+            stop_sequences = tuple(stops)
         responses.put({"type": "ready"})
     except Exception as exc:
         responses.put({"type": "startup_error", "message": _safe_backend_error(exc)})
@@ -252,6 +304,7 @@ class InferenceProcess:
         append_no_think: bool = False,
         user_only: bool = False,
         plain_gemma_turns: bool = False,
+        close_think: bool = False,
         n_batch: int = 512,
         startup_timeout: float = 180,
         idle_timeout: float = 240,
@@ -270,6 +323,7 @@ class InferenceProcess:
         self.append_no_think = append_no_think
         self.user_only = user_only
         self.plain_gemma_turns = plain_gemma_turns
+        self.close_think = close_think
         self.n_batch = max(64, min(int(n_batch), self.context_size))
         self.fell_back_to_cpu = False
         self.startup_timeout = startup_timeout
@@ -302,6 +356,7 @@ class InferenceProcess:
                 self.user_only,
                 self.plain_gemma_turns,
                 self.n_batch,
+                self.close_think,
             ),
             name="DotLingo inference",
             daemon=True,
@@ -312,7 +367,11 @@ class InferenceProcess:
             event = self._responses.get(timeout=self.startup_timeout)
         except queue.Empty:
             self.terminate()
-            return {"type": "startup_error", "message": "Backend не сообщил о готовности за 3 минуты."}
+            minutes = max(1, round(self.startup_timeout / 60))
+            return {
+                "type": "startup_timeout",
+                "message": f"Backend не сообщил о готовности за {minutes} мин.",
+            }
         return event if isinstance(event, dict) else {"type": "startup_error", "message": "Пустой ответ backend."}
 
     def start(self) -> None:
@@ -337,7 +396,7 @@ class InferenceProcess:
         if event.get("type") != "ready":
             message = str(event.get("message", "Не удалось запустить inference backend."))
             self.terminate()
-            if "3 минуты" in message:
+            if event.get("type") == "startup_timeout":
                 raise InferenceTimeout(message)
             raise InferenceUnavailable(message)
 
@@ -376,7 +435,10 @@ class InferenceProcess:
                     raise InferenceError("Процесс inference завершился без результата.")
                 if time.monotonic() - last_event > self.idle_timeout:
                     self.terminate()
-                    raise InferenceTimeout("Backend не сообщал о генерации 4 минуты и был остановлен.")
+                    minutes = max(1, round(self.idle_timeout / 60))
+                    raise InferenceTimeout(
+                        f"Backend не сообщал о генерации {minutes} мин. и был остановлен."
+                    )
                 continue
             if event.get("request_id") != request_id:
                 continue
