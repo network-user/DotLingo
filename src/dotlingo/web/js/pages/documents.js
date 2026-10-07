@@ -86,7 +86,7 @@ async function refresh(host) {
       emptyState({
         iconName: 'document',
         title: 'Добавьте документы',
-        text: 'TXT, Markdown, DOCX, EPUB, PDF (с текстовым слоем).',
+        text: 'TXT, Markdown, DOCX, EPUB и PDF. Скан читается распознаванием Windows.',
         action: button({
           label: 'Выбрать файлы',
           variant: 'primary',
@@ -422,7 +422,7 @@ function wireImportEvents(host) {
 router.registerPage('documents', {
   title: 'Документы',
   subtitle: 'Файлы открытого проекта',
-  help: 'Сюда кладут TXT, Markdown, DOCX, EPUB и PDF с текстовым слоем. Скан без текста не читается. «Перевести» ставит отдельную задачу на каждый язык перевода. Исходный файл не меняется.',
+  help: 'Сюда кладут TXT, Markdown, DOCX, EPUB и PDF. Скан читается распознаванием Windows, перевод пишется поверх страницы. «Перевести» ставит отдельную задачу на каждый язык перевода. Исходный файл не меняется.',
   render: (host) => {
     render(host);
     wireImportEvents(host);

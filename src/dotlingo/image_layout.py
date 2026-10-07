@@ -44,6 +44,37 @@ class OcrLine:
         return (self.x0, self.y0, self.x1, self.y1)
 
 
+def resolve_ocr_language(requested: str | None) -> str:
+    """Язык Windows OCR. Пустое значение и auto берут язык профиля Windows."""
+    code = (requested or "").strip().replace("_", "-")
+    try:
+        from winrt.windows.media.ocr import OcrEngine
+    except ImportError as exc:
+        raise OcrUnavailable("Для сканов нужен пакет winocr: pip install winocr") from exc
+    available = [item.language_tag for item in OcrEngine.available_recognizer_languages]
+    if not available:
+        raise OcrUnavailable(
+            "В Windows нет языка распознавания. Добавьте английский или русский в параметрах языка."
+        )
+    if not code or code.lower() == "auto":
+        engine = OcrEngine.try_create_from_user_profile_languages()
+        tag = ""
+        if engine is not None and engine.recognizer_language is not None:
+            tag = str(engine.recognizer_language.language_tag or "")
+        return tag or available[0]
+    lowered = {tag.lower(): tag for tag in available}
+    candidates = [code, code.split("-")[0]]
+    for candidate in candidates:
+        found = lowered.get(candidate.lower())
+        if found:
+            return found
+        for tag in available:
+            if tag.lower().startswith(candidate.lower() + "-"):
+                return tag
+    shown = ", ".join(available)
+    raise OcrUnavailable(f"Windows не распознаёт язык {code}. Доступны: {shown}.")
+
+
 def ocr_image(image: Image.Image, lang: str = "en") -> list[OcrLine]:
     """Строки и рамки. Начало координат слева сверху, как у картинки."""
     try:
@@ -52,7 +83,14 @@ def ocr_image(image: Image.Image, lang: str = "en") -> list[OcrLine]:
         raise OcrUnavailable("Для снимков нужен пакет winocr: pip install winocr") from exc
     rgb = image.convert("RGB")
     try:
+        from winrt.windows.globalization import Language
+        from winrt.windows.media.ocr import OcrEngine
+
+        if not OcrEngine.is_language_supported(Language(lang)):
+            raise OcrUnavailable(f"Windows OCR не принял язык {lang}.")
         result = recognize_pil_sync(rgb, lang)
+    except OcrUnavailable:
+        raise
     except Exception as exc:
         raise OcrUnavailable(f"Windows OCR не принял язык {lang}.") from exc
     lines: list[OcrLine] = []
@@ -237,6 +275,188 @@ def replace_image_text(image: Image.Image, translations: dict[int, str], *, lang
     return paint_lines(image, found, translations), found
 
 
+def _digits_only(text: str) -> bool:
+    compact = "".join(text.split())
+    return bool(compact) and compact.isdigit()
+
+
+def _new_paragraph(previous: OcrLine, line: OcrLine) -> bool:
+    """Новый абзац, если строка далеко снизу или начинается в другой колонке."""
+    gap = line.y0 - previous.y1
+    tall = max(previous.height, line.height, 1)
+    if gap > tall * 0.85 or gap < -(tall * 0.2):
+        return True
+    side_by_side = line.x0 >= previous.x1 - 4 and gap < tall * 0.35
+    return side_by_side
+
+
+def group_ocr_lines(lines: list[OcrLine]) -> list[list[OcrLine]]:
+    """Соседние строки одного столбца склеиваются в абзац. Номер страницы остаётся отдельно."""
+    ordered = sorted(lines, key=lambda item: (item.y0, item.x0))
+    groups: list[list[OcrLine]] = []
+    for line in ordered:
+        if not line.text.strip():
+            continue
+        if (
+            not groups
+            or _digits_only(line.text)
+            or _digits_only(groups[-1][-1].text)
+            or _new_paragraph(groups[-1][-1], line)
+        ):
+            groups.append([line])
+            continue
+        groups[-1].append(line)
+    return groups
+
+
+def paragraph_text(lines: list[OcrLine]) -> str:
+    """Текст абзаца. Перенос с дефисом на строке склеивается, если следующая начинается со строчной."""
+    result = ""
+    for line in lines:
+        text = line.text.strip()
+        if not text:
+            continue
+        if not result:
+            result = text
+            continue
+        if result.endswith("-") and text[0].isalpha() and text[0].islower():
+            result = f"{result[:-1]}{text}"
+        else:
+            result = f"{result} {text}"
+    return result
+
+
+def _wrap_words(text: str, widths: list[int], font: ImageFont.FreeTypeFont) -> list[str] | None:
+    words = text.split()
+    if not words:
+        return [""] * len(widths)
+    placed: list[str] = []
+    index = 0
+    for width in widths:
+        limit = max(4, width - 4)
+        chosen: list[str] = []
+        while index < len(words):
+            trial = " ".join([*chosen, words[index]])
+            if font.getlength(trial) <= limit:
+                chosen.append(words[index])
+                index += 1
+                continue
+            break
+        if not chosen:
+            return None
+        placed.append(" ".join(chosen))
+    if index < len(words):
+        return None
+    placed.extend("" for _ in range(len(widths) - len(placed)))
+    return placed
+
+
+def _wrap_loose(text: str, widths: list[int], font: ImageFont.FreeTypeFont) -> tuple[list[str], str]:
+    words = text.split()
+    placed: list[str] = []
+    index = 0
+    for width in widths:
+        limit = max(4, width - 4)
+        chosen: list[str] = []
+        while index < len(words):
+            word = words[index]
+            trial = word if not chosen else " ".join([*chosen, word])
+            if chosen and font.getlength(trial) > limit:
+                break
+            chosen.append(word)
+            index += 1
+            if font.getlength(" ".join(chosen)) > limit:
+                break
+        placed.append(" ".join(chosen))
+    return placed, " ".join(words[index:])
+
+
+def _fit_group(text: str, lines: list[OcrLine]) -> tuple[list[str], str, ImageFont.FreeTypeFont]:
+    if not REGULAR_FONT.is_file():
+        raise OcrUnavailable(f"Нет шрифта {REGULAR_FONT}")
+    heights = [line.height for line in lines] or [12]
+    high = max(8, int(min(heights) * 0.92))
+    best = ImageFont.truetype(str(REGULAR_FONT), 8)
+    widths = [line.width for line in lines]
+    for size in range(high, 7, -1):
+        font = ImageFont.truetype(str(REGULAR_FONT), size)
+        wrapped = _wrap_words(text, widths, font)
+        if wrapped is not None:
+            return wrapped, "", font
+    wrapped, leftover = _wrap_loose(text, widths, best)
+    return wrapped, leftover, best
+
+
+def _draw_in_box(
+    draw: ImageDraw.ImageDraw,
+    line: OcrLine,
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    fill: tuple[int, int, int],
+) -> None:
+    if not text:
+        return
+    bbox = font.getbbox(text)
+    text_height = bbox[3] - bbox[1]
+    x = line.x0 - bbox[0]
+    y = line.y0 + max(0, (line.height - text_height) / 2) - bbox[1]
+    draw.text((x, y), text, font=font, fill=fill)
+
+
+def _erase_flat(image: Image.Image, lines: list[OcrLine]) -> None:
+    """Закрывает рамку ровным цветом бумаги. Так штрихи скана не остаются под переводом."""
+    if not lines:
+        return
+    pixels = image.load()
+    width, height = image.size
+    for line in lines:
+        pad = max(6, int(line.height * 0.22))
+        x0 = max(0, line.x0 - pad)
+        y0 = max(0, line.y0 - pad)
+        x1 = min(width, line.x1 + pad)
+        y1 = min(height, line.y1 + pad)
+        samples: list[tuple[int, int, int]] = []
+        for x in range(x0, x1):
+            for y in (y0 - 3, y0 - 2, y1 + 2, y1 + 3):
+                if 0 <= y < height:
+                    samples.append(pixels[x, y])
+        color = _median_color(samples) if samples else (250, 250, 250)
+        for y in range(y0, y1):
+            for x in range(x0, x1):
+                pixels[x, y] = color
+
+
+def place_scan_groups(
+    image: Image.Image,
+    groups: list[list[OcrLine]],
+    translations: dict[int, str],
+) -> tuple[Image.Image, str]:
+    """Стирает строки абзаца и пишет перевод в те же рамки. Хвост, который не вошёл, возвращается."""
+    canvas = image.convert("RGB")
+    chosen: list[tuple[int, list[OcrLine], str]] = []
+    for index, group in enumerate(groups):
+        text = translations.get(index, "").strip()
+        if text and group:
+            chosen.append((index, group, text))
+    if not chosen:
+        return canvas, ""
+    inks = {
+        id(line): _ink_color(canvas, line)
+        for _index, group, _text in chosen
+        for line in group
+    }
+    _erase_flat(canvas, [line for _index, group, _text in chosen for line in group])
+    draw = ImageDraw.Draw(canvas)
+    overflow: list[str] = []
+    for _index, group, text in chosen:
+        wrapped, leftover, font = _fit_group(text, group)
+        for line, piece in zip(group, wrapped, strict=False):
+            _draw_in_box(draw, line, piece, font, inks[id(line)])
+        if leftover:
+            overflow.append(leftover)
+    return canvas, "\n\n".join(overflow)
+
+
 def render_pdf_page(path: Path, page: int, scale: float = 2.0) -> tuple[Image.Image, float, float]:
     """Страница PDF как картинка. Второе и третье число: ширина и высота в пунктах."""
     import pypdfium2 as pdfium
@@ -249,6 +469,35 @@ def render_pdf_page(path: Path, page: int, scale: float = 2.0) -> tuple[Image.Im
     finally:
         document.close()
     return image, float(width), float(height)
+
+
+def page_sizes(path: Path) -> list[tuple[float, float]]:
+    """Ширина и высота каждой страницы в пунктах, с учётом поворота."""
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument(str(path))
+    try:
+        sizes: list[tuple[float, float]] = []
+        for index in range(len(document)):
+            width, height = document[index].get_size()
+            sizes.append((float(width), float(height)))
+        return sizes
+    finally:
+        document.close()
+
+
+def text_layer_lines(path: Path, page: int, scale: float, page_height: float) -> list[OcrLine]:
+    """Строки выделяемого слоя в пикселях картинки того же масштаба, что и скан."""
+    from dotlingo.pdf_layout import extract_lines
+
+    lines: list[OcrLine] = []
+    for item in extract_lines(path, [page]):
+        x0 = int(item.x0 * scale)
+        y0 = int((page_height - item.y1) * scale)
+        x1 = max(x0 + 1, int(item.x1 * scale))
+        y1 = max(y0 + 1, int((page_height - item.y0) * scale))
+        lines.append(OcrLine(len(lines), item.text, x0, y0, x1, y1))
+    return lines
 
 
 def text_layer_pixel_boxes(path: Path, page: int, scale: float, page_height: float) -> list[tuple[float, float, float, float]]:

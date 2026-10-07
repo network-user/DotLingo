@@ -79,7 +79,7 @@ function paint() {
       el('p', { class: 'cv-drop__title', text: 'Файлы для конвертации' }),
       el('p', {
         class: 'cv-drop__text',
-        text: 'TXT, Markdown, DOCX, EPUB и PDF с текстом. Скан не читается. Исходный файл остаётся на месте.',
+        text: 'TXT, Markdown, DOCX, EPUB и PDF. Скан читается распознаванием Windows. Исходный файл остаётся на месте.',
       }),
       el('div', { class: 'cv-drop__actions' }, [
         button({ label: 'Выбрать файлы', variant: 'primary', onClick: () => void pickFiles() }),
@@ -323,7 +323,7 @@ function destroy() {
 router.registerPage('convert', {
   title: 'Конвертер',
   subtitle: 'Другой формат того же текста, без перевода.',
-  help: 'Берёт текстовый слой или разметку и собирает новый файл. Картинки, колонки и оформление исходника не обещаются. Скан PDF не читается. Исходный файл не изменяется.',
+  help: 'Берёт текст файла и собирает новый. Скан PDF читается распознаванием Windows. Исходный файл не изменяется.',
   render,
   destroy,
 });

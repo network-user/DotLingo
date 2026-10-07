@@ -20,6 +20,7 @@ pdf = [
   "pdfminer.six>=20231228",
   "reportlab>=4,<6",
   "pypdfium2>=4,<6",
+  "winocr>=0.0.15",
 ]
 build = ["pyinstaller>=6.12,<7", "Pillow>=10,<13"]
 dev = ["pytest>=8,<10", "ruff>=0.11,<1"]

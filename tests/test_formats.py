@@ -222,7 +222,7 @@ def test_same_format_for_pdf_stays_pdf() -> None:
     assert _resolve_output_suffix("pdf", False, "md") == (".md", "")
 
 
-def test_pdf_text_layer_supported_and_scan_explicitly_rejected(tmp_path: Path) -> None:
+def test_pdf_text_layer_supported_and_scan_explicitly_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("pypdf")
     fitz = pytest.importorskip("fitz")
     text_pdf = tmp_path / "text.pdf"
@@ -250,10 +250,61 @@ def test_pdf_text_layer_supported_and_scan_explicitly_rejected(tmp_path: Path) -
     with fitz.open() as document:
         document.new_page()
         document.save(scan_pdf)
+    monkeypatch.setattr("dotlingo.image_layout.resolve_ocr_language", lambda requested=None: "en")
+    monkeypatch.setattr("dotlingo.formats._recognize_page", lambda path, page, lang, scale: [])
     with pytest.raises(ScannedPdfError) as error:
         import_document(scan_pdf)
     assert error.value.pages == [1]
-    assert "OCR не запускался" in str(error.value)
+    assert "распознавание не нашло" in str(error.value)
+
+
+def _dark_pixels(path: Path, box: tuple[int, int, int, int]) -> int:
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument(str(path))
+    try:
+        image = document[0].render(scale=2).to_pil().convert("RGB")
+    finally:
+        document.close()
+    x0, y0, x1, y1 = box
+    count = 0
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            red, green, blue = image.getpixel((x, y))
+            if red < 80 and green < 80 and blue < 80:
+                count += 1
+    return count
+
+
+def test_scanned_pdf_paints_translation_on_the_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("pypdfium2")
+    pytest.importorskip("reportlab")
+    from reportlab.pdfgen import canvas
+
+    from dotlingo.image_layout import OcrLine
+
+    source = tmp_path / "scan.pdf"
+    writer = canvas.Canvas(str(source), pagesize=(200, 280))
+    writer.showPage()
+    writer.save()
+    before = source.read_bytes()
+    monkeypatch.setattr("dotlingo.image_layout.resolve_ocr_language", lambda requested=None: "en")
+    monkeypatch.setattr(
+        "dotlingo.formats._recognize_page",
+        lambda path, page, lang, scale: [OcrLine(0, "Hello there", 20, 40, 180, 80)],
+    )
+    parsed = import_document(source, ocr_lang="en")
+    assert parsed.metadata["pdfLayout"] == "scan"
+    assert parsed.blocks[0].text == "Hello there"
+    assert "вернётся PDF" in parsed.warnings[0]
+
+    output = tmp_path / "scan.ru.pdf"
+    export_document(source, output, parsed, {0: "Привет"})
+    text_output = tmp_path / "scan.ru.txt"
+    export_document(source, text_output, parsed, {0: "Привет"})
+    assert source.read_bytes() == before
+    assert "Привет" in text_output.read_text(encoding="utf-8")
+    assert _dark_pixels(output, (20, 40, 180, 80)) > 10
 
 
 def test_corrupt_pdf_is_rejected(tmp_path: Path) -> None:

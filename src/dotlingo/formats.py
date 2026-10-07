@@ -35,14 +35,17 @@ class DocumentError(ValueError):
     """The selected file is damaged, unsupported, or cannot be converted safely."""
 
 
+SCAN_SCALE = 2.0
+
+
 class ScannedPdfError(DocumentError):
     def __init__(self, pages: list[int]) -> None:
         self.pages = pages
         page_list = ", ".join(map(str, pages[:12]))
         suffix = "…" if len(pages) > 12 else ""
         super().__init__(
-            "В PDF нет текстового слоя на страницах "
-            f"{page_list}{suffix}. OCR не запускался; импорт сканов пока не поддерживается."
+            "На страницах "
+            f"{page_list}{suffix} распознавание не нашло текста."
         )
 
 
@@ -403,7 +406,153 @@ def _book_layout_document(path: Path, page_count: int) -> ParsedDocument | None:
     )
 
 
-def _import_pdf(path: Path) -> ParsedDocument:
+def _recognize_page(path: Path, page: int, lang: str, scale: float) -> list[Any]:
+    """Строки скана. Вынесено отдельно, чтобы тест подменял распознавание."""
+    from dotlingo.image_layout import OcrUnavailable, ocr_image, render_pdf_page
+
+    try:
+        image, _width, _height = render_pdf_page(path, page, scale)
+        return ocr_image(image, lang)
+    except OcrUnavailable:
+        raise
+    except ImportError as exc:
+        raise OcrUnavailable("Для сканов нужны пакеты pdf и winocr.") from exc
+
+
+def _scan_locator(page_no: int, lines: list[Any]) -> dict[str, Any]:
+    return {
+        "page": page_no,
+        "layout": "scan",
+        "scale": SCAN_SCALE,
+        "lines": [
+            {"x0": line.x0, "y0": line.y0, "x1": line.x1, "y1": line.y1}
+            for line in lines
+        ],
+    }
+
+
+def _lines_from_locator(locator: dict[str, Any]) -> list[Any]:
+    from dotlingo.image_layout import OcrLine
+
+    lines: list[OcrLine] = []
+    for item in locator.get("lines") or []:
+        lines.append(
+            OcrLine(
+                len(lines),
+                "",
+                int(item["x0"]),
+                int(item["y0"]),
+                int(item["x1"]),
+                int(item["y1"]),
+            )
+        )
+    return lines
+
+
+def _import_scan_pdf(
+    path: Path,
+    page_texts: list[str],
+    image_only: list[int],
+    ocr_lang: str | None,
+) -> ParsedDocument:
+    from dotlingo.image_layout import (
+        OcrUnavailable,
+        group_ocr_lines,
+        page_sizes,
+        paragraph_text,
+        resolve_ocr_language,
+        text_layer_lines,
+    )
+
+    try:
+        lang = resolve_ocr_language(ocr_lang)
+        sizes = page_sizes(path)
+    except OcrUnavailable as exc:
+        raise DocumentError(str(exc)) from exc
+    except ImportError as exc:
+        raise DocumentError("Для сканов нужны пакеты pdf и winocr.") from exc
+    except Exception as exc:
+        raise DocumentError("Не удалось открыть страницы PDF для распознавания.") from exc
+    if len(sizes) != len(page_texts):
+        raise DocumentError("Не удалось открыть страницы PDF для распознавания.")
+
+    scan_pages = set(image_only)
+    blocks: list[Block] = []
+    recognized: list[int] = []
+    failed: list[int] = []
+    for page_no, _content in enumerate(page_texts, 1):
+        try:
+            if page_no in scan_pages:
+                lines = _recognize_page(path, page_no, lang, SCAN_SCALE)
+            else:
+                _width, height = sizes[page_no - 1]
+                lines = text_layer_lines(path, page_no, SCAN_SCALE, height)
+        except OcrUnavailable as exc:
+            raise DocumentError(str(exc)) from exc
+        except Exception as exc:
+            raise DocumentError(f"Не удалось прочитать страницу {page_no}.") from exc
+        page_blocks: list[Block] = []
+        for group in group_ocr_lines(lines):
+            text = paragraph_text(group)
+            if not text:
+                continue
+            digits = "".join(text.split()).isdigit()
+            page_blocks.append(
+                Block(
+                    0,
+                    f"page-{page_no}",
+                    f"Страница {page_no}",
+                    "paragraph",
+                    text,
+                    locator=_scan_locator(page_no, group),
+                    translatable=not digits,
+                )
+            )
+        if page_no in scan_pages:
+            if page_blocks:
+                recognized.append(page_no)
+            else:
+                failed.append(page_no)
+        blocks.extend(page_blocks)
+    if not recognized:
+        raise ScannedPdfError(failed or image_only)
+    ordered = [
+        Block(
+            index,
+            block.section,
+            block.section_title,
+            block.kind,
+            block.text,
+            block.locator,
+            block.prefix,
+            block.suffix,
+            block.translatable,
+        )
+        for index, block in enumerate(blocks)
+    ]
+    warning = (
+        "Скан вернётся PDF: перевод пишется поверх страницы, картинка остаётся. "
+        "Проверьте распознанный текст перед переводом."
+    )
+    if failed:
+        missed = ", ".join(map(str, failed[:12]))
+        tail = "…" if len(failed) > 12 else ""
+        warning = f"{warning} Пустые страницы: {missed}{tail}."
+    return ParsedDocument(
+        path.stem,
+        "pdf",
+        tuple(ordered),
+        (warning,),
+        {
+            "pdfLayout": "scan",
+            "pageCount": len(page_texts),
+            "ocrScale": SCAN_SCALE,
+            "ocrLang": lang,
+        },
+    )
+
+
+def _import_pdf(path: Path, ocr_lang: str | None = None) -> ParsedDocument:
     doc = _open_pdf_reader(path)
     try:
         page_count = len(doc.pages)
@@ -423,10 +572,8 @@ def _import_pdf(path: Path) -> ParsedDocument:
     if not page_texts:
         raise DocumentError("PDF не содержит страниц.")
     image_only = [i + 1 for i, content in enumerate(page_texts) if len(content.strip()) < 12]
-    if len(image_only) == len(page_texts):
-        raise ScannedPdfError(image_only)
     if image_only:
-        raise ScannedPdfError(image_only)
+        return _import_scan_pdf(path, page_texts, image_only, ocr_lang)
     blocks: list[Block] = []
     for page_no, content in enumerate(page_texts, 1):
         blocks.append(
@@ -459,7 +606,7 @@ def _import_pdf(path: Path) -> ParsedDocument:
     return ParsedDocument(path.stem, "pdf", tuple(blocks), (warning,))
 
 
-def import_document(path: Path) -> ParsedDocument:
+def import_document(path: Path, ocr_lang: str | None = None) -> ParsedDocument:
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix not in SUPPORTED_IMPORT:
@@ -476,7 +623,7 @@ def import_document(path: Path) -> ParsedDocument:
         if suffix == ".epub":
             return _import_epub(path)
         if suffix == ".pdf":
-            return _import_pdf(path)
+            return _import_pdf(path, ocr_lang)
     except OSError as exc:
         raise DocumentError("Не удалось прочитать выбранный файл.") from exc
     raise DocumentError("Неподдерживаемый формат.")
@@ -683,6 +830,122 @@ def _export_pdf_text(
         document.build(story)
     except Exception as exc:
         raise DocumentError("Не удалось собрать PDF.") from exc
+
+
+def _draw_scan_overflow(writer: Any, text: str) -> None:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    from dotlingo.pdf_layout import FONT_NAME, LayoutError, _register_font
+
+    try:
+        _register_font()
+    except LayoutError as exc:
+        raise DocumentError(str(exc)) from exc
+    width, height = A4
+    font_size = 11
+    margin = 54
+    leading = 15
+    max_width = width - (margin * 2)
+
+    def new_page() -> float:
+        writer.showPage()
+        writer.setPageSize((width, height))
+        writer.setFont(FONT_NAME, font_size)
+        return height - 56
+
+    y = new_page()
+    for paragraph in text.split("\n\n"):
+        line = ""
+        for word in paragraph.split():
+            trial = word if not line else f"{line} {word}"
+            if stringWidth(trial, FONT_NAME, font_size) <= max_width:
+                line = trial
+                continue
+            if line:
+                if y < 56:
+                    y = new_page()
+                writer.drawString(margin, y, line)
+                y -= leading
+            line = word
+        if line:
+            if y < 56:
+                y = new_page()
+            writer.drawString(margin, y, line)
+            y -= leading
+        y -= leading
+
+
+def _export_pdf_scan(
+    source_path: Path,
+    destination: Path,
+    parsed: ParsedDocument,
+    translations: dict[int, str],
+) -> None:
+    """Картинка каждой страницы. Перевод пишется в рамки распознанных строк."""
+    if parsed.metadata.get("pdfLayout") != "scan":
+        raise DocumentError("Для этого PDF нет скана.")
+    try:
+        page_count = int(parsed.metadata.get("pageCount") or 0)
+        scale = float(parsed.metadata.get("ocrScale") or SCAN_SCALE)
+    except (TypeError, ValueError) as exc:
+        raise DocumentError("В PDF не записаны страницы скана.") from exc
+    if page_count < 1:
+        raise DocumentError("В PDF не записаны страницы скана.")
+    try:
+        from reportlab.lib.utils import ImageReader
+        from reportlab.pdfgen import canvas
+    except ImportError as exc:
+        raise DocumentError("Для сборки PDF не хватает библиотеки reportlab.") from exc
+    try:
+        from dotlingo.image_layout import OcrUnavailable, place_scan_groups, render_pdf_page
+    except ImportError as exc:
+        raise DocumentError("Для сборки скана не хватает библиотек pdf.") from exc
+
+    by_page: dict[int, list[tuple[list[Any], str]]] = {}
+    for block in parsed.blocks:
+        locator = block.locator
+        if locator.get("layout") != "scan":
+            continue
+        try:
+            page = int(locator.get("page") or 0)
+        except (TypeError, ValueError):
+            continue
+        lines = _lines_from_locator(locator)
+        if not lines:
+            continue
+        translated = _translation_for(block, translations).strip()
+        if not block.translatable or not translated or translated == block.text.strip():
+            continue
+        by_page.setdefault(page, []).append((lines, translated))
+
+    writer = None
+    overflow: list[str] = []
+    for page in range(1, page_count + 1):
+        try:
+            image, width, height = render_pdf_page(source_path, page, scale)
+        except Exception as exc:
+            raise DocumentError(f"Не удалось открыть страницу {page} для сборки PDF.") from exc
+        groups = [lines for lines, _text in by_page.get(page, [])]
+        placed = {index: text for index, (_lines, text) in enumerate(by_page.get(page, []))}
+        try:
+            if groups:
+                image, leftover = place_scan_groups(image, groups, placed)
+                if leftover:
+                    overflow.append(leftover)
+        except OcrUnavailable as exc:
+            raise DocumentError(str(exc)) from exc
+        if writer is None:
+            writer = canvas.Canvas(str(destination), pagesize=(width, height))
+        else:
+            writer.showPage()
+            writer.setPageSize((width, height))
+        writer.drawImage(ImageReader(image), 0, 0, width=width, height=height, mask="auto")
+    if writer is None:
+        raise DocumentError("PDF не содержит страниц.")
+    if overflow:
+        _draw_scan_overflow(writer, "\n\n".join(overflow))
+    writer.save()
 
 
 def _export_pdf_layout(
@@ -1004,8 +1267,11 @@ def export_document(
             else:
                 _export_epub_plain(temporary, parsed, translations)
         elif suffix == ".pdf":
-            if parsed.format == "pdf" and parsed.metadata.get("pdfLayout") == "book":
+            layout = parsed.metadata.get("pdfLayout")
+            if parsed.format == "pdf" and layout == "book":
                 _export_pdf_layout(source_path, temporary, parsed, translations)
+            elif parsed.format == "pdf" and layout == "scan":
+                _export_pdf_scan(source_path, temporary, parsed, translations)
             else:
                 _export_pdf_text(temporary, parsed, translations)
         os.replace(temporary, destination)

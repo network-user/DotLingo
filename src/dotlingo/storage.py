@@ -429,7 +429,8 @@ class ProjectStore:
 
     def import_file(self, path: Path) -> DocumentRecord:
         path = Path(path)
-        parsed = import_document(path)
+        source_lang = str(self.project.get("source_lang") or "")
+        parsed = import_document(path, ocr_lang=source_lang or None)
         doc_id = str(uuid.uuid4())
         source_rel = Path("source") / f"{doc_id}{path.suffix.lower()}"
         destination = self.root / source_rel

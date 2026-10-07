@@ -13,6 +13,8 @@ if find_spec("llama_cpp") is None:
     raise RuntimeError("llama-cpp-python is required in the build environment; run deploy/windows/build.ps1")
 if find_spec("pypdf") is None:
     raise RuntimeError("pypdf is required in the build environment; run deploy/windows/build.ps1")
+if find_spec("winocr") is None:
+    raise RuntimeError("winocr is required in the build environment; run deploy/windows/build.ps1")
 
 llama_datas, llama_binaries, llama_hidden = collect_all("llama_cpp")
 pypdf_datas, pypdf_binaries, pypdf_hidden = collect_all("pypdf")
@@ -20,6 +22,7 @@ docx_datas, docx_binaries, docx_hidden = collect_all("docx")
 webview_datas, webview_binaries, webview_hidden = collect_all("webview")
 clr_datas, clr_binaries, clr_hidden = collect_all("clr_loader")
 pythonnet_datas, pythonnet_binaries, pythonnet_hidden = collect_all("pythonnet")
+winocr_datas, winocr_binaries, winocr_hidden = collect_all("winocr")
 
 datas = (
     llama_datas
@@ -28,13 +31,22 @@ datas = (
     + webview_datas
     + clr_datas
     + pythonnet_datas
+    + winocr_datas
     + [
         (str(src_root / "dotlingo" / "models.json"), "dotlingo"),
         (str(src_root / "dotlingo" / "assets"), "dotlingo/assets"),
         (str(src_root / "dotlingo" / "web"), "dotlingo/web"),
     ]
 )
-binaries = llama_binaries + pypdf_binaries + docx_binaries + webview_binaries + clr_binaries + pythonnet_binaries
+binaries = (
+    llama_binaries
+    + pypdf_binaries
+    + docx_binaries
+    + webview_binaries
+    + clr_binaries
+    + pythonnet_binaries
+    + winocr_binaries
+)
 hiddenimports = (
     llama_hidden
     + pypdf_hidden
@@ -42,6 +54,18 @@ hiddenimports = (
     + webview_hidden
     + clr_hidden
     + pythonnet_hidden
+    + winocr_hidden
+    + [
+        "winocr",
+        "winrt.windows.media.ocr",
+        "winrt.windows.globalization",
+        "winrt.windows.storage.streams",
+        "winrt.windows.graphics.imaging",
+        "winrt.windows.foundation",
+        "winrt.windows.foundation.collections",
+        "winrt.system",
+        "dotlingo.image_layout",
+    ]
     + [
         "dotlingo.app",
         "dotlingo.api",
