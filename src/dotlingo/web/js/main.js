@@ -267,6 +267,8 @@ async function initBridgeData() {
     translateContext: prefs?.translate_context || '',
     translateGlossary: prefs?.translate_glossary !== false,
     translateSurface: prefs?.translate_surface === 'text' ? 'text' : 'file',
+    updateCheckEnabled: prefs?.update_check_enabled !== false,
+    updateAutoPrompt: prefs?.update_auto_prompt !== false,
     translateReady: true,
     uiScale: clampPercent(prefs?.ui_scale, UI_SCALE_MIN, UI_SCALE_MAX, SCALE_DEFAULT),
     textScale: clampPercent(prefs?.text_scale, TEXT_SCALE_MIN, TEXT_SCALE_MAX, SCALE_DEFAULT),
@@ -369,6 +371,44 @@ const pushHandlers = {
   },
   convert_done(payload) {
     store.emit('convert_done', payload);
+  },
+  update_status(payload) {
+    store.set('updateStatus', payload);
+    store.emit('update_status', payload);
+    if (!payload || payload.busy) return;
+    if (payload.restartRequired) {
+      components.toast(
+        payload.message || 'Обновление применено. Перезапустите DotLingo.',
+        'success',
+        8000,
+      );
+      return;
+    }
+    if (payload.prompt === false) return;
+    if (payload.needsConfirmDirty) {
+      components.toast(
+        payload.message || 'В клоне есть локальные правки. Подтвердите обновление в настройках.',
+        'warning',
+        8000,
+      );
+      return;
+    }
+    if (payload.available) {
+      components.toast(
+        payload.message || 'На ветке main есть новая версия. Откройте Настройки, чтобы обновить.',
+        'info',
+        8000,
+      );
+      return;
+    }
+    if (
+      payload.notify
+      && payload.ok === false
+      && payload.message
+      && !String(payload.message).toLowerCase().includes('отмен')
+    ) {
+      components.toast(payload.message, 'error', 7000);
+    }
   },
 };
 

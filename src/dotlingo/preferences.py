@@ -28,6 +28,8 @@ DEFAULTS: dict[str, Any] = {
     "translate_context": "",
     "translate_glossary": True,
     "translate_surface": "file",
+    "update_check_enabled": True,
+    "update_auto_prompt": True,
 }
 
 

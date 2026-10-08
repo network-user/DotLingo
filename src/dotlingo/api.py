@@ -169,6 +169,89 @@ def _err(message: str, code: str = "error") -> dict[str, Any]:
     return {"ok": False, "error": str(message), "code": code}
 
 
+def _fresh_update_view() -> dict[str, Any]:
+    return {
+        "busy": False,
+        "phase": "idle",
+        "supported": False,
+        "available": False,
+        "dirty": False,
+        "needsConfirmDirty": False,
+        "restartRequired": False,
+        "current": "",
+        "remoteTip": "",
+        "behind": 0,
+        "appVersion": "",
+        "repoRoot": "",
+        "message": "",
+        "ok": True,
+        "notify": False,
+        "prompt": True,
+    }
+
+
+def _check_failed(message: str) -> bool:
+    return message.startswith(("git недоступен", "Не удалось", "Ветка "))
+
+
+def _view_from_status(status: Any, **extra: Any) -> dict[str, Any]:
+    data = status.as_map()
+    message = str(data.get("message") or "")
+    failed = _check_failed(message)
+    view = _fresh_update_view()
+    view.update(
+        {
+            "supported": bool(data.get("supported")),
+            "available": bool(data.get("available")),
+            "dirty": bool(data.get("dirty")),
+            "current": str(data.get("current") or ""),
+            "remoteTip": str(data.get("remote_tip") or ""),
+            "behind": int(data.get("behind") or 0),
+            "appVersion": str(data.get("app_version") or ""),
+            "repoRoot": str(data.get("repo_root") or ""),
+            "message": message,
+            "ok": not failed,
+            "phase": "error" if failed else "ready",
+        }
+    )
+    view.update(extra)
+    return view
+
+
+def _view_from_apply(result: dict[str, Any], **extra: Any) -> dict[str, Any]:
+    message = str(result.get("message") or "")
+    needs_confirm = bool(result.get("needs_confirm_dirty"))
+    ok = bool(result.get("ok"))
+    if needs_confirm:
+        phase = "confirm"
+    elif ok:
+        phase = "ready"
+    else:
+        phase = "error"
+    view = _fresh_update_view()
+    view.update(
+        {
+            "ok": ok,
+            "supported": bool(result.get("supported")),
+            "available": bool(result.get("available")),
+            "dirty": bool(result.get("dirty")),
+            "needsConfirmDirty": needs_confirm,
+            "restartRequired": bool(result.get("restart_required")),
+            "current": str(result.get("current") or ""),
+            "remoteTip": str(result.get("remote_tip") or ""),
+            "behind": int(result.get("behind") or 0),
+            "appVersion": str(result.get("app_version") or ""),
+            "repoRoot": str(result.get("repo_root") or ""),
+            "message": message,
+            "busy": False,
+            "phase": phase,
+            "notify": True,
+        }
+    )
+    view.update(extra)
+    return view
+
+
 _BLOCKED_OPEN_SUFFIXES = {
     ".bat",
     ".cmd",
@@ -497,6 +580,9 @@ class Api:
         self._hardware_checking = False
         self._runtime_installing = False
         self._scratch = ScratchTranslator(self.models_dir, self._push, self._document_busy)
+        self._update_cancel = threading.Event()
+        self._update_check_started = False
+        self._update_view = _fresh_update_view()
         self._converted: set[Path] = set()
         self._granted_files: set[Path] = set()
         self._granted_dirs: set[Path] = set()
@@ -773,6 +859,10 @@ class Api:
             self._set_preference("ui_scale", _layout_span(prefs["ui_scale"], 75, 160, 100))
         if "text_scale" in prefs:
             self._set_preference("text_scale", _layout_span(prefs["text_scale"], 75, 180, 100))
+        if "update_check_enabled" in prefs:
+            self._set_preference("update_check_enabled", bool(prefs["update_check_enabled"]))
+        if "update_auto_prompt" in prefs:
+            self._set_preference("update_auto_prompt", bool(prefs["update_auto_prompt"]))
         self._save_translate_preferences(prefs)
         return _ok(dict(self._preferences))
 
@@ -2412,6 +2502,178 @@ class Api:
             }
         )
 
+    # ------------------------------------------------------------------ updates
+
+    def _publish_update(self, view: dict[str, Any]) -> None:
+        view["prompt"] = bool(self._preferences.get("update_auto_prompt", True))
+        self._update_view = view
+        self._push("update_status", dict(view))
+
+    def _update_blocked(self) -> str | None:
+        scratch_busy = bool(getattr(self._scratch, "_busy", False))
+        if self._document_busy() or self._market_busy or self._runtime_installing or scratch_busy:
+            return "Дождитесь окончания текущей операции, затем обновите приложение."
+        return None
+
+    def getUpdateStatus(self) -> dict[str, Any]:
+        view = dict(self._update_view)
+        if not view.get("appVersion"):
+            from dotlingo.updater import app_version
+
+            view["appVersion"] = app_version()
+        view["prompt"] = bool(self._preferences.get("update_auto_prompt", True))
+        return _ok(view)
+
+    def checkForUpdate(self) -> dict[str, Any]:
+        """Фоновая сверка с origin/main. Диск не меняет."""
+
+        if self._update_view.get("busy"):
+            return _ok(dict(self._update_view))
+        self._begin_check(notify=True)
+        return _ok(dict(self._update_view))
+
+    def applyUpdate(self) -> dict[str, Any]:
+        """Сброс к origin/main и pip install -e ".[pdf]". Грязное дерево просит подтверждение."""
+
+        blocked = self._update_blocked()
+        if blocked:
+            return _err(blocked)
+        return self._start_apply(allow_dirty=False)
+
+    def confirmApplyUpdate(self) -> dict[str, Any]:
+        """То же, что applyUpdate, но сбрасывает локальные правки (reset --hard)."""
+
+        blocked = self._update_blocked()
+        if blocked:
+            return _err(blocked)
+        return self._start_apply(allow_dirty=True)
+
+    def cancelUpdate(self) -> dict[str, Any]:
+        if not self._update_view.get("busy"):
+            return _ok(dict(self._update_view))
+        self._update_cancel.set()
+        self._publish_update(
+            {
+                **self._update_view,
+                "message": "Отменяем обновление…",
+                "busy": True,
+            }
+        )
+        return _ok(dict(self._update_view))
+
+    def restartAfterUpdate(self) -> dict[str, Any]:
+        """Запустить новый процесс из клона и закрыть текущее окно."""
+
+        from dotlingo.updater import launch_restart
+
+        if not launch_restart():
+            return _err("Не удалось перезапустить. Закройте приложение и откройте снова.")
+        self.permit_close()
+        closer = self._window_closer
+        if closer is not None:
+            try:
+                closer()
+            except Exception:
+                pass
+        return _ok({"restarting": True})
+
+    def schedule_startup_update_check(self, delay_s: float = 12.0) -> None:
+        """Одна проверка после старта окна. Применение остаётся за кнопкой."""
+
+        if self._update_check_started:
+            return
+        if not bool(self._preferences.get("update_check_enabled", True)):
+            return
+        self._update_check_started = True
+
+        def kick() -> None:
+            if not bool(self._preferences.get("update_check_enabled", True)):
+                return
+            if self._closing or self._update_blocked():
+                timer = threading.Timer(15.0, kick)
+                timer.daemon = True
+                timer.start()
+                return
+            self._begin_check(notify=False)
+
+        timer = threading.Timer(max(0.0, float(delay_s)), kick)
+        timer.daemon = True
+        timer.start()
+
+    def _begin_check(self, *, notify: bool) -> None:
+        self._update_cancel = threading.Event()
+        self._publish_update(
+            {
+                **self._update_view,
+                "busy": True,
+                "phase": "check",
+                "message": "Проверяем обновления…",
+                "ok": True,
+                "notify": notify,
+                "needsConfirmDirty": False,
+            }
+        )
+
+        def run() -> None:
+            from dotlingo.updater import check_update
+
+            try:
+                status = check_update(cancel=self._update_cancel)
+                view = _view_from_status(status, notify=notify, busy=False)
+                self._publish_update(view)
+            except Exception as exc:
+                self._publish_update(
+                    {
+                        **self._update_view,
+                        "busy": False,
+                        "phase": "error",
+                        "ok": False,
+                        "notify": notify,
+                        "available": False,
+                        "message": str(exc),
+                    }
+                )
+
+        self._spawn(run, "update-check")
+
+    def _start_apply(self, *, allow_dirty: bool) -> dict[str, Any]:
+        if self._update_view.get("busy"):
+            return _ok(dict(self._update_view))
+        self._update_cancel = threading.Event()
+        self._publish_update(
+            {
+                **self._update_view,
+                "busy": True,
+                "phase": "apply",
+                "message": "Обновляем из git…",
+                "ok": True,
+                "notify": True,
+                "needsConfirmDirty": False,
+            }
+        )
+
+        def run() -> None:
+            from dotlingo.updater import apply_update
+
+            try:
+                result = apply_update(allow_dirty=allow_dirty, cancel=self._update_cancel)
+                self._publish_update(_view_from_apply(result))
+            except Exception as exc:
+                self._publish_update(
+                    {
+                        **self._update_view,
+                        "busy": False,
+                        "phase": "error",
+                        "ok": False,
+                        "notify": True,
+                        "restartRequired": False,
+                        "message": str(exc),
+                    }
+                )
+
+        self._spawn(run, "update-apply")
+        return _ok(dict(self._update_view))
+
     # ------------------------------------------------------------------ shutdown
 
     def finishClose(self) -> dict[str, Any]:
@@ -2424,6 +2686,7 @@ class Api:
 
     def closeGracefully(self) -> dict[str, Any]:
         self._closing = True
+        self._update_cancel.set()
         with self._lock:
             cancel = self._download_cancel
         if cancel is not None:

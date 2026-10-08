@@ -141,6 +141,86 @@ def test_preferences_roundtrip(tmp_path: Path) -> None:
     assert result["data"]["theme"] == "light"
 
 
+def test_update_preferences_roundtrip(tmp_path: Path) -> None:
+    api = _make_api(tmp_path)
+    assert api.getPreferences()["data"]["update_check_enabled"] is True
+    assert api.getPreferences()["data"]["update_auto_prompt"] is True
+    saved = api.setPreferences({"update_check_enabled": False, "update_auto_prompt": False})
+    assert saved["ok"] is True
+    assert saved["data"]["update_check_enabled"] is False
+    assert saved["data"]["update_auto_prompt"] is False
+
+
+def test_check_for_update_pushes_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dotlingo import updater
+
+    api = _make_api(tmp_path, sync=True)
+    pushed: list[tuple[str, dict]] = []
+    api._push = lambda name, payload: pushed.append((name, payload))  # noqa: SLF001
+
+    def fake_check(*_args, **_kwargs):
+        return updater.UpdateStatus(
+            available=True,
+            supported=True,
+            repo_root="R",
+            remote="origin",
+            branch="main",
+            current="aaaaaaa",
+            remote_tip="bbbbbbb",
+            behind=2,
+            dirty=False,
+            app_version="0.1.0",
+            message="Доступна новая версия на origin/main (2 коммит(ов)).",
+        )
+
+    monkeypatch.setattr(updater, "check_update", fake_check)
+    result = api.checkForUpdate()
+    assert result["ok"] is True
+    assert result["data"]["available"] is True
+    assert result["data"]["behind"] == 2
+    assert result["data"]["notify"] is True
+    assert pushed[-1][0] == "update_status"
+    assert pushed[-1][1]["remoteTip"] == "bbbbbbb"
+
+
+def test_apply_update_waits_until_translation_finishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    api = _make_api(tmp_path, sync=True)
+    monkeypatch.setattr(api, "_document_busy", lambda: True)
+    result = api.applyUpdate()
+    assert result["ok"] is False
+    assert "Дождитесь" in result["error"]
+
+
+def test_apply_update_asks_before_discarding_edits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dotlingo import updater
+
+    api = _make_api(tmp_path, sync=True)
+
+    def fake_apply(*_args, **_kwargs):
+        return {
+            "ok": False,
+            "needs_confirm_dirty": True,
+            "supported": True,
+            "available": True,
+            "dirty": True,
+            "restart_required": False,
+            "current": "aaaaaaa",
+            "remote_tip": "bbbbbbb",
+            "behind": 1,
+            "app_version": "0.1.0",
+            "repo_root": "R",
+            "message": "В рабочей копии есть локальные правки.",
+        }
+
+    monkeypatch.setattr(updater, "apply_update", fake_apply)
+    result = api.applyUpdate()
+    assert result["ok"] is True
+    assert result["data"]["needsConfirmDirty"] is True
+    assert result["data"]["phase"] == "confirm"
+
+
 def test_layout_preferences(tmp_path: Path) -> None:
     api = _make_api(tmp_path)
     saved = api.setPreferences({

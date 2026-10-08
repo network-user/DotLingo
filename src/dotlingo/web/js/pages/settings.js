@@ -151,10 +151,11 @@ async function refresh(host) {
     parts.push(noProjectPanel());
   }
 
-  parts.push(devicePanel(), appearancePanel(), dataPanel());
+  parts.push(devicePanel(), appearancePanel(), updatesPanel(), dataPanel());
 
   wrap.replaceChildren(...parts);
   void loadRuntimeOptions();
+  void loadUpdateStatus();
 
   if (!store.get('dataDirs')) {
     const [dirs, err] = await tryCall('getDataDirs');
@@ -813,6 +814,190 @@ function metricField(label, help, storeKey, prefKey, min, max) {
 }
 
 /* -------------------------------------------------------------------------
+ * Панель обновления клона
+ * ------------------------------------------------------------------------- */
+
+/** Последний статус сверки с origin/main. */
+let updateState = {
+  busy: false,
+  supported: false,
+  available: false,
+  dirty: false,
+  needsConfirmDirty: false,
+  restartRequired: false,
+  current: '',
+  remoteTip: '',
+  behind: 0,
+  appVersion: '',
+  message: '',
+  ok: true,
+};
+
+/** Записать push или ответ моста в локальное состояние панели. */
+function applyUpdatePayload(payload) {
+  if (!payload) return;
+  updateState = {
+    busy: Boolean(payload.busy),
+    supported: Boolean(payload.supported),
+    available: Boolean(payload.available),
+    dirty: Boolean(payload.dirty),
+    needsConfirmDirty: Boolean(payload.needsConfirmDirty),
+    restartRequired: Boolean(payload.restartRequired),
+    current: payload.current || '',
+    remoteTip: payload.remoteTip || '',
+    behind: Number(payload.behind) || 0,
+    appVersion: payload.appVersion || '',
+    message: payload.message || '',
+    ok: payload.ok !== false,
+  };
+}
+
+/** Строка статуса: версия, сообщение проверки или заглушка. */
+function updateStatusText() {
+  const version = updateState.appVersion ? `v${updateState.appVersion}` : '';
+  if (updateState.message) return [version, updateState.message].filter(Boolean).join(' · ');
+  return version || 'Проверка ещё не запускалась';
+}
+
+/** Перерисовать тело панели, не трогая форму проекта. */
+function paintUpdates(section) {
+  const state = updateState;
+  const checkEnabled = store.get('updateCheckEnabled') !== false;
+  const promptEnabled = store.get('updateAutoPrompt') !== false;
+  const updateLabel = state.needsConfirmDirty ? 'Сбросить правки и обновить' : 'Обновить';
+  const canUpdate = !state.busy && (state.supported || state.available || state.needsConfirmDirty);
+
+  section.replaceChildren(
+    el('header', { class: 'panel__header' }, [
+      el('div', {}, [el('h2', { class: 'panel__title', text: 'Обновления' })]),
+    ]),
+    el('p', {
+      class: 'st-muted',
+      text: 'Клон сверяется с веткой main. При запуске проверка только смотрит, есть ли новые коммиты. Кнопка забирает origin/main (fetch и reset --hard) и ставит пакет заново. Проекты и модели в папке данных не меняются. Локальные правки сбрасываются после подтверждения. Установленный Setup.exe так не обновляется.',
+    }),
+    el('p', { class: 'st-hw__note', text: updateStatusText() }),
+    el('label', { class: 'st-check-row' }, [
+      el('input', {
+        class: 'st-checkbox',
+        type: 'checkbox',
+        checked: checkEnabled,
+        onChange: (event) => {
+          const checked = event.target.checked;
+          store.set('updateCheckEnabled', checked);
+          call('setPreferences', { update_check_enabled: checked }).catch((error) => {
+            toast(error.message, 'error');
+          });
+        },
+      }),
+      el('span', { class: 'st-check-row__label', text: 'Проверять при запуске' }),
+    ]),
+    el('label', { class: 'st-check-row' }, [
+      el('input', {
+        class: 'st-checkbox',
+        type: 'checkbox',
+        checked: promptEnabled,
+        onChange: (event) => {
+          const checked = event.target.checked;
+          store.set('updateAutoPrompt', checked);
+          call('setPreferences', { update_auto_prompt: checked }).catch((error) => {
+            toast(error.message, 'error');
+          });
+        },
+      }),
+      el('span', { class: 'st-check-row__label', text: 'Показывать уведомление о новой версии' }),
+    ]),
+    el('div', { class: 'row row--wrap' }, [
+      button({
+        label: state.busy ? 'Работаем…' : 'Проверить',
+        variant: 'ghost',
+        size: 'sm',
+        disabled: state.busy,
+        onClick: () => void runUpdateCheck(),
+      }),
+      button({
+        label: updateLabel,
+        variant: 'primary',
+        size: 'sm',
+        disabled: !canUpdate,
+        onClick: () => void runUpdateApply(state.needsConfirmDirty),
+      }),
+      state.restartRequired
+        ? button({
+            label: 'Перезапустить',
+            variant: 'ghost',
+            size: 'sm',
+            disabled: state.busy,
+            onClick: () => void runUpdateRestart(),
+          })
+        : null,
+      state.busy
+        ? button({
+            label: 'Отмена',
+            variant: 'ghost',
+            size: 'sm',
+            onClick: () => void runUpdateCancel(),
+          })
+        : null,
+    ]),
+    el('p', {
+      class: 'st-data-note text-tertiary',
+      hidden: !(state.dirty && !state.needsConfirmDirty),
+      text: 'В клоне есть локальные изменения. Обновление их сотрёт, перед этим кнопка попросит подтверждение.',
+    }),
+  );
+}
+
+/** Панель «Обновления». */
+function updatesPanel() {
+  const cached = store.get('updateStatus');
+  if (cached) applyUpdatePayload(cached);
+  const section = el('section', { class: 'panel st-update' });
+  paintUpdates(section);
+  return section;
+}
+
+/** Подтянуть уже известный статус, если push пришёл до открытия страницы. */
+async function loadUpdateStatus() {
+  const [data, err] = await tryCall('getUpdateStatus');
+  if (err || !data || !pageHost?.isConnected) return;
+  applyUpdatePayload(data);
+  const panel = pageHost.querySelector('.st-update');
+  if (panel) paintUpdates(panel);
+}
+
+async function runUpdateCheck() {
+  try {
+    await call('checkForUpdate');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function runUpdateApply(confirmDirty) {
+  try {
+    await call(confirmDirty ? 'confirmApplyUpdate' : 'applyUpdate');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function runUpdateRestart() {
+  try {
+    await call('restartAfterUpdate');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function runUpdateCancel() {
+  try {
+    await call('cancelUpdate');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+/* -------------------------------------------------------------------------
  * Панель данных
  * ------------------------------------------------------------------------- */
 
@@ -914,13 +1099,19 @@ function wireHardwareEvents(host) {
       if (!host.isConnected) return;
       void refreshCatalog();
     }),
+    store.on('update_status', (payload) => {
+      applyUpdatePayload(payload);
+      if (!host.isConnected) return;
+      const panel = host.querySelector('.st-update');
+      if (panel) paintUpdates(panel);
+    }),
   ];
 }
 
 router.registerPage('settings', {
   title: 'Настройки',
-  subtitle: 'Тема, размер, языки проекта и папки.',
-  help: 'Контекст и правила уходят в запрос перевода. «Авто» не фиксирует исходный язык: перед переводом модель смотрит образец документа. Проверка устройства смотрит память, диск, процессор, NVIDIA и llama.cpp. Исходные файлы не перезаписываются.',
+  subtitle: 'Тема, размер, языки проекта, обновление и папки.',
+  help: 'Контекст и правила уходят в запрос перевода. «Авто» не фиксирует исходный язык: перед переводом модель смотрит образец документа. Проверка устройства смотрит память, диск, процессор, NVIDIA и llama.cpp. Исходные файлы не перезаписываются. Клон при запуске сверяется с origin/main, а обновление ставится кнопкой.',
   render: (host) => {
     render(host);
     wireHardwareEvents(host);

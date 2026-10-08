@@ -556,6 +556,7 @@ def _on_started(api: Api, window) -> None:
         api.resumeQueuedTasks()
     except Exception:
         traceback.print_exc()
+    api.schedule_startup_update_check()
 
 
 def _run_smoke_test(data_dir: Path | None) -> int:
@@ -572,6 +573,7 @@ def _run_smoke_test(data_dir: Path | None) -> int:
         ("glossary", api.listGlossary("ru")["ok"] is False or True),
         ("dirs", api.getDataDirs()["ok"] is True),
         ("tasks", api.listTasks()["ok"] is True),
+        ("update", api.getUpdateStatus()["ok"] is True),
     ]
     failed = [name for name, passed in checks if not passed]
     print(json.dumps({"ok": not failed, "failed": failed}, ensure_ascii=False))
