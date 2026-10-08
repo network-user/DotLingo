@@ -9,6 +9,13 @@
 
 <img src="docs/cover.svg" width="720" alt="DotLingo" />
 
+<!-- audit:start -->
+<p>
+  <a href="docs/audit/latest.md"><img src="https://img.shields.io/badge/security_audit-passed_with_warnings-dbab09?style=flat" alt="security audit passed with warnings - full, leaks + code" /></a>
+  <a href="docs/audit/2026-10-08-amber-ledger.md"><img src="https://img.shields.io/badge/date-2026--10--08-555?style=flat" alt="audit date" /></a>
+</p>
+<!-- audit:end -->
+
 DotLingo переводит документы локально на Windows. Оригинал хранится отдельной копией и не переписывается; перевод идёт через GGUF в отдельном процессе llama.cpp, очередь и тексты лежат в SQLite проекта. Окно открывает pywebview на Edge WebView2 и отдаёт веб-слой без сборки по локальному HTTP: ES-модули с `file://` не грузятся.
 
 ## Что внутри
@@ -52,7 +59,7 @@ python -m dotlingo
 | Собрать иконку | `python scripts/build_icon.py` |
 | Собрать Windows Setup.exe | `.\deploy\windows\build.ps1` |
 
-Сборка Setup.exe требует CPython 3.12 x64, CPU wheel `llama-cpp-python` и Inno Setup 6. Скрипт ставит `.[inference,pdf,build]`. Иконке нужен Pillow из того же extra `build`.
+Сборка Setup.exe требует CPython 3.12 x64, CPU wheel `llama-cpp-python` и Inno Setup 6. Скрипт ставит `.[pdf,build]`, затем закреплённое CPU-колесо после проверки SHA-256. Иконке нужен Pillow из того же extra `build`.
 
 ## Стек
 

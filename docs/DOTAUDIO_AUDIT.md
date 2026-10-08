@@ -1,6 +1,6 @@
 # Аудит DotAudio
 
-Проведён только для чтения в `C:\Users\frog2\PycharmProjects\DotAudio`. Код и файлы DotAudio не изменялись. В checkout были чужие untracked `.pytest-agent-*`/`.pytest-tmp-*`; они оставлены. Для `git status` использовался только одноразовый параметр `safe.directory`, глобальные git-настройки не менялись.
+Проведён только для чтения в `<checkout>\DotAudio`. Код и файлы DotAudio не изменялись. В checkout были чужие untracked `.pytest-agent-*`/`.pytest-tmp-*`; они оставлены. Для `git status` использовался только одноразовый параметр `safe.directory`, глобальные git-настройки не менялись.
 
 Проверены проектные правила и запрошенные пути: `AGENTS.md`; `src/dotaudio/qml/MainMvp.qml`, `Theme.js`, `SetupWizard.qml`, `ModelsPage.qml`, `Icon.qml`, `PillButton.qml`; `src/dotaudio/hardware.py`, `adapt.py`, `modelhub.py`, `model_registry.py`; `docs/ARCHITECTURE.md`, `PRODUCT.md`, `HANDOFF.md`; `deploy/install.ps1`, `deploy/update.ps1`.
 

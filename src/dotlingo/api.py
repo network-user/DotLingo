@@ -169,10 +169,41 @@ def _err(message: str, code: str = "error") -> dict[str, Any]:
     return {"ok": False, "error": str(message), "code": code}
 
 
+_BLOCKED_OPEN_SUFFIXES = {
+    ".bat",
+    ".cmd",
+    ".com",
+    ".dll",
+    ".exe",
+    ".js",
+    ".lnk",
+    ".msi",
+    ".ps1",
+    ".scr",
+    ".url",
+    ".vbs",
+}
+
+
 def _safe_stem(name: str) -> str:
     stem = Path(name).stem
     cleaned = "".join("-" if char in '<>:"/\\|?*' else char for char in stem).strip(" .")
     return cleaned[:80] or "translation"
+
+
+def _safe_target_lang(lang: str) -> str:
+    """Код языка из каталога. В имя файла не попадают слеши и точки пути."""
+    text = str(lang or "").strip()
+    if text not in LANGUAGES:
+        raise ValueError("Неизвестный язык перевода.")
+    return text
+
+
+def _inside_directory(folder: Path, candidate: Path) -> None:
+    root = folder.resolve()
+    resolved = candidate.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError("Путь результата выходит из каталога output.")
 
 
 def _stamp(value: str = "") -> str:
@@ -212,14 +243,16 @@ def _resolve_output_suffix(fmt: str, book: bool, requested: str) -> tuple[str, s
 
 def _versioned_output(store: ProjectStore, name: str, lang: str, suffix: str, stamp: str) -> Path:
     """Новый файл в output. Повтор в ту же секунду получает суффикс -2, -3."""
+    language = _safe_target_lang(lang)
     folder = store.root / "output"
     folder.mkdir(parents=True, exist_ok=True)
     stem = _safe_stem(name)
-    candidate = folder / f"{stem}.{lang}.{stamp}{suffix}"
+    candidate = folder / f"{stem}.{language}.{stamp}{suffix}"
     index = 2
     while candidate.exists():
-        candidate = folder / f"{stem}.{lang}.{stamp}-{index}{suffix}"
+        candidate = folder / f"{stem}.{language}.{stamp}-{index}{suffix}"
         index += 1
+    _inside_directory(folder, candidate)
     return candidate
 
 
@@ -465,6 +498,9 @@ class Api:
         self._runtime_installing = False
         self._scratch = ScratchTranslator(self.models_dir, self._push, self._document_busy)
         self._converted: set[Path] = set()
+        self._granted_files: set[Path] = set()
+        self._granted_dirs: set[Path] = set()
+        self._granted_writes: set[Path] = set()
         _arm_webview_file_drop()
         preferences = load_preferences(self.preferences_root)
         self._preferences = preferences
@@ -481,6 +517,94 @@ class Api:
     def set_window_closer(self, closer: Callable[[], None] | None) -> None:
         """Куда звать, когда книга уже закрылась и окно можно отпустить."""
         self._window_closer = closer
+
+    def _grant_file(self, path: str | Path) -> Path | None:
+        """Запомнить файл из диалога или сброса. Несуществующий путь не получает доступ."""
+        candidate = Path(path)
+        try:
+            if not candidate.is_file():
+                return None
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+        self._granted_files.add(resolved)
+        return resolved
+
+    def _grant_dir(self, path: str | Path) -> Path | None:
+        candidate = Path(path)
+        try:
+            if not candidate.is_dir():
+                return None
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+        self._granted_dirs.add(resolved)
+        return resolved
+
+    def _grant_write(self, path: str | Path) -> Path | None:
+        """Путь сохранения из диалога. Самого файла ещё может не быть."""
+        if not str(path).strip():
+            return None
+        try:
+            resolved = Path(path).resolve()
+        except OSError:
+            return None
+        self._granted_writes.add(resolved)
+        return resolved
+
+    def _require_granted_file(self, path: str | Path) -> Path:
+        candidate = Path(path)
+        try:
+            if not candidate.is_file():
+                raise ValueError("Файл не найден.")
+            resolved = candidate.resolve()
+        except OSError as exc:
+            raise ValueError("Файл не найден.") from exc
+        if resolved not in self._granted_files:
+            raise PermissionError("Файл не выбран в этом окне.")
+        return resolved
+
+    def _require_granted_write(self, path: str | Path) -> Path:
+        if not str(path).strip():
+            raise ValueError("Путь не указан.")
+        try:
+            resolved = Path(path).resolve()
+        except OSError as exc:
+            raise ValueError("Путь сохранения недоступен.") from exc
+        if resolved not in self._granted_writes:
+            raise PermissionError("Путь сохранения не выбран в этом окне.")
+        return resolved
+
+    def _require_granted_dir(self, path: str | Path) -> Path:
+        candidate = Path(path)
+        try:
+            if not candidate.is_dir():
+                raise ValueError("Папка не найдена.")
+            resolved = candidate.resolve()
+        except OSError as exc:
+            raise ValueError("Папка не найдена.") from exc
+        if resolved not in self._granted_dirs:
+            raise PermissionError("Папка не выбрана в этом окне.")
+        return resolved
+
+    def _allowed_directory(self, target: Path) -> bool:
+        try:
+            resolved = target.resolve()
+            projects = self.projects_dir.resolve()
+            allowed = {
+                projects,
+                self.models_dir.resolve(),
+                self.data_dir.resolve(),
+                *self._granted_dirs,
+            }
+        except OSError:
+            return False
+        if resolved in allowed:
+            return True
+        if projects not in resolved.parents:
+            return False
+        parts = resolved.relative_to(projects).parts
+        return len(parts) >= 2 and parts[1] == "output"
 
     def note_close_attempt(self) -> str:
         """allow - окно можно закрыть, wait - книга уже складывается, animate - начать кадр."""
@@ -855,7 +979,8 @@ class Api:
             for raw in paths:
                 path = Path(raw)
                 try:
-                    record = store.import_file(path)
+                    granted = self._require_granted_file(path)
+                    record = store.import_file(granted)
                     imported.append(
                         {
                             "id": record.id,
@@ -980,9 +1105,11 @@ class Api:
         store = self._active_store()
         if store is None:
             return _err("Сначала выберите проект.", "no_project")
-        destination = Path(dest_path)
         try:
+            destination = self._require_granted_write(dest_path)
             written = _write_translation(store, str(doc_id), str(target_lang), destination)
+        except PermissionError as exc:
+            return _err(str(exc), "not_allowed")
         except Exception as exc:
             return _err(f"Не удалось экспортировать: {exc}", "export_failed")
         self._push("export_done", {"ok": True, "path": str(written), "error": None})
@@ -1025,12 +1152,12 @@ class Api:
         lang = str(target_lang or "").strip()
         if not lang:
             return _err("Не выбран язык перевода.", "no_target")
-        suffix, note = _translation_suffix(
-            record.format,
-            parsed.metadata.get("pdfLayout") == "book",
-        )
-        destination = _versioned_output(store, record.name, lang, suffix, _stamp())
         try:
+            suffix, note = _translation_suffix(
+                record.format,
+                parsed.metadata.get("pdfLayout") == "book",
+            )
+            destination = _versioned_output(store, record.name, lang, suffix, _stamp())
             written = _write_translation(store, str(doc_id), lang, destination)
         except Exception as exc:
             return _err(f"Не удалось собрать файл: {exc}", "export_failed")
@@ -1721,9 +1848,12 @@ class Api:
     def importCustomModel(self, data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(data, dict):
             return _err("Некорректные данные модели.")
-        source = Path(str(data.get("sourcePath") or ""))
-        if not source.is_file():
+        try:
+            source = self._require_granted_file(str(data.get("sourcePath") or ""))
+        except ValueError:
             return _err("Файл модели не найден.", "not_found")
+        except PermissionError as exc:
+            return _err(str(exc), "not_allowed")
         name = str(data.get("name") or "").strip()
         if not name:
             return _err("Укажите название модели.", "empty_name")
@@ -1839,8 +1969,9 @@ class Api:
             return _ok(None)
         if not paths:
             return _ok(None)
-        chosen = paths[0] if isinstance(paths, (list, tuple)) else paths
-        return _ok(str(chosen))
+        chosen = str(paths[0] if isinstance(paths, (list, tuple)) else paths)
+        self._grant_file(chosen)
+        return _ok(chosen)
 
     def resolveImportPaths(self) -> dict[str, Any]:
         if self._window is None:
@@ -1855,7 +1986,10 @@ class Api:
             return _err(f"Не удалось открыть проводник: {exc}")
         if not paths:
             return _ok([])
-        return _ok([str(item) for item in paths])
+        chosen = [str(item) for item in paths]
+        for item in chosen:
+            self._grant_file(item)
+        return _ok(chosen)
 
     def resolveGGUFPath(self) -> dict[str, Any]:
         """Нативный диалог выбора локального GGUF-файла."""
@@ -1871,7 +2005,9 @@ class Api:
             return _err(f"Не удалось открыть проводник: {exc}")
         if not paths:
             return _ok(None)
-        return _ok(str(paths[0]) if isinstance(paths, (list, tuple)) else str(paths))
+        chosen = str(paths[0]) if isinstance(paths, (list, tuple)) else str(paths)
+        self._grant_file(chosen)
+        return _ok(chosen)
 
     def claimDroppedFile(self, name: str) -> dict[str, Any]:
         """Путь файла, который только что перетащили в окно. Совпадение по имени."""
@@ -1881,7 +2017,9 @@ class Api:
             base, full = item
             if str(base) == wanted or Path(str(full)).name == wanted:
                 paths.remove(item)
-                return _ok(str(full))
+                text = str(full)
+                self._grant_file(text)
+                return _ok(text)
         return _ok(None)
 
     def resolveExportPath(self, default_name: str, allowed_extensions: list[str]) -> dict[str, Any]:
@@ -1906,6 +2044,7 @@ class Api:
         suffix = Path(chosen).suffix.lower()
         if suffix not in extensions:
             chosen = f"{chosen}{extensions[0]}"
+        self._grant_write(chosen)
         return _ok(chosen)
 
     def getExportExtensions(self, doc_id: str) -> dict[str, Any]:
@@ -1937,8 +2076,9 @@ class Api:
             return _ok(None)
         if not paths:
             return _ok(None)
-        chosen = paths[0] if isinstance(paths, (list, tuple)) else paths
-        return _ok(str(chosen))
+        chosen = str(paths[0] if isinstance(paths, (list, tuple)) else paths)
+        self._grant_dir(chosen)
+        return _ok(chosen)
 
     def inspectConversion(self, paths: list[str]) -> dict[str, Any]:
         """Прочитать файлы для конвертера, не записывая результат."""
@@ -1947,15 +2087,14 @@ class Api:
         for raw in paths or []:
             path = Path(str(raw))
             try:
-                if not path.is_file():
-                    raise DocumentError("Файл не найден.")
-                parsed = import_document(path)
-            except (DocumentError, OSError) as exc:
+                granted = self._require_granted_file(path)
+                parsed = import_document(granted)
+            except (DocumentError, OSError, ValueError) as exc:
                 errors.append({"name": path.name or str(raw), "error": str(exc)})
                 continue
             files.append(
                 {
-                    "path": str(path),
+                    "path": str(granted),
                     "name": path.name,
                     "format": parsed.format,
                     "title": parsed.title,
@@ -1982,9 +2121,14 @@ class Api:
         if suffix not in SUPPORTED_EXPORT:
             return _err("Этот формат конвертер не собирает.", "unsupported")
         folder_raw = str(data.get("directory") or "").strip()
-        folder = Path(folder_raw) if folder_raw else None
-        if folder is not None and not folder.is_dir():
-            return _err("Папка для результата не найдена.", "not_found")
+        folder: Path | None = None
+        if folder_raw:
+            try:
+                folder = self._require_granted_dir(folder_raw)
+            except ValueError:
+                return _err("Папка для результата не найдена.", "not_found")
+            except PermissionError as exc:
+                return _err(str(exc), "not_allowed")
 
         def work() -> None:
             written: list[dict[str, str]] = []
@@ -1997,9 +2141,10 @@ class Api:
                     {"index": index, "total": total, "name": source.name},
                 )
                 try:
-                    destination = converted_destination(source, suffix, folder)
-                    convert_document(source, destination)
-                except (DocumentError, OSError) as exc:
+                    granted = self._require_granted_file(source)
+                    destination = converted_destination(granted, suffix, folder)
+                    convert_document(granted, destination)
+                except (DocumentError, OSError, ValueError) as exc:
                     errors.append({"name": source.name or raw, "error": str(exc)})
                     continue
                 resolved = destination.resolve()
@@ -2023,6 +2168,16 @@ class Api:
         if not target.exists():
             return _err("Файл не найден.", "not_found")
         try:
+            if target.is_dir():
+                if not self._allowed_directory(target):
+                    return _err("Эту папку открывать нельзя.", "not_allowed")
+            else:
+                if target.suffix.lower() in _BLOCKED_OPEN_SUFFIXES:
+                    return _err("Этот тип файла открывать нельзя.", "blocked")
+                self._guard_export_file(path)
+        except ValueError as exc:
+            return _err(str(exc), "not_allowed")
+        try:
             if sys.platform == "win32" and target.is_file():
                 subprocess.run(["explorer", f"/select,{target}"], check=False)
             elif sys.platform == "win32":
@@ -2042,11 +2197,17 @@ class Api:
         target = Path(path)
         if not target.exists():
             return _err("Файл не найден.", "not_found")
+        if target.suffix.lower() in _BLOCKED_OPEN_SUFFIXES:
+            return _err("Этот тип файла открывать нельзя.", "blocked")
+        try:
+            guarded = self._guard_export_file(path)
+        except ValueError as exc:
+            return _err(str(exc), "not_allowed")
         try:
             if sys.platform == "win32":
-                os.startfile(str(target))  # noqa: S606
+                os.startfile(str(guarded))  # noqa: S606
             else:
-                webbrowser.open(target.as_uri())
+                webbrowser.open(guarded.as_uri())
         except OSError as exc:
             return _err(f"Не удалось открыть: {exc}")
         return _ok(None)
@@ -2193,8 +2354,11 @@ class Api:
 
     def readChatAttachment(self, path: str) -> dict[str, Any]:
         try:
-            return _ok(read_attachment(Path(path)))
-        except ValueError as exc:
+            granted = self._require_granted_file(path)
+            return _ok(read_attachment(granted))
+        except PermissionError as exc:
+            return _err(str(exc), "not_allowed")
+        except (ValueError, OSError) as exc:
             return _err(str(exc), "attachment")
 
     def dialogMeter(self, data: dict[str, Any]) -> dict[str, Any]:

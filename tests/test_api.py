@@ -63,6 +63,7 @@ def test_claim_dropped_file_returns_path(tmp_path: Path) -> None:
         _dnd_state["paths"] = saved
     assert result["ok"] is True
     assert result["data"] == r"D:\weights\model.gguf"
+    assert not api._granted_files  # noqa: SLF001 - несуществующий сброс не открывает чтение
 
 
 def _create_project(api: Api, model_id: str = "", targets: list[str] | None = None) -> dict:
@@ -79,6 +80,7 @@ def _create_project(api: Api, model_id: str = "", targets: list[str] | None = No
 def _import_txt(api: Api, tmp_path: Path, name: str = "sample.txt", text: str = "") -> None:
     source = tmp_path / name
     source.write_text(text or "Первый абзац текста.\n\nВторой абзац текста.", encoding="utf-8")
+    api._grant_file(source)  # noqa: SLF001 - диалог в тесте заменён прямым разрешением
     result = api.importDocuments([str(source)])
     assert result["ok"] is True
 
@@ -325,6 +327,7 @@ def test_document_import_edit_export(tmp_path: Path) -> None:
 
     destination = tmp_path / "export" / "sample.translated-ru.txt"
     destination.parent.mkdir(exist_ok=True)
+    api._grant_write(destination)  # noqa: SLF001 - путь сохранения выбран диалогом
     exported = api.exportDocument(doc_id, "ru", str(destination))
     assert exported["ok"] is True
     assert destination.read_text(encoding="utf-8").strip() != ""
@@ -400,6 +403,8 @@ def test_enqueue_stores_sheet_choices(tmp_path: Path, monkeypatch: pytest.Monkey
     assert api.saveEdit(doc_id, order, "Строка из быстрого меню.", "ru")["ok"] is True
     monkeypatch.setattr(api_module, "installed", lambda m, root=None: True)
     monkeypatch.setattr(api_module, "_runtime_available", lambda: True)
+    monkeypatch.setattr(api_module.TaskQueue, "start", lambda self: None)
+    monkeypatch.setattr(api_module.TaskQueue, "enqueue", lambda self, task_id: None)
 
     result = api.enqueueTranslation({
         "documentIds": [doc_id],
@@ -563,6 +568,7 @@ def test_convert_writes_beside_the_source_without_touching_it(tmp_path: Path) ->
     source.write_text("Одна строка письма.", encoding="utf-8")
     original = source.read_bytes()
     api = _make_api(tmp_path / "data", sync=True)
+    api._grant_file(source)  # noqa: SLF001
     inspected = api.inspectConversion([str(source)])
     assert inspected["ok"] is True
     assert inspected["data"]["files"][0]["blocks"] == 1
@@ -577,6 +583,85 @@ def test_convert_writes_beside_the_source_without_touching_it(tmp_path: Path) ->
     assert "Одна строка письма." in preview["data"]["text"]
     targets = api.listConversionTargets()["data"]
     assert {item["suffix"] for item in targets} >= {".html", ".fb2", ".odt", ".docx", ".json"}
+
+
+def test_ungranted_import_and_sibling_path_do_not_read_the_file(tmp_path: Path) -> None:
+    api = _make_api(tmp_path, sync=True)
+    _create_project(api)
+    source = tmp_path / "secret.txt"
+    sibling = tmp_path / "other.txt"
+    source.write_text("секрет", encoding="utf-8")
+    sibling.write_text("сосед", encoding="utf-8")
+    events: list[tuple[str, dict]] = []
+    api._push = lambda name, payload: events.append((name, payload))  # noqa: SLF001
+    started = api.importDocuments([str(source)])
+    assert started["ok"] is True
+    assert events[-1][0] == "documents_imported"
+    assert events[-1][1]["imported"] == []
+    assert api.listDocuments()["data"] == []
+
+    api._grant_file(source)  # noqa: SLF001
+    looked = api.inspectConversion([str(sibling), str(source)])
+    assert looked["data"]["files"][0]["path"] == str(source.resolve())
+    assert looked["data"]["errors"][0]["name"] == "other.txt"
+
+
+def test_publish_rejects_a_path_hidden_in_the_language(tmp_path: Path) -> None:
+    api = _make_api(tmp_path, sync=True)
+    _create_project(api)
+    _import_txt(api, tmp_path)
+    doc_id = api.listDocuments()["data"][0]["id"]
+    outside = tmp_path / "pwn.txt"
+    published = api.publishTranslation(doc_id, r"..\..\..\..\pwn")
+    assert published["ok"] is False
+    assert not outside.exists()
+    output = api.projects_dir / api.active_project_id / "output"
+    assert not any(output.rglob("*")) if output.exists() else True
+
+
+def test_open_path_does_not_start_an_outside_or_executable_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _make_api(tmp_path)
+    started: list[str] = []
+    monkeypatch.setattr(os, "startfile", lambda path: started.append(str(path)), raising=False)
+    outside = tmp_path / "note.txt"
+    outside.write_text("чужой", encoding="utf-8")
+    refused = api.openPath(str(outside))
+    assert refused["ok"] is False
+    program = tmp_path / "tool.exe"
+    program.write_bytes(b"MZ")
+    blocked = api.openPath(str(program))
+    assert blocked["code"] == "blocked"
+    assert started == []
+
+
+def test_reveal_allows_project_data_and_refuses_an_outside_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _make_api(tmp_path)
+    opened: list[object] = []
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: opened.append(args))
+    monkeypatch.setattr(os, "startfile", lambda path: opened.append(path), raising=False)
+    api.projects_dir.mkdir(parents=True, exist_ok=True)
+    assert api.revealPath(str(api.projects_dir))["ok"] is True
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    refused = api.revealPath(str(outside))
+    assert refused["code"] == "not_allowed"
+    assert len(opened) == 1
+
+
+def test_convert_refuses_an_ungranted_output_directory(tmp_path: Path) -> None:
+    source = tmp_path / "letter.txt"
+    source.write_text("Строка.", encoding="utf-8")
+    folder = tmp_path / "out"
+    folder.mkdir()
+    api = _make_api(tmp_path / "data", sync=True)
+    api._grant_file(source)  # noqa: SLF001
+    refused = api.convertDocuments({"paths": [str(source)], "suffix": ".html", "directory": str(folder)})
+    assert refused["code"] == "not_allowed"
+    assert not (folder / "letter.html").exists()
 
 
 def test_inconclusive_gpu_probe_is_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,7 +6,7 @@
 
 1. Установить Python 3.12 x64 и Inno Setup 6 на машине сборки.
 2. В PowerShell из корня checkout выполнить `deploy\windows\build.ps1`.
-3. Скрипт создаёт новый каталог `build\windows\<timestamp>`, отдельный venv, ставит `.[inference,pdf,build]` и CPU wheel `llama-cpp-python==0.3.35`, собирает onedir через `deploy\windows\DotLingo.spec`, затем создаёт `Setup.exe` через ISCC. Скрипт не чистит существующие build каталоги.
+3. Скрипт создаёт новый каталог `build\windows\<timestamp>`, отдельный venv, ставит `.[pdf,build]`, затем через `run_install('cpu')` скачивает закреплённое CPU-колесо `llama-cpp-python==0.3.35`, сверяет SHA-256 и только после этого вызывает pip. Дальше собирает onedir через `deploy\windows\DotLingo.spec` и `Setup.exe` через ISCC. Скрипт не чистит существующие build каталоги.
 4. Артефакт ожидается в `build\windows\<timestamp>\installer\DotLingo-0.1.0-Setup.exe`.
 
 Нет измерения размера дистрибутива: он включает CPython, web-ресурсы `dotlingo/web`, рантайм pywebview (`webview`, `pythonnet`, `clr_loader` через `collect_all` в spec), `llama-cpp-python` и нативные llama.cpp DLL, python-docx, pypdf и приложение; `tkinter` исключён из бандла. Поэтому размер Setup нельзя честно назвать до успешной сборки. Inno Setup использует LZMA2; PyInstaller onedir выбран для прямого запуска нативных DLL и диагностики вместо однофайловой распаковки. Новые/неподписанные бинарники могут вызывать SmartScreen или эвристики антивируса; перед публикацией нужно проверять все файлы, подписывать Setup и EXE сертификатом организации и публиковать хеши. Подпись не гарантирует отсутствие предупреждений.

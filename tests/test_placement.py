@@ -75,9 +75,13 @@ def test_illegal_instruction_asks_for_the_cpu_build() -> None:
 
 
 def test_prepare_llama_env_registers_nvidia_pip_bins(tmp_path: Path, monkeypatch) -> None:
-    bin_dir = tmp_path / "nvidia" / "cublas" / "bin"
+    site = tmp_path / "site-packages"
+    bin_dir = site / "nvidia" / "cublas" / "bin"
     bin_dir.mkdir(parents=True)
+    decoy = tmp_path / "nvidia" / "cublas" / "bin"
+    decoy.mkdir(parents=True)
     monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.syspath_prepend(str(site))
     monkeypatch.delenv("CUDA_PATH", raising=False)
     added: list[str] = []
 
@@ -88,6 +92,7 @@ def test_prepare_llama_env_registers_nvidia_pip_bins(tmp_path: Path, monkeypatch
     monkeypatch.setattr(os, "add_dll_directory", remember, raising=False)
     prepare_llama_env()
     assert str(bin_dir) in added
+    assert str(decoy) not in added
 
 
 def test_prepare_llama_env_skips_dll_registration_off_windows(monkeypatch) -> None:

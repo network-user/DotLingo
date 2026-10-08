@@ -54,8 +54,26 @@ class ModelDownloadError(RuntimeError):
 
 def _trusted_https(url: str) -> bool:
     parsed = urllib.parse.urlparse(url)
-    host = parsed.hostname or ""
-    return parsed.scheme == "https" and (host == "huggingface.co" or host.endswith(".huggingface.co") or host.endswith(".hf.co"))
+    if parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return parsed.scheme == "https" and (
+        host == "huggingface.co" or host.endswith(".huggingface.co") or host.endswith(".hf.co")
+    )
+
+
+class _HuggingFaceRedirect(urllib.request.HTTPRedirectHandler):
+    """Чужой хост отклоняется до следующего соединения. Глобальный opener не меняется."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
+        if not _trusted_https(newurl):
+            raise ModelDownloadError("Перенаправление модели ведёт на неизвестный домен.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_model_request(request: urllib.request.Request, timeout: float) -> Any:
+    opener = urllib.request.build_opener(_HuggingFaceRedirect)
+    return opener.open(request, timeout=timeout)
 
 
 def _safe_file(parent: Path, name: str) -> Path:
@@ -170,7 +188,7 @@ def download_model(
         headers["Range"] = f"bytes={done}-"
     request = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _open_model_request(request, timeout=timeout) as response:
             if not _trusted_https(response.geturl()):
                 raise ModelDownloadError("Перенаправление модели ведёт на неизвестный домен.")
             status_code = getattr(response, "status", response.getcode())

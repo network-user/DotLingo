@@ -12,7 +12,10 @@ import tempfile
 import threading
 import time
 import traceback
+import urllib.parse
+import urllib.request
 from pathlib import Path
+from typing import Any
 
 import webview
 
@@ -81,6 +84,48 @@ def _webview2_installed() -> bool:
     return False
 
 
+def _trusted_microsoft_https(url: str) -> bool:
+    """Только HTTPS-хосты Microsoft, без логина и пароля в адресе."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host == "aka.ms":
+        return True
+    return host == "microsoft.com" or host.endswith(".microsoft.com")
+
+
+class _MicrosoftRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
+        if not _trusted_microsoft_https(newurl):
+            raise ValueError("Перенаправление загрузчика WebView2 ушло с доменов Microsoft.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _webview2_signature_is_microsoft(path: Path) -> bool:
+    """Authenticode: статус Valid и издатель Microsoft. Путь только в переменной окружения."""
+    script = (
+        "$signature = Get-AuthenticodeSignature -LiteralPath $env:DOTLINGO_SETUP\n"
+        "if ($null -eq $signature -or $signature.Status -ne 'Valid') { exit 2 }\n"
+        "$subject = [string]$signature.SignerCertificate.Subject\n"
+        "if ($subject -notlike '*Microsoft*') { exit 3 }\n"
+        "exit 0\n"
+    )
+    env = os.environ.copy()
+    env["DOTLINGO_SETUP"] = str(path)
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+    except OSError:
+        return False
+    return completed.returncode == 0
+
+
 def _ensure_webview2() -> bool:
     """Проверить WebView2; при отсутствии предложить авто-загрузку загрузчика."""
     if _webview2_installed():
@@ -97,16 +142,38 @@ def _ensure_webview2() -> bool:
         _message_box(WEBVIEW2_HINT, "DotLingo · нужен WebView2", 0x00000010)
         return False
 
+    launched = False
+    target: Path | None = None
     try:
-        import urllib.request
-
-        target = Path(tempfile.gettempdir()) / "MicrosoftEdgeWebview2Setup.exe"
+        if not _trusted_microsoft_https(WEBVIEW2_BOOTSTRAPPER):
+            raise ValueError("Адрес загрузчика WebView2 не входит в домены Microsoft.")
+        handle = tempfile.NamedTemporaryFile(
+            prefix="DotLingo-WebView2-", suffix=".exe", delete=False
+        )
+        handle.close()
+        target = Path(handle.name)
         print("Загружаю загрузчик WebView2…")
-        with urllib.request.urlopen(WEBVIEW2_BOOTSTRAPPER, timeout=60) as response, target.open(
-            "wb"
-        ) as stream:
-            stream.write(response.read())
+        request = urllib.request.Request(
+            WEBVIEW2_BOOTSTRAPPER, headers={"User-Agent": "DotLingo/0.1"}
+        )
+        opener = urllib.request.build_opener(_MicrosoftRedirect)
+        limit = 20 * 1024 * 1024
+        total = 0
+        with opener.open(request, timeout=60) as response, target.open("wb") as stream:
+            if not _trusted_microsoft_https(response.geturl()):
+                raise ValueError("Перенаправление загрузчика WebView2 ушло с доменов Microsoft.")
+            while True:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise ValueError("Загрузчик WebView2 больше ожидаемого размера.")
+                stream.write(chunk)
+        if not _webview2_signature_is_microsoft(target):
+            raise ValueError("Подпись загрузчика WebView2 не подтвердилась.")
         subprocess.Popen([str(target)], close_fds=True)
+        launched = True
         _message_box(
             "Загрузчик WebView2 запущен. Завершите установку и запустите DotLingo снова.",
             "DotLingo · установка WebView2",
@@ -118,6 +185,9 @@ def _ensure_webview2() -> bool:
             "DotLingo · нужен WebView2",
             0x00000010,
         )
+    finally:
+        if target is not None and not launched:
+            target.unlink(missing_ok=True)
     return False
 
 
@@ -414,6 +484,51 @@ def _release_webview_without_waiting(self) -> None:
         return
 
 
+def _local_server_port() -> int | None:
+    try:
+        import webview.http as http
+    except Exception:
+        return None
+    server = getattr(http, "global_server", None)
+    port = getattr(server, "port", None)
+    if isinstance(port, int) and port > 0:
+        return port
+    return None
+
+
+def _local_ui_navigation(uri: str, *, port: int | None) -> bool:
+    """Разрешены about:blank и HTTP локального сервера pywebview. file:, data: и чужие хосты нет."""
+    text = str(uri or "").strip()
+    if text.casefold() == "about:blank":
+        return True
+    parsed = urllib.parse.urlsplit(text)
+    if parsed.scheme != "http" or parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").casefold()
+    if host not in {"127.0.0.1", "localhost"} or port is None:
+        return False
+    try:
+        return parsed.port == port
+    except ValueError:
+        return False
+
+
+def _guarded_navigation_start(self, _sender: object, args: Any) -> None:
+    """Отменить переход, который не является локальным интерфейсом."""
+    try:
+        uri = str(args.Uri)
+    except Exception:
+        args.Cancel = True
+        return
+    if not _local_ui_navigation(uri, port=_local_server_port()):
+        args.Cancel = True
+        return
+    window = getattr(self, "pywebview_window", None)
+    if window is not None and getattr(window, "transparent", False):
+        self.form.Show()
+        self.form.Activate()
+
+
 def _install_webview_browser_arguments() -> None:
     """Вписать флаг в аргументы WebView2 до создания среды."""
     try:
@@ -423,6 +538,7 @@ def _install_webview_browser_arguments() -> None:
         return
     # Ждать процесс браузера при выходе нельзя: окно замирает на закрытой книге.
     edge.EdgeChrome.clear_user_data = _release_webview_without_waiting
+    edge.EdgeChrome.on_navigation_start = _guarded_navigation_start
     if getattr(edge.EdgeChrome, "_dotlingo_args", False):
         return
     edge.__dict__["_dotlingo_merge_arguments"] = _merge_browser_arguments

@@ -44,3 +44,13 @@ Desktop.ini
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+id_rsa
+id_rsa.pub
+secrets.json
+credentials.json
+service-account*.json

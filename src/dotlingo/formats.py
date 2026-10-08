@@ -226,6 +226,11 @@ def _docx_paragraphs(container: Any) -> list[Any]:
 def _import_docx(path: Path) -> ParsedDocument:
     from docx import Document
 
+    try:
+        with zipfile.ZipFile(path) as archive:
+            _safe_archive(archive)
+    except zipfile.BadZipFile as exc:
+        raise DocumentError("Файл DOCX повреждён или не является архивом.") from exc
     doc = Document(path)
     blocks: list[Block] = []
     section_id, section_title = "main", "Документ"

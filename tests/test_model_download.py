@@ -129,7 +129,7 @@ def test_download_resumes_partial_and_activates_only_after_integrity_check(tmp_p
             },
         )
 
-    monkeypatch.setattr(downloader.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(downloader, "_open_model_request", fake_urlopen)
     with pytest.raises(DownloadCancelled):
         download_model(model, tmp_path, cancel=cancel)
     staged = tmp_path / model["id"] / "tiny.gguf.part"
@@ -149,8 +149,8 @@ def test_bad_download_hash_never_activates_weight(tmp_path: Path, monkeypatch: p
     model = _model(payload)
     model["sha256"] = "0" * 64
     monkeypatch.setattr(
-        downloader.urllib.request,
-        "urlopen",
+        downloader,
+        "_open_model_request",
         lambda *_args, **_kwargs: FakeResponse(b"GGUF-expecteX", 200, {"Content-Length": "13"}),
     )
     with pytest.raises(ValueError, match="SHA-256"):
@@ -168,7 +168,7 @@ def test_download_stops_before_network_when_disk_space_is_insufficient(
     def unexpected_network(*_: Any, **__: Any) -> None:
         raise AssertionError("network should not be opened when disk space is insufficient")
 
-    monkeypatch.setattr(downloader.urllib.request, "urlopen", unexpected_network)
+    monkeypatch.setattr(downloader, "_open_model_request", unexpected_network)
     with pytest.raises(ModelDownloadError, match="свободного места"):
         download_model(model, tmp_path, cancel=DownloadCancellation())
 
@@ -178,8 +178,8 @@ def test_late_cancel_after_eof_prevents_model_activation(tmp_path: Path, monkeyp
     model = _model(payload)
     cancel = DownloadCancellation()
     monkeypatch.setattr(
-        downloader.urllib.request,
-        "urlopen",
+        downloader,
+        "_open_model_request",
         lambda *_args, **_kwargs: FakeResponse(
             payload,
             200,
@@ -240,3 +240,9 @@ def test_cancel_during_existing_model_verification_does_not_report_success(
 def test_download_requires_atomic_cancellation_token(tmp_path: Path) -> None:
     with pytest.raises(TypeError, match="atomic activation"):
         download_model(_model(b"GGUF-small-fixture"), tmp_path, cancel=threading.Event())
+
+
+def test_redirect_handler_rejects_a_foreign_host_before_connect() -> None:
+    handler = downloader._HuggingFaceRedirect()
+    with pytest.raises(ModelDownloadError, match="неизвестный домен"):
+        handler.redirect_request(None, None, 302, "Found", {}, "https://evil.example/file")

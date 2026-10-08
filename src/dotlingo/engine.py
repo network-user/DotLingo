@@ -95,6 +95,10 @@ def _drop_stale_cuda_path() -> None:
     )
 
 
+# Каталоги внутри site-packages/nvidia у колёс nvidia-cublas-cu12 и nvidia-cuda-runtime-cu12.
+_NVIDIA_RUNTIME_DIRS = frozenset({"cublas", "cuda_runtime"})
+
+
 def _register_nvidia_pip_dlls() -> None:
     if sys.platform != "win32" or not hasattr(os, "add_dll_directory"):
         return
@@ -102,7 +106,10 @@ def _register_nvidia_pip_dlls() -> None:
     for entry in sys.path:
         if not entry:
             continue
-        nvidia = Path(entry) / "nvidia"
+        root = Path(entry)
+        if root.name not in {"site-packages", "dist-packages"}:
+            continue
+        nvidia = root / "nvidia"
         if not nvidia.is_dir():
             continue
         try:
@@ -110,6 +117,8 @@ def _register_nvidia_pip_dlls() -> None:
         except OSError:
             continue
         for child in children:
+            if child.name not in _NVIDIA_RUNTIME_DIRS:
+                continue
             for folder in ("bin", "lib"):
                 path = child / folder
                 if not path.is_dir():

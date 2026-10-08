@@ -22,7 +22,7 @@
 
 **Решение:** первый доступный adapter поддерживает закреплённые GGUF Qwen3 через `llama-cpp-python==0.3.35` (build candidate). Веса скачиваются отдельно.
 
-**Причина:** один backend не работает со всеми форматами. Официальный upstream `llama-cpp-python` указывает, что pip install может компилировать C/C++/llama.cpp; также upstream публикует отдельные CPU/GPU wheel indexes и backend-specific requirements. Build script использует отдельный CPU wheel index и включает runtime в пакет. Никакой CUDA runtime не скачивается на клиент.
+**Причина:** один backend не работает со всеми форматами. Официальный upstream `llama-cpp-python` указывает, что pip install может компилировать C/C++/llama.cpp; также upstream публикует отдельные CPU/GPU wheel indexes и backend-specific requirements. Скрипт сборки ставит закреплённое CPU-колесо после проверки SHA-256 и включает runtime в пакет. CUDA в Setup.exe не скачивается.
 
 **Ограничение:** exact binding, interpreter, GGUF, CPU/GPU и PyInstaller DLL combination пока не запускались здесь. Windows model adapter остаётся experimental до smoke test. Setup.exe по-прежнему не скачивает CUDA. В исходном запуске пользователь может явно поставить колесо cu124 и пакеты `nvidia-cublas-cu12` и `nvidia-cuda-runtime-cu12`. Это не часть установщика.
 

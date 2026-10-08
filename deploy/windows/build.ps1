@@ -24,8 +24,20 @@ try {
     & $Python -m venv $venv
     if ($LASTEXITCODE -ne 0) { throw "Could not create the build virtual environment." }
     $buildPython = Join-Path $venv "Scripts\python.exe"
-    & $buildPython -m pip install --disable-pip-version-check --extra-index-url "https://abetlen.github.io/llama-cpp-python/whl/cpu" ".[inference,pdf,build]"
+    & $buildPython -m pip install --disable-pip-version-check ".[pdf,build]"
     if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed. See the llama-cpp-python Windows constraints in docs/BUILD_WINDOWS.md." }
+    $previousPythonPath = $env:PYTHONPATH
+    $env:PYTHONPATH = Join-Path $repo "src"
+    try {
+        & $buildPython -c "from dotlingo.runtime_install import run_install; run_install('cpu')"
+        if ($LASTEXITCODE -ne 0) { throw "Hashed CPU wheel install failed. See docs/BUILD_WINDOWS.md." }
+    } finally {
+        if ($null -eq $previousPythonPath) {
+            Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+        } else {
+            $env:PYTHONPATH = $previousPythonPath
+        }
+    }
 
     $appDist = Join-Path $appDistRoot "DotLingo"
     & $buildPython -m PyInstaller --noconfirm --clean --distpath $appDistRoot --workpath $workRoot (Join-Path $repo "deploy\windows\DotLingo.spec")

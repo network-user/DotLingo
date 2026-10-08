@@ -45,6 +45,14 @@ def test_markdown_export_keeps_heading_level_and_code_fence(tmp_path: Path) -> N
     assert "```py\nx = 1\n```" in content
 
 
+def test_docx_rejects_a_path_that_leaves_the_archive(tmp_path: Path) -> None:
+    source = tmp_path / "escape.docx"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("../evil.txt", "nope")
+    with pytest.raises(DocumentError, match="небезопасный путь"):
+        import_document(source)
+
+
 def test_docx_import_and_export_preserves_table_and_does_not_mutate_source(tmp_path: Path) -> None:
     docx = pytest.importorskip("docx")
     source = tmp_path / "sample.docx"
