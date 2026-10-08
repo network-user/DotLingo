@@ -104,6 +104,13 @@ function mockResponse(method) {
       };
     case 'detectHardware':
       return { ok: true, data: { started: true } };
+    case 'runtimeOptions':
+      return {
+        ok: true,
+        data: { frozen: true, recommended: null, choices: [] },
+      };
+    case 'installRuntime':
+      return { ok: false, error: 'В браузере runtime не ставится.', code: 'frozen' };
     case 'listDialogs':
       return { ok: true, data: [] };
     case 'loadDialog':

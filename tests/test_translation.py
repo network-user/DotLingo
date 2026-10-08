@@ -20,6 +20,7 @@ from dotlingo.task_queue import (
     chunk_limit,
     clean_model_output,
     context_char_budget,
+    finish_translation,
     fit_context_window,
     group_segments,
     output_repeats_context,
@@ -74,6 +75,38 @@ def test_hy_mt2_prompt_is_a_single_user_translation_request() -> None:
     assert "harbour" not in user[source_at:]
     assert "Дорога была долгой." not in user[source_at:]
     assert "ZXQTERM0000XZ" in user[source_at:]
+
+
+def test_hy_mt2_auto_source_does_not_ask_to_name_the_language() -> None:
+    system, user, _replacements = build_translation_prompt(
+        "Merhaba",
+        "auto → ru",
+        "Короткий рассказ.",
+        "",
+        [],
+        [],
+        style="hy-mt2",
+    )
+    assert system == ""
+    assert "Identify" not in user
+    assert "quoted" not in user.casefold()
+    assert "*[Background Information]*" in user
+    assert user.endswith("*[Source Text]*\nMerhaba")
+
+
+def test_plain_prompt_does_not_call_the_source_a_quotation() -> None:
+    system, user, _replacements = build_translation_prompt(
+        "Hello.",
+        "auto → ru",
+        "",
+        "",
+        [],
+        [],
+    )
+    assert "Identify the source language" not in system
+    assert "quoted" not in system.casefold()
+    assert "Translate the text into Russian." in system
+    assert user == "Hello."
 
 
 def test_hy_mt2_without_context_uses_the_default_template() -> None:
@@ -177,6 +210,15 @@ def test_scaffold_echo_keeps_the_translation_after_the_source_label() -> None:
     assert clean_model_output(
         "Please translate the following English text into Russian.\n«Привет»"
     ) == "«Привет»"
+    assert clean_model_output("*Tırnaklar*\nMerhaba, nasılsın?") == "Merhaba, nasılsın?"
+    assert clean_model_output("*Tırnaklar* Merhaba, nasılsın?") == "Merhaba, nasılsın?"
+    assert clean_model_output("**Kaynak metin**\n\nİyi günler.") == "İyi günler."
+    assert clean_model_output("*Она подумала и пошла дальше.*") == (
+        "*Она подумала и пошла дальше.*"
+    )
+    assert finish_translation('*Tırnaklar*\n"Привет"', "Hello", "ru") == "Привет"
+    assert finish_translation("«А что такое B?»", "«What is B?»", "ru") == "«А что такое B?»"
+    assert finish_translation("Привет\n\nHello", "Hello", "ru") == "Привет"
     repeated = "Алиса сидела на берегу и смотрела в книгу сестры без картинок. " * 2
     assert output_repeats_context(repeated, [("Alice sat.", repeated)], "")
     assert not output_repeats_context("Белый кролик достал часы из кармана жилета и побежал дальше по полю.", [("Alice sat.", repeated)], "")
@@ -364,9 +406,18 @@ def test_chat_runtime_check_ignores_missing_cuda_toolkit(monkeypatch) -> None:
 
 def test_gpu_layers_follow_free_vram_estimate() -> None:
     model = {"estimated_vram_gb": 6.5, "layer_count": 32}
-    assert gpu_layers_for(_snapshot(gpu_vram_free_gb=(7.5,)), model) == -1
-    partial = gpu_layers_for(_snapshot(gpu_vram_free_gb=(3.0,)), model)
-    assert 4 <= partial < 32
+    # 8.0 свободно покрывает 6.5 и запас 1.4.
+    assert gpu_layers_for(_snapshot(gpu_vram_free_gb=(8.0,)), model) == -1
+    # 7.5 - 1.4 = 6.1; 32 * 6.1 / 6.5 = 30 слоёв.
+    assert gpu_layers_for(_snapshot(gpu_vram_free_gb=(7.5,)), model) == 30
+    # 3.0 - 1.4 = 1.6; 32 * 1.6 / 6.5 = 7 слоёв.
+    assert gpu_layers_for(_snapshot(gpu_vram_free_gb=(3.0,)), model) == 7
     assert gpu_layers_for(_snapshot(gpu_vram_free_gb=(1.0,)), model) == 0
     assert gpu_layers_for(_snapshot(llama_gpu_offload_available=False), model) == 0
     assert gpu_layers_for(_snapshot(gpu_vram_free_gb=None), model) == 0
+    integrated = _snapshot(
+        gpu_names=("Intel UHD Graphics",),
+        gpu_vram_gb=(1.0,),
+        gpu_vram_free_gb=(0.8,),
+    )
+    assert gpu_layers_for(integrated, model) == 0

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import dotlingo.task_queue as task_queue_module
 from dotlingo.formats import export_document
+from dotlingo.hardware import HardwareSnapshot
 from dotlingo.storage import ProjectStore
 from dotlingo.task_queue import LIVE_TEXT_LIMIT, TaskQueue, build_chunks, clip_live_text
 
@@ -245,16 +246,29 @@ def test_short_blocks_share_one_call_and_the_story_memory_is_saved(tmp_path: Pat
     })
     monkeypatch.setattr(task_queue_module, "verify_model", lambda path, model: None)
     monkeypatch.setattr(task_queue_module, "model_path", lambda model, root: tmp_path / "model.gguf")
-    monkeypatch.setattr(task_queue_module, "_placement_snapshot", lambda root: object())
-    monkeypatch.setattr(task_queue_module, "gpu_layers_for", lambda snapshot, model: 0)
+    monkeypatch.setattr(
+        task_queue_module,
+        "_placement_snapshot",
+        lambda root: HardwareSnapshot(
+            cpu_threads=8,
+            ram_total_gb=32.0,
+            ram_available_gb=16.0,
+            disk_free_gb=40.0,
+            gpu_names=(),
+            gpu_vram_gb=(),
+            llama_runtime_available=True,
+            llama_gpu_offload_available=False,
+        ),
+    )
     monkeypatch.setattr(task_queue_module, "InferenceProcess", FakeEngine)
 
     queue = TaskQueue(store, tmp_path / "models")
     queue._execute(task_id)
     engine = queue._engine
     assert isinstance(engine, FakeEngine)
-    assert engine.kwargs["n_batch"] == 1024
-    assert engine.args[1] == 8192
+    assert engine.kwargs["n_batch"] == 256
+    assert engine.args[1] == 4096
+    assert engine.args[2] == 7
     assert len(engine.calls) == 7
     assert "only output the translated result" in engine.calls[0][1]
     second = engine.calls[1][1]

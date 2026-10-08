@@ -24,7 +24,7 @@
 
 **Причина:** один backend не работает со всеми форматами. Официальный upstream `llama-cpp-python` указывает, что pip install может компилировать C/C++/llama.cpp; также upstream публикует отдельные CPU/GPU wheel indexes и backend-specific requirements. Build script использует отдельный CPU wheel index и включает runtime в пакет. Никакой CUDA runtime не скачивается на клиент.
 
-**Ограничение:** exact binding, interpreter, GGUF, CPU/GPU и PyInstaller DLL combination пока не запускались здесь. Windows model adapter остаётся experimental до smoke test.
+**Ограничение:** exact binding, interpreter, GGUF, CPU/GPU и PyInstaller DLL combination пока не запускались здесь. Windows model adapter остаётся experimental до smoke test. Setup.exe по-прежнему не скачивает CUDA. В исходном запуске пользователь может явно поставить колесо cu124 и пакеты `nvidia-cublas-cu12` и `nvidia-cuda-runtime-cu12`. Это не часть установщика.
 
 Решение о каталоге Qwen3 заменено ADR-009. GPU offload больше не выключен жёстко: число слоёв считается по свободной VRAM, а нехватка памяти при старте возвращает задачу на CPU. Этот путь не измерен.
 

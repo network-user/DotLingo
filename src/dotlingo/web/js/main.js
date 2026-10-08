@@ -354,6 +354,16 @@ const pushHandlers = {
   market_refreshed(payload) {
     store.emit('market_refreshed', payload);
   },
+  runtime_install_progress(payload) {
+    store.emit('runtime_install_progress', payload);
+  },
+  runtime_install_done(payload) {
+    store.emit('runtime_install_done', payload);
+    components.toast(
+      payload?.ok ? 'Сборка llama.cpp установлена.' : (payload?.error || 'Не удалось поставить runtime.'),
+      payload?.ok ? 'success' : 'error',
+    );
+  },
   convert_progress(payload) {
     store.emit('convert_progress', payload);
   },

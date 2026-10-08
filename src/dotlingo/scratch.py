@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 import uuid
@@ -15,9 +14,9 @@ from dotlingo.engine import (
     InferenceProcess,
     model_runtime_options,
 )
-from dotlingo.hardware import detect, gpu_layers_for
+from dotlingo.hardware import detect, plan_placement
 from dotlingo.models import get_model, model_path, verify_model
-from dotlingo.task_queue import build_translation_prompt, clean_model_output
+from dotlingo.task_queue import build_translation_prompt, finish_translation, translation_missed
 
 ASK_SYSTEM = (
     "Answer the user's message directly. Use the same language as the user. "
@@ -50,6 +49,12 @@ def _conversation(text: str, previous: list[tuple[str, str]], context: str, atta
     return "\n".join(lines)
 
 
+def _source_text(text: str, attachment: str) -> str:
+    if attachment.strip():
+        return f"{attachment.strip()[:8000]}\n\n{text}".strip()
+    return text
+
+
 def prepare_turn(
     model: dict[str, Any],
     text: str,
@@ -72,9 +77,7 @@ def prepare_turn(
                 f"{transcript}",
             )
         return ASK_SYSTEM, transcript
-    source_text = text
-    if attachment.strip():
-        source_text = f"{attachment.strip()[:8000]}\n\n{text}".strip()
+    source_text = _source_text(text, attachment)
     system, user, _replacements = build_translation_prompt(
         source_text,
         f"{source} → {target}",
@@ -113,6 +116,7 @@ class ScratchTranslator:
         system, user = prepare_turn(
             model, text, source, target, previous, context, mode, attachment
         )
+        source_text = _source_text(text, attachment)
         with self._lock:
             if self._busy:
                 raise ScratchRejected("Дождитесь ответа или остановите его.", "busy")
@@ -125,7 +129,16 @@ class ScratchTranslator:
             request_id = uuid.uuid4().hex
             self._thread = threading.Thread(
                 target=self._run,
-                args=(request_id, model, system, user, mode != "ask"),
+                args=(
+                    request_id,
+                    model,
+                    system,
+                    user,
+                    mode != "ask",
+                    source_text,
+                    source,
+                    target,
+                ),
                 name="DotLingo scratch",
                 daemon=True,
             )
@@ -160,20 +173,28 @@ class ScratchTranslator:
         system: str,
         user: str,
         clean_output: bool = False,
+        source_text: str = "",
+        source_lang: str = "",
+        target_lang: str = "",
     ) -> None:
         pending: list[str] = []
         raw_parts: list[str] = []
         last_flush = time.monotonic()
+
+        def rendered() -> str:
+            raw = "".join(raw_parts)
+            if not clean_output:
+                return raw
+            return finish_translation(raw, source_text, target_lang)
 
         def flush() -> None:
             nonlocal last_flush
             if not pending:
                 return
             if clean_output:
-                text = clean_model_output("".join(raw_parts))
                 self._push(
                     "chat_token",
-                    {"requestId": request_id, "text": text, "replace": True},
+                    {"requestId": request_id, "text": rendered(), "replace": True},
                 )
             else:
                 self._push("chat_token", {"requestId": request_id, "text": "".join(pending)})
@@ -197,7 +218,21 @@ class ScratchTranslator:
             result = engine.translate(system, user, max_tokens=max_tokens, on_token=on_token)
             flush()
             if clean_output:
-                result = clean_model_output(result)
+                result = finish_translation(result, source_text, target_lang)
+                bare_system, bare_user = prepare_turn(
+                    model, source_text, source_lang, target_lang, [], "", "translate"
+                )
+                # Фон и «определи язык» модель часто цитирует вместо перевода.
+                if (system, user) != (bare_system, bare_user) and translation_missed(
+                    result, source_text
+                ):
+                    raw_parts.clear()
+                    pending.clear()
+                    result = engine.translate(
+                        bare_system, bare_user, max_tokens=max_tokens, on_token=on_token
+                    )
+                    flush()
+                    result = finish_translation(result, source_text, target_lang)
             self._push("chat_done", {"requestId": request_id, "ok": True, "text": result, "error": None})
         except InferenceCancelled:
             self._drop_engine()
@@ -233,15 +268,15 @@ class ScratchTranslator:
             stale.close()
         path = model_path(model, self.model_root)
         verify_model(path, model)
-        threads = max(1, min(8, max(1, (os.cpu_count() or 2) - 1)))
-        snapshot = detect(self.model_root)
+        placement = plan_placement(detect(self.model_root), model)
         sampling = model.get("sampling") if isinstance(model.get("sampling"), dict) else None
         runtime = model_runtime_options(model)
         engine = InferenceProcess(
             path,
-            int(model.get("default_context", 4096)),
-            threads,
-            gpu_layers=gpu_layers_for(snapshot, model),
+            placement["n_ctx"],
+            placement["threads"],
+            gpu_layers=placement["gpu_layers"],
+            n_batch=placement["n_batch"],
             sampling=sampling,
             stop_sequences=runtime["stop_sequences"],
             append_no_think=runtime["append_no_think"],

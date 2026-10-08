@@ -61,6 +61,22 @@ def test_plan_falls_back_when_total_ram_is_small() -> None:
     assert plan["modelId"] == "small"
 
 
+def test_assess_model_keeps_a_ram_reserve_and_warns_when_little_is_free() -> None:
+    fits, reason = assess_model(
+        _snapshot(ram_total_gb=16.0, ram_available_gb=1.0),
+        _model("mid", 8),
+    )
+    assert fits != "no"
+    assert "свободно" in reason
+    blocked, blocked_reason = assess_model(
+        _snapshot(ram_total_gb=16.0, ram_available_gb=15.0),
+        _model("tight", 15.5),
+    )
+    assert blocked == "no"
+    assert "15.5" in blocked_reason
+    assert "16.0" in blocked_reason
+
+
 def test_assess_model_compares_total_ram() -> None:
     fits, _reason = assess_model(
         _snapshot(ram_total_gb=16.0, ram_available_gb=1.0),

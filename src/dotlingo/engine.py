@@ -4,6 +4,7 @@ import multiprocessing as mp
 import os
 import queue
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -68,11 +69,17 @@ def model_runtime_options(model: dict[str, Any]) -> dict[str, Any]:
 
 
 def prepare_llama_env() -> None:
-    """Drop a CUDA_PATH that points at a missing toolkit so the CPU wheel can load.
+    """Подготовить загрузку llama.cpp в этом процессе.
 
-    llama-cpp-python calls os.add_dll_directory(CUDA_PATH/bin) on import.
-    A stale CUDA_PATH raises WinError 3 before the CPU wheel can load.
+    Битый CUDA_PATH убирается, чтобы CPU-колесо не падало на пустом каталоге.
+    Каталоги pip-пакетов nvidia/*/bin регистрируются до импорта: CUDA-колесо
+    ищет cublas рядом с собой, а не только в Toolkit.
     """
+    _drop_stale_cuda_path()
+    _register_nvidia_pip_dlls()
+
+
+def _drop_stale_cuda_path() -> None:
     cuda = os.environ.get("CUDA_PATH")
     if not cuda:
         return
@@ -86,6 +93,38 @@ def prepare_llama_env() -> None:
     os.environ["PATH"] = os.pathsep.join(
         item for item in path.split(os.pathsep) if item and os.path.normcase(item) not in stale
     )
+
+
+def _register_nvidia_pip_dlls() -> None:
+    if sys.platform != "win32" or not hasattr(os, "add_dll_directory"):
+        return
+    seen: set[str] = set()
+    for entry in sys.path:
+        if not entry:
+            continue
+        nvidia = Path(entry) / "nvidia"
+        if not nvidia.is_dir():
+            continue
+        try:
+            children = list(nvidia.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            for folder in ("bin", "lib"):
+                path = child / folder
+                if not path.is_dir():
+                    continue
+                key = os.path.normcase(str(path))
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    os.add_dll_directory(str(path))
+                except OSError:
+                    continue
+                current = os.environ.get("PATH", "")
+                if key not in os.path.normcase(current):
+                    os.environ["PATH"] = str(path) + os.pathsep + current
 
 
 # Plain Gemma turns. TranslateGemma's embedded jinja rejects a string user message
@@ -309,6 +348,11 @@ def _safe_backend_error(exc: Exception) -> str:
     text = str(exc).lower()
     if any(word in text for word in ("out of memory", "bad_alloc", "cuda_error_out_of_memory", "not enough memory")):
         return "Недостаточно RAM или VRAM для выбранного контекста. Уменьшите контекст или выберите меньшую модель."
+    if any(word in text for word in ("illegal instruction", "winerror 193")):
+        return (
+            "Эта сборка llama.cpp не запускается на этом процессоре. "
+            "В настройках устройства выберите сборку «Процессор»."
+        )
     if "failed to load shared library" in text or "winerror 127" in text or "не найдена указанная процедура" in text:
         return (
             "llama-cpp-python установлен, но его DLL не совпала с библиотеками на компьютере. "
@@ -463,8 +507,14 @@ class InferenceProcess:
             self.terminate()
             self._cancelled.clear()
             self._paused.set()
+            # Длинное окно и крупный батч на CPU раздувают RAM. Цифры совпадают
+            # с hardware.CPU_CONTEXT_CAP и hardware.CPU_BATCH.
+            from dotlingo.hardware import CPU_BATCH, CPU_CONTEXT_CAP
+
             self.gpu_layers = 0
             self.fell_back_to_cpu = True
+            self.context_size = min(self.context_size, CPU_CONTEXT_CAP)
+            self.n_batch = max(64, min(CPU_BATCH, self.context_size))
             event = self._launch()
         if event.get("type") != "ready":
             message = str(event.get("message", "Не удалось запустить inference backend."))

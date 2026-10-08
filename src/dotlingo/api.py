@@ -30,9 +30,10 @@ from dotlingo.hardware import (
     HardwareSnapshot,
     assess_model,
     detect,
-    gpu_layers_for,
+    plan_placement,
     plan_setup,
     recommend_model,
+    reset_llama_probe,
 )
 from dotlingo.languages import (
     AUTO_LANGUAGE,
@@ -64,6 +65,11 @@ from dotlingo.models import (
 )
 from dotlingo.paths import user_data_root
 from dotlingo.preferences import load_preferences, save_preferences
+from dotlingo.runtime_install import (
+    RuntimeInstallError,
+    run_install,
+    runtime_choices,
+)
 from dotlingo.scratch import (
     SCRATCH_LIMIT,
     ScratchRejected,
@@ -305,6 +311,18 @@ def _runtime_available() -> bool:
     return True
 
 
+def _planned_context(snapshot: HardwareSnapshot | None, model: dict[str, Any]) -> int:
+    """Окно, под которое режутся чанки. Без карточки модели остаётся короткий запас."""
+    if not model:
+        return 2048
+    if snapshot is None:
+        try:
+            return max(512, int(model.get("default_context") or 4096))
+        except (TypeError, ValueError):
+            return 4096
+    return plan_placement(snapshot, model)["n_ctx"]
+
+
 SPECTRUM_TICKS = 160
 
 HARDWARE_CACHE = "hardware.json"
@@ -443,6 +461,8 @@ class Api:
         self._close_animating = False
         self._window_closer: Callable[[], None] | None = None
         self.hardware, self._hardware_detected_at = _load_hardware_cache(self.data_dir)
+        self._hardware_checking = False
+        self._runtime_installing = False
         self._scratch = ScratchTranslator(self.models_dir, self._push, self._document_busy)
         self._converted: set[Path] = set()
         _arm_webview_file_drop()
@@ -1173,7 +1193,7 @@ class Api:
         if not _runtime_available():
             return _err(
                 "В этой сборке не найден llama-cpp-python. Установка веса модели не добавляет runtime. "
-                "См. docs/BUILD_WINDOWS.md.",
+                "Поставьте сборку в настройках устройства.",
                 "runtime_missing",
             )
         source = store.project.get("source_lang") or AUTO_LANGUAGE
@@ -1204,7 +1224,7 @@ class Api:
         for document in documents:
             chunks = build_chunks(
                 store.blocks(document.id),
-                max_chars=chunk_limit(int(model.get("default_context") or 4096)),
+                max_chars=chunk_limit(_planned_context(self.hardware, model)),
             )
             if not any(chunks.values()):
                 return _err(f"В «{document.name}» нет текста для перевода.", "empty_document")
@@ -1443,23 +1463,81 @@ class Api:
         })
 
     def detectHardware(self) -> dict[str, Any]:
-        """Локальная проверка устройства; результат кэшируется до явного повтора."""
+        """Локальная проверка устройства. Повторный вызов присоединяется к уже идущему."""
+        with self._lock:
+            if self._hardware_checking:
+                return _ok({"started": True})
+            self._hardware_checking = True
 
         def work() -> None:
-            snapshot = detect(self.models_dir)
-            detected_at = datetime.now(timezone.utc).isoformat()
-            with self._lock:
-                self.hardware = snapshot
-                self._hardware_detected_at = detected_at
-            # Таймаут пробника GPU - не отказ. Следующий запуск спросит ещё раз.
-            probe_failed = (
-                snapshot.llama_runtime_available and snapshot.llama_gpu_offload_available is None
-            )
-            if not probe_failed:
-                _save_hardware_cache(self.data_dir, snapshot, detected_at)
-            self._push("hardware_detected", _serialize_hardware(snapshot, detected_at))
+            try:
+                snapshot = detect(self.models_dir)
+                detected_at = datetime.now(timezone.utc).isoformat()
+                with self._lock:
+                    self.hardware = snapshot
+                    self._hardware_detected_at = detected_at
+                # Таймаут пробника GPU - не отказ. Следующий запуск спросит ещё раз.
+                probe_failed = (
+                    snapshot.llama_runtime_available and snapshot.llama_gpu_offload_available is None
+                )
+                if not probe_failed:
+                    _save_hardware_cache(self.data_dir, snapshot, detected_at)
+                self._push("hardware_detected", _serialize_hardware(snapshot, detected_at))
+            finally:
+                with self._lock:
+                    self._hardware_checking = False
 
         self._spawn(work, "device_check")
+        return _ok({"started": True})
+
+    def runtimeOptions(self) -> dict[str, Any]:
+        """Сборки llama.cpp, которые можно поставить на это железо. Сама установка не идёт."""
+        return _ok(runtime_choices(self.hardware))
+
+    def installRuntime(self, accelerator_id: str) -> dict[str, Any]:
+        """Поставить CPU- или CUDA-колесо. Вызов и есть согласие пользователя."""
+        choice_id = str(accelerator_id or "").strip()
+        options = runtime_choices(self.hardware)
+        choices = options.get("choices")
+        if not isinstance(choices, list):
+            choices = []
+        choice = next((item for item in choices if item.get("id") == choice_id), None)
+        if not isinstance(choice, dict) or not choice.get("available"):
+            reason = str((choice or {}).get("reason") or "Эту сборку поставить нельзя.")
+            code = "frozen" if options.get("frozen") else "unavailable"
+            return _err(reason, code)
+        with self._lock:
+            if self._runtime_installing:
+                return _err("Установка runtime уже идёт.", "busy")
+            self._runtime_installing = True
+
+        def work() -> None:
+            try:
+                run_install(
+                    choice_id,
+                    on_progress=lambda payload: self._push("runtime_install_progress", payload),
+                )
+                reset_llama_probe()
+                self._push(
+                    "runtime_install_done",
+                    {"ok": True, "error": None, "acceleratorId": choice_id},
+                )
+            except RuntimeInstallError as exc:
+                self._push(
+                    "runtime_install_done",
+                    {"ok": False, "error": str(exc), "acceleratorId": choice_id},
+                )
+            except Exception:
+                self._push(
+                    "runtime_install_done",
+                    {"ok": False, "error": "Не удалось поставить runtime.", "acceleratorId": choice_id},
+                )
+            finally:
+                with self._lock:
+                    self._runtime_installing = False
+            self.detectHardware()
+
+        self._spawn(work, "runtime_install")
         return _ok({"started": True})
 
     def verifyModel(self, model_id: str) -> dict[str, Any]:
@@ -2130,9 +2208,7 @@ class Api:
                 model = get_model(model_id, root=self.models_dir)
             except KeyError:
                 model = None
-        limit = int((model or {}).get("default_context") or 2048)
-        if limit <= 0:
-            limit = 2048
+        limit = _planned_context(self.hardware, model or {})
         try:
             chars = max(0, int(data.get("charCount") or 0))
         except (TypeError, ValueError):
@@ -2152,7 +2228,7 @@ class Api:
         layers = 0
         if model is not None and self.hardware is not None:
             try:
-                layers = gpu_layers_for(self.hardware, model)
+                layers = plan_placement(self.hardware, model)["gpu_layers"]
             except (TypeError, ValueError):
                 layers = 0
         if layers < 0:

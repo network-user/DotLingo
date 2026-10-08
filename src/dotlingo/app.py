@@ -434,8 +434,8 @@ def _install_webview_browser_arguments() -> None:
 def _on_started(api: Api, window) -> None:
     """Дождаться окна, не трогая его поток. Проверка устройства идёт отдельно."""
     window.events.shown.wait(15)
-    if api.hardware is None:
-        api.detectHardware()
+    # Кэш показывается сразу, а свободная VRAM измеряется заново на каждом запуске.
+    api.detectHardware()
     try:
         api.resumeQueuedTasks()
     except Exception:

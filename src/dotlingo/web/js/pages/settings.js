@@ -154,6 +154,7 @@ async function refresh(host) {
   parts.push(devicePanel(), appearancePanel(), dataPanel());
 
   wrap.replaceChildren(...parts);
+  void loadRuntimeOptions();
 
   if (!store.get('dataDirs')) {
     const [dirs, err] = await tryCall('getDataDirs');
@@ -395,6 +396,74 @@ function repaintDevice() {
 /** Идёт ли повторная проверка устройства. */
 let hwChecking = false;
 
+/** Ответ runtimeOptions. null, пока настройки его не спрашивали. */
+let runtimeChoice = null;
+
+/** Текст идущей установки колеса. */
+let runtimeInstall = { busy: false, message: '' };
+
+/** Спросить, какие сборки llama.cpp можно поставить, и обновить панель. */
+async function loadRuntimeOptions() {
+  const [data] = await tryCall('runtimeOptions');
+  runtimeChoice = data || null;
+  if (!pageHost?.isConnected) return;
+  repaintDevice();
+}
+
+/** Поставить выбранную сборку. Кнопка и есть согласие. */
+async function startRuntimeInstall(choice) {
+  if (runtimeInstall.busy || !choice?.id) return;
+  runtimeInstall = { busy: true, message: `Ставим ${choice.label}…` };
+  repaintDevice();
+  try {
+    await call('installRuntime', choice.id);
+  } catch (error) {
+    runtimeInstall = { busy: false, message: '' };
+    toast(error?.message || 'Не удалось поставить runtime.', 'error');
+    repaintDevice();
+  }
+}
+
+/** Кнопки сборки: нет runtime или есть NVIDIA, а offload ещё не включён. */
+function runtimeActions(hw) {
+  if (runtimeInstall.busy) {
+    return el('p', {
+      class: 'st-hw__hint',
+      text: runtimeInstall.message || 'Ставим runtime…',
+    });
+  }
+  const options = runtimeChoice;
+  if (!options) return null;
+  const choices = (options.choices || []).filter((item) => item.available);
+  const missing = !hw?.llamaRuntimeAvailable;
+  const offer = missing
+    ? choices
+    : choices.filter((item) => item.id === 'cuda' && hw?.llamaGpuOffloadAvailable !== true);
+  if (!offer.length) {
+    if (missing && options.frozen) {
+      return el('p', {
+        class: 'st-hw__hint',
+        text: 'В установленной программе runtime уже должен быть внутри сборки.',
+      });
+    }
+    return null;
+  }
+  const nodes = offer.map((choice) => button({
+    label: choice.recommended && missing ? `Поставить сборку «${choice.label}»` : `Сборка «${choice.label}»`,
+    variant: choice.recommended && missing ? 'primary' : 'ghost',
+    disabled: runtimeInstall.busy,
+    title: choice.detail || '',
+    onClick: () => void startRuntimeInstall(choice),
+  }));
+  nodes.push(el('p', {
+    class: 'st-hw__note text-tertiary',
+    text: missing
+      ? 'Установка идёт в текущий Python и требует сети. Setup.exe своё колесо не меняет.'
+      : 'Сборка CUDA скачивает библиотеки NVIDIA и заменяет колесо llama.cpp. Нужна сеть.',
+  }));
+  return el('div', { class: 'st-fit' }, nodes);
+}
+
 /** Форматирование даты проверки: «29 сент 2026 г., 14:05». */
 function formatDateTime(iso) {
   if (!iso) return '';
@@ -584,6 +653,7 @@ function devicePanel() {
             text: 'Перевод запустится после установки runtime llama.cpp. Вес модели можно хранить и без него.',
           })
         : null,
+      runtimeActions(hw),
       el('p', { class: 'st-hw__note text-tertiary', text: threadNote() }),
       fitBlock(),
     ]);
@@ -820,6 +890,19 @@ function wireHardwareEvents(host) {
   unsubs = [
     store.on('hardware_detected', () => {
       hwChecking = false;
+      if (!host.isConnected) return;
+      void loadRuntimeOptions();
+    }),
+    store.on('runtime_install_progress', (payload) => {
+      runtimeInstall = {
+        busy: true,
+        message: payload?.phase ? `Ставим ${payload.phase}…` : 'Ставим runtime…',
+      };
+      if (!host.isConnected) return;
+      repaintDevice();
+    }),
+    store.on('runtime_install_done', () => {
+      runtimeInstall = { busy: false, message: '' };
       if (!host.isConnected) return;
       repaintDevice();
     }),

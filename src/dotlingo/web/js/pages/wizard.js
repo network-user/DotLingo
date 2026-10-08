@@ -143,12 +143,21 @@ function previewText() {
   const { model, reason } = recommendedChoice();
   if (model && !placementBlocked(model)) {
     const license = model.license ? ` Лицензия: ${model.license}.` : '';
-    return `Кнопка проверит компьютер, выберет «${model.name}» (${model.sizeLabel}) и начнёт загрузку.${license} Потоки и видеокарта настроятся сами.`;
+    const runtime = hwNeedsRuntime()
+      ? ' Если llama.cpp ещё не установлен, сначала ставится подходящая сборка.'
+      : '';
+    return `Кнопка проверит компьютер, выберет «${model.name}» (${model.sizeLabel}) и начнёт загрузку.${license}${runtime} Потоки и видеокарта настроятся сами.`;
   }
   if (reason) {
     return `${reason} Кнопка всё равно завершит настройку и откроет приложение.`;
   }
-  return 'Одна кнопка проверяет память и диск, выбирает модель и начинает загрузку. Потоки и видеокарта настроятся сами.';
+  const runtime = hwNeedsRuntime() ? ' При необходимости ставится runtime llama.cpp.' : '';
+  return `Одна кнопка проверяет память и диск, выбирает модель и начинает загрузку.${runtime} Потоки и видеокарта настроятся сами.`;
+}
+
+function hwNeedsRuntime() {
+  const hw = store.get('hardware');
+  return Boolean(hw && hw.llamaRuntimeAvailable === false);
 }
 
 function deviceLine() {
@@ -169,8 +178,10 @@ async function configure() {
   running = true;
   render();
   let note = 'Приложение открыто. Модель можно скачать позже в разделе «Модели».';
+  let runtimeNote = '';
   try {
     await ensureHardware();
+    runtimeNote = await ensureRuntime();
     await withTimeout(refreshCatalog().catch(() => {}), CATALOG_WAIT_MS);
     const plan = normalizePlan(await call('planSetup').catch(() => null));
     if (plan.action === 'ready') {
@@ -185,6 +196,7 @@ async function configure() {
       ? `${error.message} Приложение всё равно открыто.`
       : note;
   }
+  if (runtimeNote) note = `${runtimeNote} ${note}`;
   await finish(note);
 }
 
@@ -218,7 +230,6 @@ function normalizePlan(plan) {
 }
 
 function ensureHardware() {
-  if (store.get('hardware')) return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
     const done = () => {
@@ -231,6 +242,31 @@ function ensureHardware() {
     call('detectHardware').catch(done);
     setTimeout(done, HARDWARE_WAIT_MS);
   });
+}
+
+/** Если runtime нет, кнопка мастера ставит рекомендованную сборку и не ждёт конца pip. */
+async function ensureRuntime() {
+  const hw = store.get('hardware');
+  if (!hw || hw.llamaRuntimeAvailable) return '';
+  let options = null;
+  try {
+    options = await call('runtimeOptions');
+  } catch {
+    return '';
+  }
+  const recommended = options?.recommended;
+  const choice = (options?.choices || []).find((item) => item.id === recommended && item.available);
+  if (!choice) return '';
+  try {
+    await call('installRuntime', choice.id);
+    return 'Ставим runtime llama.cpp. Когда сборка будет готова, перевод сможет запуститься.';
+  } catch (error) {
+    if (error?.code === 'busy') return 'Установка runtime уже идёт.';
+    if (error?.code === 'frozen') return '';
+    return error?.message
+      ? `${error.message} Перевод запустится после установки runtime.`
+      : '';
+  }
 }
 
 function withTimeout(promise, ms) {
