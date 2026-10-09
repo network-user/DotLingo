@@ -76,11 +76,13 @@ function paint() {
   const target = currentTarget();
   hostEl.replaceChildren(el('div', { class: 'cv stack' }, [
     el('section', { class: 'panel cv-drop', dataset: { drop: '1' } }, [
-      el('p', { class: 'cv-drop__title', text: 'Файлы для конвертации' }),
-      el('p', {
-        class: 'cv-drop__text',
-        text: 'TXT, Markdown, DOCX, EPUB и PDF. Скан читается распознаванием Windows. Исходный файл остаётся на месте.',
-      }),
+      el('div', { class: 'cv-intro' }, [
+        el('p', { class: 'cv-drop__title', text: 'Файлы для конвертации' }),
+        el('p', {
+          class: 'cv-drop__text',
+          text: 'TXT, Markdown, DOCX, EPUB и PDF. Скан читается распознаванием Windows. Исходный файл остаётся на месте.',
+        }),
+      ]),
       el('div', { class: 'cv-drop__actions' }, [
         button({ label: 'Выбрать файлы', variant: 'primary', onClick: () => void pickFiles() }),
         files.length
@@ -128,7 +130,7 @@ function paint() {
         }),
       ]),
       el('p', {
-        class: 'cv-note',
+        class: directory ? 'cv-note cv-path' : 'cv-note',
         text: directory
           ? directory
           : 'Каждый результат ляжет рядом со своим исходником. Если имя занято, добавится «.converted».',
