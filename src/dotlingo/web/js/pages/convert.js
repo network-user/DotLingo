@@ -5,7 +5,7 @@
 
 import { call, tryCall } from '../bridge.js';
 import * as store from '../store.js';
-import { el, button, toast, emptyState, spinner } from '../components.js';
+import { el, button, toast, spinner } from '../components.js';
 import * as router from '../router.js';
 
 /** @type {Array<{suffix: string, label: string, note: string}>} */
@@ -20,8 +20,12 @@ let results = [];
 /** @type {Array<{name: string, error: string}>} */
 let problems = [];
 let wired = false;
+/** Лишние ряды форматов спрятаны, пока пользователь не нажмёт «Показать». */
+let formatsOpen = false;
 /** @type {HTMLElement|null} */
 let hostEl = null;
+/** @type {ResizeObserver|null} */
+let formatObserver = null;
 
 const FORMAT_LABEL = {
   txt: 'TXT',
@@ -89,70 +93,131 @@ function paint() {
           ? button({ label: 'Очистить', onClick: () => { files = []; results = []; problems = []; paint(); } })
           : null,
       ]),
+      files.length ? fileList() : el('p', {
+        class: 'cv-note',
+        text: 'Перетащите документы сюда или выберите их кнопкой.',
+      }),
     ]),
-    files.length ? fileList() : emptyState({
-      iconName: 'document',
-      title: 'Пока нет файлов',
-      text: 'Перетащите документы сюда или выберите их кнопкой.',
-    }),
-    el('section', { class: 'panel' }, [
-      el('h2', { class: 'panel__title', text: 'Во что собрать' }),
-      el('div', { class: 'cv-formats', role: 'listbox', ariaLabel: 'Формат результата' }, targets.map((item) => {
-        const selected = item.suffix === suffix;
-        return el('button', {
-          class: `cv-format${selected ? ' is-selected' : ''}`,
-          type: 'button',
-          role: 'option',
-          ariaSelected: selected ? 'true' : 'false',
-          onClick: () => {
-            suffix = item.suffix;
-            paint();
-          },
-        }, [
-          el('span', { class: 'cv-format__label', text: item.label }),
-          el('span', { class: 'cv-format__suffix', text: item.suffix }),
-        ]);
-      })),
-      target ? el('p', { class: 'cv-note', text: target.note }) : null,
-    ]),
-    el('section', { class: 'panel' }, [
-      el('h2', { class: 'panel__title', text: 'Куда положить' }),
-      el('div', { class: 'cv-where' }, [
-        button({
-          label: 'Рядом с файлом',
-          variant: directory ? 'ghost' : 'primary',
-          onClick: () => { directory = ''; paint(); },
-        }),
-        button({
-          label: directory ? 'Другая папка' : 'Выбрать папку',
-          variant: directory ? 'primary' : 'ghost',
-          onClick: () => void pickFolder(),
-        }),
+    el('section', { class: 'panel cv-setup' }, [
+      el('div', { class: 'cv-field' }, [
+        el('div', { class: 'cv-field__head' }, [
+          el('h2', { class: 'panel__title', text: 'Во что собрать' }),
+          formatToggle(),
+        ]),
+        el('div', {
+          class: 'cv-formats',
+          id: 'cv-formats',
+          role: 'listbox',
+          ariaLabel: 'Формат результата',
+        }, targets.map((item) => {
+          const selected = item.suffix === suffix;
+          return el('button', {
+            class: `cv-format${selected ? ' is-selected' : ''}`,
+            type: 'button',
+            role: 'option',
+            ariaSelected: selected ? 'true' : 'false',
+            onClick: () => {
+              suffix = item.suffix;
+              paint();
+            },
+          }, [
+            el('span', { class: 'cv-format__label', text: item.label }),
+            el('span', { class: 'cv-format__suffix', text: item.suffix }),
+          ]);
+        })),
+        target ? el('p', { class: 'cv-note', text: target.note }) : null,
+      ]),
+      el('div', { class: 'cv-bar' }, [
+        el('div', { class: 'cv-where' }, [
+          el('span', { class: 'cv-bar__label', text: 'Куда положить' }),
+          button({
+            label: 'Рядом с файлом',
+            variant: directory ? 'ghost' : 'primary',
+            onClick: () => { directory = ''; paint(); },
+          }),
+          button({
+            label: directory ? 'Другая папка' : 'Выбрать папку',
+            variant: directory ? 'primary' : 'ghost',
+            onClick: () => void pickFolder(),
+          }),
+        ]),
+        el('div', { class: 'cv-run' }, [
+          running ? el('p', { class: 'cv-status', text: 'Собирается…' }) : null,
+          button({
+            label: running ? 'Собирается…' : 'Конвертировать',
+            variant: 'primary',
+            disabled: running || !files.length,
+            onClick: () => void start(),
+          }),
+        ]),
       ]),
       el('p', {
         class: directory ? 'cv-note cv-path' : 'cv-note',
         text: directory
           ? directory
-          : 'Каждый результат ляжет рядом со своим исходником. Если имя занято, добавится «.converted».',
+          : 'Рядом с исходником. Если имя занято, добавится «.converted».',
       }),
-    ]),
-    el('div', { class: 'cv-run' }, [
-      button({
-        label: running ? 'Собирается…' : 'Конвертировать',
-        variant: 'primary',
-        disabled: running || !files.length,
-        onClick: () => void start(),
-      }),
-      el('p', { class: 'cv-status', text: running ? 'Собирается…' : '' }),
     ]),
     results.length || problems.length ? outcome() : null,
   ]));
   const drop = hostEl.querySelector('[data-drop]');
   if (drop) bindDrop(drop);
+  syncFormatCollapse();
+  watchFormats();
+}
+
+function formatToggle() {
+  const toggle = button({
+    label: formatsOpen ? 'Скрыть' : 'Показать',
+    size: 'sm',
+    onClick: () => {
+      formatsOpen = !formatsOpen;
+      paint();
+    },
+  });
+  toggle.dataset.formatsToggle = '1';
+  toggle.setAttribute('aria-controls', 'cv-formats');
+  toggle.setAttribute('aria-expanded', formatsOpen ? 'true' : 'false');
+  return toggle;
+}
+
+/** Первый ряд форматов остаётся, остальные прячутся, пока список не раскрыт. */
+function syncFormatCollapse() {
+  const grid = hostEl?.querySelector('.cv-formats');
+  const toggle = hostEl?.querySelector('[data-formats-toggle]');
+  if (!(grid instanceof HTMLElement)) return;
+  const items = [...grid.querySelectorAll('.cv-format')];
+  if (!items.length) return;
+  const firstTop = items[0].offsetTop;
+  const rest = items.filter((item) => item.offsetTop > firstTop + 1);
+  if (toggle instanceof HTMLElement) toggle.hidden = rest.length === 0;
+  const collapse = !formatsOpen && rest.length > 0;
+  grid.classList.toggle('is-collapsed', collapse);
+  grid.style.maxHeight = collapse ? `${items[0].offsetHeight}px` : '';
+  items.forEach((item) => {
+    const hidden = collapse && rest.includes(item);
+    item.tabIndex = hidden ? -1 : 0;
+    item.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+  });
+}
+
+function watchFormats() {
+  formatObserver?.disconnect();
+  formatObserver = null;
+  const panel = hostEl?.querySelector('.cv-setup');
+  if (!panel || typeof ResizeObserver === 'undefined') return;
+  let width = -1;
+  formatObserver = new ResizeObserver((entries) => {
+    const next = Math.round(entries[0].contentRect.width);
+    if (next === width) return;
+    width = next;
+    syncFormatCollapse();
+  });
+  formatObserver.observe(panel);
 }
 
 function fileList() {
-  return el('div', { class: 'cv-files stack' }, files.map((file) => el('article', { class: 'cv-file panel panel--flat' }, [
+  return el('div', { class: 'cv-files' }, files.map((file) => el('article', { class: 'cv-file' }, [
     el('div', { class: 'cv-file__main' }, [
       el('p', { class: 'cv-file__name', text: file.name }),
       el('p', {
@@ -319,6 +384,8 @@ async function receive(list) {
 }
 
 function destroy() {
+  formatObserver?.disconnect();
+  formatObserver = null;
   hostEl = null;
 }
 
