@@ -43,16 +43,16 @@ cd DotLingo
 
 ## Команды
 
-| Действие | Команда |
-|----------|---------|
-| Скачать и поставить ярлык | `git clone https://github.com/network-user/DotLingo.git`, затем `.\Install.bat` |
-| Запустить из клона | `python -m dotlingo` |
+| Действие                    | Команда |
+|-----------------------------|---------|
+| Скачать приложение          | `git clone https://github.com/network-user/DotLingo.git`, затем `.\Install.bat` |
+| Запустить из клона          | `python -m dotlingo` |
 | Обновить клон с origin/main | `.\deploy\update.ps1` |
-| Headless-проверка моста | `python -m dotlingo --smoke-test` |
-| Запустить тесты | `python -m pytest -q` |
-| Проверить стиль | `python -m ruff check src tests` |
-| Собрать иконку | `python scripts/build_icon.py` |
-| Собрать Windows Setup.exe | `.\deploy\windows\build.ps1` |
+| Headless-проверка моста     | `python -m dotlingo --smoke-test` |
+| Запустить тесты             | `python -m pytest -q` |
+| Проверить стиль             | `python -m ruff check src tests` |
+| Собрать иконку              | `python scripts/build_icon.py` |
+| Собрать Windows Setup.exe   | `.\deploy\windows\build.ps1` |
 
 `Install.bat` ставит `pip install -e ".[pdf]"` и не скачивает колесо llama.cpp. Отдельный `Setup.exe` собирает `deploy\windows\build.ps1`, ярлык его не запускает.
 
