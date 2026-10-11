@@ -402,19 +402,41 @@ def _format_size(size: int | float | None) -> str:
     return f"{size / 1024**2:.0f} МБ"
 
 
-def _scratch_pairs(value: Any) -> list[tuple[str, str]]:
-    """Последние две пары диалога как контекст тона, не как инструкция."""
+def _scratch_pairs(
+    value: Any,
+    *,
+    source_lang: str = "",
+    target_lang: str = "",
+    model_id: str = "",
+) -> list[tuple[str, str]]:
+    """Пары того же направления и той же модели. Чужой язык в фон не берётся."""
     if not isinstance(value, list):
         return []
     pairs: list[tuple[str, str]] = []
-    for item in value[-2:]:
+    for item in value[-6:]:
         if not isinstance(item, dict):
             continue
         source = " ".join(str(item.get("source") or "").split())[:220]
         translation = " ".join(str(item.get("translation") or "").split())[:220]
-        if source and translation:
-            pairs.append((source, translation))
-    return pairs
+        if not source or not translation:
+            continue
+        pair_target = str(item.get("targetLang") or "").strip()
+        pair_source = str(item.get("sourceLang") or "").strip()
+        pair_model = str(item.get("modelId") or "").strip()
+        if pair_target and target_lang and pair_target != target_lang:
+            continue
+        if (
+            pair_source
+            and source_lang
+            and source_lang != "auto"
+            and pair_source != "auto"
+            and pair_source != source_lang
+        ):
+            continue
+        if pair_model and model_id and pair_model != model_id:
+            continue
+        pairs.append((source, translation))
+    return pairs[-2:]
 
 
 def _runtime_available() -> bool:
@@ -2409,7 +2431,12 @@ class Api:
                 return _err("Модель не перечисляет исходный язык.", "language_unsupported")
             if not supports_language(model, target):
                 return _err("Модель не перечисляет язык перевода.", "language_unsupported")
-        previous = _scratch_pairs(data.get("previous"))
+        previous = _scratch_pairs(
+            data.get("previous"),
+            source_lang=source,
+            target_lang=target,
+            model_id=model_id,
+        )
         context = str(data.get("context") or "").strip()[:800]
         try:
             request_id = self._scratch.submit(

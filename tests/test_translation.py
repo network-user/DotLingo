@@ -26,8 +26,13 @@ from dotlingo.task_queue import (
     output_repeats_context,
     output_token_budget,
     polish_translation,
+    repeats_source,
+    script_intrusion,
     select_memory_examples,
     split_packed,
+    strip_foreign_script,
+    translation_missed,
+    translation_script_fits,
 )
 
 
@@ -222,6 +227,111 @@ def test_scaffold_echo_keeps_the_translation_after_the_source_label() -> None:
     repeated = "Алиса сидела на берегу и смотрела в книгу сестры без картинок. " * 2
     assert output_repeats_context(repeated, [("Alice sat.", repeated)], "")
     assert not output_repeats_context("Белый кролик достал часы из кармана жилета и побежал дальше по полю.", [("Alice sat.", repeated)], "")
+
+
+def test_bare_header_and_source_echo_are_removed_in_any_script() -> None:
+    assert clean_model_output("[背景情報]\nこんにちは") == "こんにちは"
+    assert clean_model_output("［背景情報］\nこんにちは") == "こんにちは"
+    assert clean_model_output("【背景情報】\nこんにちは") == "こんにちは"
+    assert clean_model_output("*[背景情報]*\nこんにちは") == "こんにちは"
+    assert clean_model_output("[背景情報] こんにちは") == "こんにちは"
+    assert clean_model_output("Она прочитала [背景情報] и пошла дальше.") == (
+        "Она прочитала [背景情報] и пошла дальше."
+    )
+    assert clean_model_output("[背景情報]") == "[背景情報]"
+    assert finish_translation(
+        "こんにちは\nПривет привет привет привет",
+        "Привет привет привет привет",
+        "ja",
+    ) == "こんにちは"
+    assert finish_translation(
+        "こんにちは\nПривет привет привет привет",
+        "Привет",
+        "ja",
+    ) == "こんにちは"
+    copied = finish_translation(
+        "[背景情報]\nこんにちは\nКак поживаешь?\nДорога была долгой.",
+        "как дела",
+        "ru",
+        [("Привет", "こんにちは"), ("The road was long.", "Дорога была долгой.")],
+    )
+    assert copied == "Как поживаешь?"
+    assert translation_missed("Привет", "Привет", "en")
+    assert translation_missed("[背景情報]", "как дела", "ja")
+    assert not translation_missed("元気ですか", "как дела", "ja")
+    mixed = "Hello,复活节 day, this song is sung on Easter."
+    assert script_intrusion(mixed, "Ля франсе, воскресенский поёт эту песню", "en")
+    assert strip_foreign_script(mixed, "Ля франсе, воскресенский поёт эту песню", "en") == (
+        "Hello, day, this song is sung on Easter."
+    )
+    assert strip_foreign_script("He went to 東京.", "He went to 東京.", "en") == "He went to 東京."
+    assert not script_intrusion("こんにちは、Alice。元気ですか", "Как дела у Алисы", "ja")
+    assert translation_script_fits("Дорога была долгой.", "ru")
+    assert not translation_script_fits("こんにちは", "en")
+    assert repeats_source("こんにちは Привет привет привет привет", "Привет привет привет привет")
+
+
+def test_background_leak_retries_without_the_prompt_context() -> None:
+    calls: list[str] = []
+
+    class FirstLeaks:
+        def translate(self, system: str, user: str, max_tokens: int = 0) -> str:
+            del system, max_tokens
+            calls.append(user)
+            if len(calls) == 1:
+                return "[背景情報]\nこんにちは\nДорога была долгой."
+            return "Река широкая."
+
+    result = _generate_translation(
+        FirstLeaks(),
+        "The river is wide.",
+        "en → ru",
+        "Роман о севере.",
+        "Сохраняй имена.",
+        [],
+        [("The road was long and quiet.", "Дорога была долгой.")],
+        style="hy-mt2",
+        memory=None,
+        profile="",
+        summary="Алиса уже в норе.",
+        paragraphs=1,
+        token_cap=200,
+    )
+    assert result == "Река широкая."
+    assert len(calls) == 2
+    assert "Background Information" not in calls[1]
+    assert "Роман о севере." not in calls[1]
+    assert "Алиса уже в норе." not in calls[1]
+    assert "Сохраняй имена." not in calls[1]
+
+
+def test_source_echo_is_sampled_once_more_without_a_new_template() -> None:
+    calls: list[str] = []
+
+    class Echo:
+        def translate(self, system: str, user: str, max_tokens: int = 0) -> str:
+            del system, max_tokens
+            calls.append(user)
+            return "Привет"
+
+    result = _generate_translation(
+        Echo(),
+        "Привет",
+        "ru → en",
+        "",
+        "",
+        [],
+        [],
+        style="hy-mt2",
+        memory=None,
+        profile="",
+        summary="",
+        paragraphs=1,
+        token_cap=200,
+    )
+    assert result == "Привет"
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
 
 
 def test_recent_context_stays_out_of_the_stable_system_prompt() -> None:

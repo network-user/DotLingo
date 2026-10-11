@@ -286,6 +286,53 @@ _QUOTE_PAIRS = (
 )
 
 
+# Голая скобка без точки: модель так переводит *[Background Information]*
+# на язык ответа ([背景情報], ［背景情報］, 【背景情報】). Ремарка с точкой остаётся.
+_BRACKET_HEAD = re.compile(r"^[\[［【]\s*([^\]］】\n]{1,40}?)\s*[\]］】]\s*(.*)$")
+_LABEL_PUNCT = re.compile(r"[.!?…。！？]")
+
+
+def _label_inner(inner: str) -> bool:
+    text = " ".join(inner.split()).strip()
+    if not text or len(text) > 40:
+        return False
+    return _LABEL_PUNCT.search(text) is None
+
+
+def _strip_bare_headers(text: str) -> str:
+    """Снимает ведущую скобочную метку, если после неё есть перевод.
+
+    Метка на весь ответ не трогается: это может быть сам перевод, а не каркас.
+    Скобка в середине строки тоже остаётся.
+    """
+    parsed: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        match = _BRACKET_HEAD.match(line.strip())
+        if match and _label_inner(match.group(1)):
+            parsed.append(("label", match.group(2).strip()))
+        else:
+            parsed.append(("text", line.strip()))
+    has_body = any((kind == "text" and part) or (kind == "label" and part) for kind, part in parsed)
+    if not has_body:
+        return text.strip()
+    kept: list[str] = []
+    for kind, part in parsed:
+        if kind == "label":
+            if part:
+                kept.append(part)
+            continue
+        kept.append(part)
+    return "\n".join(kept).strip()
+
+
+def _has_bare_header(text: str) -> bool:
+    for line in text.splitlines():
+        match = _BRACKET_HEAD.match(line.strip())
+        if match and _label_inner(match.group(1)) and not match.group(2).strip():
+            return True
+    return False
+
+
 def _drop_instruction_prefix(line: str) -> str | None:
     """Срезает переведённую инструкцию в начале строки и оставляет перевод после неё."""
     rest = line.strip()
@@ -406,6 +453,7 @@ def clean_model_output(text: str) -> str:
     cleaned = str(text or "").strip()
     if not cleaned:
         return ""
+    cleaned = _strip_bare_headers(cleaned)
     cleaned = _answer_after_prompt_frame(cleaned)
     cleaned = _STAR_LABEL.sub(" ", cleaned)
     cleaned = _BARE_SCAFFOLD.sub(" ", cleaned)
@@ -1033,12 +1081,18 @@ def _generate_translation(
 ) -> str:
     """Один вызов модели. Если ответ повторяет фон, повтор без этого фона."""
 
-    def once(prior: list[tuple[str, str]], story: str) -> str:
+    def once(
+        prior: list[tuple[str, str]],
+        story: str,
+        *,
+        context: str,
+        rules_text: str,
+    ) -> str:
         system, user, replacements = build_translation_prompt(
             source,
             direction,
-            project_context,
-            rules,
+            context,
+            rules_text,
             glossary,
             prior,
             style=style,
@@ -1054,18 +1108,20 @@ def _generate_translation(
             raise InferenceError(str(exc)) from exc
 
     target = _target_code(direction)
-    raw = once(previous, summary)
-    finished = finish_translation(raw, source, target)
+    raw = once(previous, summary, context=project_context, rules_text=rules)
+    finished = finish_translation(raw, source, target, previous)
     story = summary.strip()
-    echoed = (
-        _has_scaffold(raw)
-        or _has_emphasis_label(raw)
-        or output_repeats_context(finished, previous, story)
-        or _same_text(finished, source)
+    echoed = output_repeats_context(finished, previous, story) or translation_missed(
+        finished, source, target, previous
     )
-    if (previous or story) and echoed:
-        raw = once([], "")
-        finished = finish_translation(raw, source, target)
+    supplied = bool(previous or story or project_context.strip() or rules.strip())
+    # Второй проход без фона. Если фона не было, а модель повторила источник
+    # или вставила чужую письменность, тот же голый промпт сэмплируется ещё раз.
+    resample = _echoes_source(finished, source) or script_intrusion(finished, source, target)
+    if echoed and (supplied or resample):
+        raw = once([], "", context="", rules_text="")
+        finished = finish_translation(raw, source, target, [])
+    finished = strip_foreign_script(finished, source, target)
     if not finished.strip():
         raise InferenceError("Модель вернула пустой ответ. Фрагмент можно повторить.")
     return finished
@@ -1262,6 +1318,135 @@ def _same_text(left: str, right: str) -> bool:
     return bool(folded) and folded == other
 
 
+def _collapse_repeats(text: str) -> str:
+    tokens = text.split()
+    if not tokens:
+        return ""
+    kept = [tokens[0]]
+    for token in tokens[1:]:
+        if token.casefold() != kept[-1].casefold():
+            kept.append(token)
+    return " ".join(kept)
+
+
+def _echoes_source(text: str, source: str) -> bool:
+    """Ответ повторяет источник целиком или тем же словом несколько раз."""
+    if _same_text(text, source):
+        return True
+    left = _collapse_repeats(text)
+    right = _collapse_repeats(source)
+    return bool(right) and left.casefold() == right.casefold()
+
+
+def repeats_source(translation: str, source: str) -> bool:
+    """Перевод не годится как фон: это копия своего источника или он вклеен в ответ."""
+    if _echoes_source(translation, source):
+        return True
+    src = " ".join(source.casefold().split())
+    trans = " ".join(translation.casefold().split())
+    return len(src) >= 8 and src in trans
+
+
+_SCRIPT_PATTERNS = (
+    ("kana", re.compile(r"[\u3040-\u30ff]")),
+    ("hangul", re.compile(r"[\uac00-\ud7af]")),
+    ("han", re.compile(r"[\u4e00-\u9fff]")),
+    ("cyrillic", re.compile(r"[А-Яа-яЁёІіЇїЄєҐґ]")),
+    ("arabic", re.compile(r"[\u0600-\u06ff]")),
+    ("hebrew", re.compile(r"[\u0590-\u05ff]")),
+    ("greek", re.compile(r"[\u0370-\u03ff]")),
+    ("devanagari", re.compile(r"[\u0900-\u097f]")),
+    ("thai", re.compile(r"[\u0e00-\u0e7f]")),
+    ("latin", re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]")),
+)
+_SCRIPT_TARGETS = {
+    "ru": frozenset({"cyrillic"}),
+    "uk": frozenset({"cyrillic"}),
+    "be": frozenset({"cyrillic"}),
+    "bg": frozenset({"cyrillic"}),
+    "kk": frozenset({"cyrillic"}),
+    "mk": frozenset({"cyrillic"}),
+    "mn": frozenset({"cyrillic"}),
+    "sr": frozenset({"cyrillic"}),
+    "ja": frozenset({"kana", "han"}),
+    "zh": frozenset({"han"}),
+    "zh-Hant": frozenset({"han"}),
+    "yue": frozenset({"han"}),
+    "ko": frozenset({"hangul", "han"}),
+    "ar": frozenset({"arabic"}),
+    "fa": frozenset({"arabic"}),
+    "ur": frozenset({"arabic"}),
+    "ug": frozenset({"arabic"}),
+    "he": frozenset({"hebrew"}),
+    "el": frozenset({"greek"}),
+    "hi": frozenset({"devanagari"}),
+    "mr": frozenset({"devanagari"}),
+    "ne": frozenset({"devanagari"}),
+    "th": frozenset({"thai"}),
+}
+_HAN_TARGETS = frozenset({"zh", "zh-Hant", "yue"})
+
+
+def _target_scripts(code: str) -> frozenset[str]:
+    if code in _SCRIPT_TARGETS:
+        return _SCRIPT_TARGETS[code]
+    if not code or code == AUTO_LANGUAGE:
+        return frozenset()
+    return frozenset({"latin"})
+
+
+def _script_counts(text: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for name, pattern in _SCRIPT_PATTERNS:
+        found = pattern.findall(text)
+        if found:
+            counts[name] = len(found)
+    return counts
+
+
+def _allowed_scripts(source: str, target_code: str) -> set[str]:
+    allowed = set(_target_scripts(target_code))
+    allowed.update(_script_counts(source))
+    return allowed
+
+
+def translation_script_fits(text: str, target_code: str) -> bool:
+    """Большая часть букв ответа принадлежит письменности целевого языка."""
+    expected = _target_scripts(target_code)
+    if not expected:
+        return True
+    counts = _script_counts(text)
+    total = sum(counts.values())
+    if total < 2:
+        return True
+    if target_code in _HAN_TARGETS and counts.get("kana", 0) > counts.get("han", 0):
+        return False
+    hit = sum(counts.get(name, 0) for name in expected)
+    return hit * 2 >= total
+
+
+def script_intrusion(text: str, source: str, target_code: str) -> bool:
+    """В ответе есть письменность, которой нет ни в источнике, ни в языке цели.
+
+    Иероглиф или кана, которых не было в источнике, заметны сразу.
+    Латиница и кириллица в чужом ответе считаются только когда их большинство:
+    отдельное имя вроде Alice внутри японского перевода остаётся.
+    """
+    allowed = _allowed_scripts(source, target_code)
+    if not allowed:
+        return False
+    counts = _script_counts(text)
+    total = sum(counts.values())
+    if total < 2:
+        return False
+    for name, count in counts.items():
+        if name in allowed or count <= 0:
+            continue
+        if name in {"han", "kana", "hangul"} or count * 2 >= total:
+            return True
+    return False
+
+
 def _has_emphasis_label(text: str) -> bool:
     return any(_label_only_line(line.strip()) for line in text.splitlines() if line.strip())
 
@@ -1300,31 +1485,115 @@ def strip_added_quotes(text: str, source: str) -> str:
     return _unwrap_quote_span(text)
 
 
+def _without_lines(text: str, drop: Callable[[str], bool]) -> str:
+    """Выкидывает совпавшие строки и сохраняет пустые строки между оставшимися."""
+    stripped = text.strip()
+    lines = stripped.splitlines()
+    filled = [index for index, line in enumerate(lines) if line.strip()]
+    if len(filled) < 2:
+        return stripped
+    removed = [index for index in filled if drop(lines[index].strip())]
+    if not removed or len(removed) == len(filled):
+        return stripped
+    kept = [line for index, line in enumerate(lines) if index not in removed]
+    return "\n".join(kept).strip()
+
+
 def _drop_echoed_source(text: str, source: str) -> str:
-    """Убирает абзац, который повторяет источник рядом с настоящим переводом."""
-    parts = [part.strip() for part in re.split(r"\n\s*\n", text.strip()) if part.strip()]
-    if len(parts) < 2:
+    """Убирает строку, которая повторяет источник, если рядом есть перевод.
+
+    Хватает и одного перевода строки: модель часто пишет перевод и следом оригинал,
+    не разделяя их пустой строкой. «Привет привет привет» при источнике «Привет»
+    тоже считается эхом.
+    """
+    if not source.strip():
         return text.strip()
-    kept = [part for part in parts if not _same_text(part, source)]
-    if not kept or len(kept) == len(parts):
-        return text.strip()
-    return "\n\n".join(kept)
+    return _without_lines(text, lambda line: _echoes_source(line, source))
 
 
-def finish_translation(text: str, source: str, target_code: str) -> str:
+def _drop_copied_lines(text: str, previous: list[tuple[str, str]] | None) -> str:
+    """Убирает строку, которая целиком повторяет уже сданный перевод."""
+    copies = [
+        " ".join(str(translation).split())
+        for _source, translation in previous or []
+        if len(" ".join(str(translation).split())) >= 2
+    ]
+    if not copies:
+        return text.strip()
+    return _without_lines(text, lambda line: any(_echoes_source(line, copy) for copy in copies))
+
+
+def _leaks_previous(text: str, previous: list[tuple[str, str]] | None) -> bool:
+    """Ответ начинается с уже переданного перевода или совпадает с ним."""
+    for _source, translation in previous or []:
+        chunk = " ".join(str(translation).split())
+        if len(chunk) < 4:
+            continue
+        folded = chunk.casefold()
+        for line in text.splitlines():
+            current = " ".join(line.split()).casefold()
+            if not current:
+                continue
+            if current == folded or current.startswith(folded):
+                return True
+    return False
+
+
+def finish_translation(
+    text: str,
+    source: str,
+    target_code: str,
+    previous: list[tuple[str, str]] | None = None,
+) -> str:
     """Очищает ответ модели: метки промпта, чужие кавычки и повтор источника."""
     cleaned = polish_translation(clean_model_output(text), target_code)
     cleaned = strip_added_quotes(cleaned, source)
-    return _drop_echoed_source(cleaned, source)
+    cleaned = _drop_echoed_source(cleaned, source)
+    return _drop_copied_lines(cleaned, previous)
 
 
-def translation_missed(text: str, source: str) -> bool:
-    """Ответ пустой, повторяет источник или всё ещё содержит метку промпта."""
+def strip_foreign_script(text: str, source: str, target_code: str) -> str:
+    """Убирает меньшинство чужой письменности, которой не было в источнике.
+
+    Целиком чужой ответ не режется: это промах модели, а не вставка одного слова.
+    """
+    if not text or not target_code or not script_intrusion(text, source, target_code):
+        return text
+    allowed = _allowed_scripts(source, target_code)
+    counts = _script_counts(text)
+    total = sum(counts.values())
+    foreign = sum(count for name, count in counts.items() if name not in allowed)
+    if total == 0 or foreign * 2 >= total:
+        return text
+    cleaned = text
+    for name, pattern in _SCRIPT_PATTERNS:
+        if name not in allowed:
+            cleaned = pattern.sub("", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r" +([,.;:!?…])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def translation_missed(
+    text: str,
+    source: str,
+    target_code: str = "",
+    previous: list[tuple[str, str]] | None = None,
+) -> bool:
+    """Ответ пустой, повторяет источник или фон, либо смешал чужую письменность."""
     if not text.strip():
         return True
-    if _same_text(text, source):
+    if _echoes_source(text, source):
         return True
-    return _has_emphasis_label(text) or _has_scaffold(text)
+    if _has_emphasis_label(text) or _has_scaffold(text) or _has_bare_header(text):
+        return True
+    if _leaks_previous(text, previous):
+        return True
+    if target_code and script_intrusion(text, source, target_code):
+        return True
+    if target_code and not translation_script_fits(text, target_code):
+        return True
+    return False
 
 
 def _hy_mt2_user(

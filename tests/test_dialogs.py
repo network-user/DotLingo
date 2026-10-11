@@ -11,7 +11,14 @@ def test_dialogs_roundtrip_and_reject_a_bad_id(tmp_path: Path) -> None:
             "id": "a" * 32,
             "title": "Первый",
             "mode": "ask",
-            "messages": [{"id": "1", "role": "user", "text": "Привет"}],
+            "messages": [{
+                "id": "1",
+                "role": "user",
+                "text": "Привет",
+                "sourceLang": "ru",
+                "targetLang": "en",
+                "modelId": "hy-mt2-1.8b-q4km",
+            }],
         },
     )
     assert saved["title"] == "Первый"
@@ -28,7 +35,11 @@ def test_dialogs_roundtrip_and_reject_a_bad_id(tmp_path: Path) -> None:
     assert kept["projectId"] == "abc-123"
     listed = {item["id"]: item for item in list_dialogs(tmp_path)}
     assert listed["c" * 32]["projectId"] == "abc-123"
-    assert load_dialog(tmp_path, "a" * 32)["messages"][0]["text"] == "Привет"
+    message = load_dialog(tmp_path, "a" * 32)["messages"][0]
+    assert message["text"] == "Привет"
+    assert message["sourceLang"] == "ru"
+    assert message["targetLang"] == "en"
+    assert message["modelId"] == "hy-mt2-1.8b-q4km"
     delete_dialog(tmp_path, "a" * 32)
     delete_dialog(tmp_path, "b" * 32)
     delete_dialog(tmp_path, "c" * 32)

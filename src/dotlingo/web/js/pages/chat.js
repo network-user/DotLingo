@@ -20,7 +20,7 @@ import {
 const TEXT_LIMIT = 2000;
 const FILE_CAP = 3;
 
-/** @type {Array<{id: string, role: 'user'|'model', text: string, pending?: boolean, error?: string}>} */
+/** @type {Array<{id: string, role: 'user'|'model', text: string, pending?: boolean, error?: string, sourceLang?: string, targetLang?: string, modelId?: string}>} */
 let thread = [];
 
 /** @type {Array<{id: string, title: string, mode: string, updatedAt: string}>} */
@@ -211,9 +211,24 @@ function previousPairs() {
   for (let index = 0; index < thread.length - 1; index += 1) {
     const source = thread[index];
     const reply = thread[index + 1];
-    if (source?.role === 'user' && reply?.role === 'model' && reply.text && !reply.error) {
-      pairs.push({ source: source.text, translation: reply.text });
+    if (source?.role !== 'user' || reply?.role !== 'model' || !reply.text || reply.error) continue;
+    if (mode === 'translate') {
+      if (source.targetLang && source.targetLang !== targetLang) continue;
+      if (
+        source.sourceLang
+        && sourceLang !== 'auto'
+        && source.sourceLang !== 'auto'
+        && source.sourceLang !== sourceLang
+      ) continue;
+      if (source.modelId && source.modelId !== modelId) continue;
     }
+    pairs.push({
+      source: source.text,
+      translation: reply.text,
+      sourceLang: source.sourceLang || '',
+      targetLang: source.targetLang || '',
+      modelId: source.modelId || '',
+    });
   }
   return pairs.slice(-6);
 }
@@ -517,6 +532,9 @@ function snapshot() {
         role: turn.role,
         text: turn.text,
         error: turn.error || '',
+        sourceLang: turn.sourceLang || '',
+        targetLang: turn.targetLang || '',
+        modelId: turn.modelId || '',
       })),
   };
 }
@@ -567,6 +585,9 @@ async function openDialog(id) {
     role: turn.role,
     text: turn.text || '',
     error: turn.error || '',
+    sourceLang: turn.sourceLang || '',
+    targetLang: turn.targetLang || '',
+    modelId: turn.modelId || '',
   }));
   attachments = [];
   draft = '';
@@ -726,7 +747,14 @@ async function send() {
   const shown = [text, ...attachments.map((file) => `Файл «${file.name}»`)].filter(Boolean).join('\n');
   const files = attachmentPayload();
   if (isDemo()) {
-    thread.push({ id: newId(), role: 'user', text: shown });
+    thread.push({
+      id: newId(),
+      role: 'user',
+      text: shown,
+      sourceLang,
+      targetLang,
+      modelId: model.id,
+    });
     thread.push({
       id: newId(),
       role: 'model',
@@ -740,7 +768,14 @@ async function send() {
     paintFiles();
     return;
   }
-  thread.push({ id: newId(), role: 'user', text: shown });
+  thread.push({
+    id: newId(),
+    role: 'user',
+    text: shown,
+    sourceLang,
+    targetLang,
+    modelId: model.id,
+  });
   draft = '';
   attachments = [];
   stick = true;

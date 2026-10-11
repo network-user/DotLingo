@@ -250,7 +250,11 @@ def test_short_blocks_share_one_call_and_the_story_memory_is_saved(tmp_path: Pat
             lines = [line for line in user.splitlines() if line.startswith("Line ")]
             if not lines:
                 lines = ["Line 0."]
-            return "\n\n".join(f"Строка {line.removeprefix('Line ').strip()}" for line in lines)
+            rendered = []
+            for line in lines:
+                number = line.removeprefix("Line ").split(" ", 1)[0]
+                rendered.append(f"Строка {number} ведёт рассказ дальше.")
+            return "\n\n".join(rendered)
 
     monkeypatch.setattr(task_queue_module, "get_model", lambda model_id, root=None: {
         "id": model_id,
@@ -293,7 +297,7 @@ def test_short_blocks_share_one_call_and_the_story_memory_is_saved(tmp_path: Pat
     assert second.index("*[Background Information]*") < second.index(
         "taking the provided background information into consideration"
     )
-    assert "Строка 0 keeps" in second
+    assert "Строка 0 ведёт рассказ дальше." in second
     assert "Line 0." not in second
     assert engine.calls[5][2] == 220
     assert "Память книги о строках." in engine.calls[6][1]

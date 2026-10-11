@@ -16,7 +16,17 @@ from dotlingo.engine import (
 )
 from dotlingo.hardware import detect, plan_placement
 from dotlingo.models import get_model, model_path, verify_model
-from dotlingo.task_queue import build_translation_prompt, finish_translation, translation_missed
+from dotlingo.task_queue import (
+    _echoes_source,
+    _worth_context,
+    build_translation_prompt,
+    finish_translation,
+    repeats_source,
+    script_intrusion,
+    strip_foreign_script,
+    translation_missed,
+    translation_script_fits,
+)
 
 ASK_SYSTEM = (
     "Answer the user's message directly. Use the same language as the user. "
@@ -55,6 +65,28 @@ def _source_text(text: str, attachment: str) -> str:
     return text
 
 
+def scratch_context(
+    previous: list[tuple[str, str]],
+    target_lang: str,
+    text: str,
+) -> list[tuple[str, str]]:
+    """Фон чата только для длинного продолжения на письменности языка цели.
+
+    Короткая реплика переводится сама по себе. Чужой язык и ответ, в который
+    вклеен оригинал, в следующий промпт не попадают.
+    """
+    if not _worth_context(text):
+        return []
+    kept: list[tuple[str, str]] = []
+    for source, translation in previous:
+        if not _worth_context(source) or repeats_source(translation, source):
+            continue
+        if target_lang and not translation_script_fits(translation, target_lang):
+            continue
+        kept.append((source, translation))
+    return kept[-2:]
+
+
 def prepare_turn(
     model: dict[str, Any],
     text: str,
@@ -84,7 +116,7 @@ def prepare_turn(
         context,
         "",
         [],
-        previous[-2:],
+        scratch_context(previous, target, source_text),
         style=str(model.get("prompt_style") or "general"),
         profile=str(model.get("prompt_profile") or ""),
     )
@@ -138,6 +170,7 @@ class ScratchTranslator:
                     source_text,
                     source,
                     target,
+                    previous if mode != "ask" else [],
                 ),
                 name="DotLingo scratch",
                 daemon=True,
@@ -176,16 +209,21 @@ class ScratchTranslator:
         source_text: str = "",
         source_lang: str = "",
         target_lang: str = "",
+        previous: list[tuple[str, str]] | None = None,
     ) -> None:
         pending: list[str] = []
         raw_parts: list[str] = []
         last_flush = time.monotonic()
+        context_pairs = scratch_context(previous or [], target_lang, source_text)
+
+        def cleaned(raw: str, prior: list[tuple[str, str]]) -> str:
+            return finish_translation(raw, source_text, target_lang, prior)
 
         def rendered() -> str:
             raw = "".join(raw_parts)
             if not clean_output:
                 return raw
-            return finish_translation(raw, source_text, target_lang)
+            return strip_foreign_script(cleaned(raw, context_pairs), source_text, target_lang)
 
         def flush() -> None:
             nonlocal last_flush
@@ -218,21 +256,26 @@ class ScratchTranslator:
             result = engine.translate(system, user, max_tokens=max_tokens, on_token=on_token)
             flush()
             if clean_output:
-                result = finish_translation(result, source_text, target_lang)
+                result = cleaned(result, context_pairs)
                 bare_system, bare_user = prepare_turn(
                     model, source_text, source_lang, target_lang, [], "", "translate"
                 )
-                # Фон и «определи язык» модель часто цитирует вместо перевода.
-                if (system, user) != (bare_system, bare_user) and translation_missed(
-                    result, source_text
-                ):
+                missed = translation_missed(result, source_text, target_lang, context_pairs)
+                different = (system, user) != (bare_system, bare_user)
+                # Тот же голый промпт имеет смысл звать ещё раз только если модель
+                # повторила источник или подмешала чужую письменность.
+                resample = _echoes_source(result, source_text) or script_intrusion(
+                    result, source_text, target_lang
+                )
+                if missed and (different or resample):
                     raw_parts.clear()
                     pending.clear()
                     result = engine.translate(
                         bare_system, bare_user, max_tokens=max_tokens, on_token=on_token
                     )
                     flush()
-                    result = finish_translation(result, source_text, target_lang)
+                    result = cleaned(result, [])
+                result = strip_foreign_script(result, source_text, target_lang)
             self._push("chat_done", {"requestId": request_id, "ok": True, "text": result, "error": None})
         except InferenceCancelled:
             self._drop_engine()

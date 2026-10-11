@@ -67,6 +67,10 @@ def _clean_message(raw: Any) -> dict[str, Any] | None:
     }
     if raw.get("error"):
         item["error"] = str(raw.get("error"))[:500]
+    for key, limit in (("sourceLang", 16), ("targetLang", 16), ("modelId", 80)):
+        value = str(raw.get(key) or "").strip()
+        if value:
+            item[key] = value[:limit]
     return item
 
 

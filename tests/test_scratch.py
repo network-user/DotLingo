@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dotlingo.api import Api
+from dotlingo.api import Api, _scratch_pairs
 from dotlingo.languages import supports_language
 from dotlingo.models import catalog
-from dotlingo.scratch import prepare_turn
+from dotlingo.scratch import prepare_turn, scratch_context
 
 
 def _model() -> dict:
@@ -30,6 +30,76 @@ def test_hy_mt2_ask_puts_the_reply_instruction_in_the_user_turn() -> None:
     assert system == ""
     assert "Привет" in user
     assert "Assistant:" in user
+
+
+def test_scratch_context_drops_another_language_and_a_short_turn() -> None:
+    model = _model()
+    japanese = [("Привет привет привет всем", "こんにちは、みなさん")]
+    short = prepare_turn(model, "как дела", "ru", "ja", japanese, "тон", "translate")[1]
+    assert "こんにちは" not in short
+    assert "тон" in short
+    long_source = "Voskresensky sings this song on Easter Sunday morning."
+    mixed = prepare_turn(model, long_source, "ru", "en", japanese, "", "translate")[1]
+    assert "こんにちは" not in mixed
+    assert long_source in mixed
+    same = (
+        "The road was long and quiet before dawn.",
+        "Дорога была длинной и тихой ещё до рассвета.",
+    )
+    kept = prepare_turn(
+        model,
+        "The harbour is quiet tonight and the lights are low.",
+        "en",
+        "ru",
+        [same],
+        "",
+        "translate",
+    )[1]
+    assert "Дорога была длинной" in kept
+    assert scratch_context([("Привет", "こんにちは")], "ja", "как дела") == []
+
+
+def test_scratch_pairs_keep_only_the_active_direction() -> None:
+    pairs = _scratch_pairs(
+        [
+            {
+                "source": "Привет привет привет всем",
+                "translation": "こんにちは",
+                "sourceLang": "ru",
+                "targetLang": "ja",
+                "modelId": "hy",
+            },
+            {
+                "source": "The road was long and quiet before dawn.",
+                "translation": "Дорога была длинной и тихой ещё до рассвета.",
+                "sourceLang": "en",
+                "targetLang": "ru",
+                "modelId": "hy",
+            },
+        ],
+        source_lang="en",
+        target_lang="ru",
+        model_id="hy",
+    )
+    assert pairs == [(
+        "The road was long and quiet before dawn.",
+        "Дорога была длинной и тихой ещё до рассвета.",
+    )]
+    other_model = _scratch_pairs(
+        [
+            {
+                "source": "The road was long and quiet before dawn.",
+                "translation": "Дорога была длинной и тихой ещё до рассвета.",
+                "sourceLang": "en",
+                "targetLang": "ru",
+                "modelId": "other",
+            }
+        ],
+        source_lang="en",
+        target_lang="ru",
+        model_id="hy",
+    )
+    assert other_model == []
 
 
 def test_ask_scratch_validates_without_loading_weights(tmp_path: Path) -> None:
