@@ -78,7 +78,7 @@ def main() -> None:
 
     if args.demo:
         photo = _demo_photo()
-        out = args.out or Path(r"C:\Users\User\Downloads\DotLingo_photo_proof.png")
+        out = args.out or Path(__file__).with_name("DotLingo_photo_proof.png")
         result, found = replace_image_text(
             photo,
             {0: "Чайная вечеринка", 1: "Безумный Шляпник"},
@@ -112,7 +112,7 @@ def main() -> None:
             return
 
     painted = paint_lines(image, found, _load(args.translations))
-    out = args.out or Path(r"C:\Users\User\Downloads\DotLingo_photo_proof.png")
+    out = args.out or Path(__file__).with_name("DotLingo_photo_proof.png")
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.suffix.lower() == ".pdf":
         painted.save(out, "PDF", resolution=144)

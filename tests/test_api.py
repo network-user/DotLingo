@@ -716,6 +716,30 @@ def test_open_path_does_not_start_an_outside_or_executable_file(
     assert started == []
 
 
+def test_open_path_blocks_a_link_whose_target_is_an_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _make_api(tmp_path)
+    _create_project(api)
+    started: list[str] = []
+    monkeypatch.setattr(os, "startfile", lambda path: started.append(str(path)), raising=False)
+    output = api.projects_dir / api.active_project_id / "output"
+    output.mkdir(parents=True, exist_ok=True)
+    program = output / "tool.exe"
+    program.write_bytes(b"MZ")
+    link = output / "note.html"
+    link.write_text("<p>текст</p>", encoding="utf-8")
+    try:
+        link.unlink()
+        link.symlink_to(program)
+    except OSError:
+        link.write_text("<p>текст</p>", encoding="utf-8")
+        api._guard_export_file = lambda _path: program  # noqa: SLF001
+    blocked = api.openPath(str(link))
+    assert blocked["code"] == "blocked"
+    assert started == []
+
+
 def test_reveal_allows_project_data_and_refuses_an_outside_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from pathlib import Path
+
+import pytest
 
 import dotlingo.task_queue as task_queue_module
 from dotlingo.formats import export_document
 from dotlingo.hardware import HardwareSnapshot
-from dotlingo.storage import ProjectStore
+from dotlingo.storage import ProjectStore, list_projects
 from dotlingo.task_queue import LIVE_TEXT_LIMIT, TaskQueue, build_chunks, clip_live_text
 
 
@@ -100,9 +103,24 @@ def test_pause_and_cancel_do_not_reopen_a_finished_task(tmp_path: Path) -> None:
     assert store.task(task_id)["status"] == "complete"
 
 
-def test_broken_project_database_does_not_stop_the_list(tmp_path: Path) -> None:
-    from dotlingo.storage import list_projects
+def test_list_projects_skips_a_directory_junction(tmp_path: Path) -> None:
+    base = tmp_path / "projects"
+    good = ProjectStore.create(base, "Целый")
+    alien_root = tmp_path / "alien"
+    alien = ProjectStore.create(alien_root, "Чужой")
+    link = base / "linked"
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(alien.root)],
+        capture_output=True,
+        check=False,
+    )
+    if created.returncode != 0 or not link.exists():
+        pytest.skip("junction недоступен")
+    found = list_projects(base)
+    assert [item.project["id"] for item in found] == [good.project["id"]]
 
+
+def test_broken_project_database_does_not_stop_the_list(tmp_path: Path) -> None:
     base = tmp_path / "projects"
     good = ProjectStore.create(base, "Целый")
     broken = base / "broken"

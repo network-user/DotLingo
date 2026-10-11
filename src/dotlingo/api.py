@@ -268,6 +268,11 @@ _BLOCKED_OPEN_SUFFIXES = {
 }
 
 
+def _blocked_open_target(path: Path) -> bool:
+    """Суффикс смотрится и у исходного пути, и у цели symlink."""
+    return path.suffix.lower() in _BLOCKED_OPEN_SUFFIXES
+
+
 def _safe_stem(name: str) -> str:
     stem = Path(name).stem
     cleaned = "".join("-" if char in '<>:"/\\|?*' else char for char in stem).strip(" .")
@@ -2262,9 +2267,10 @@ class Api:
                 if not self._allowed_directory(target):
                     return _err("Эту папку открывать нельзя.", "not_allowed")
             else:
-                if target.suffix.lower() in _BLOCKED_OPEN_SUFFIXES:
+                guarded = self._guard_export_file(path)
+                if _blocked_open_target(target) or _blocked_open_target(guarded):
                     return _err("Этот тип файла открывать нельзя.", "blocked")
-                self._guard_export_file(path)
+                target = guarded
         except ValueError as exc:
             return _err(str(exc), "not_allowed")
         try:
@@ -2287,12 +2293,14 @@ class Api:
         target = Path(path)
         if not target.exists():
             return _err("Файл не найден.", "not_found")
-        if target.suffix.lower() in _BLOCKED_OPEN_SUFFIXES:
+        if _blocked_open_target(target):
             return _err("Этот тип файла открывать нельзя.", "blocked")
         try:
             guarded = self._guard_export_file(path)
         except ValueError as exc:
             return _err(str(exc), "not_allowed")
+        if _blocked_open_target(guarded):
+            return _err("Этот тип файла открывать нельзя.", "blocked")
         try:
             if sys.platform == "win32":
                 os.startfile(str(guarded))  # noqa: S606

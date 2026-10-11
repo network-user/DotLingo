@@ -32,10 +32,10 @@ def _load(path: Path) -> dict[tuple[int, int], str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Проба укладки перевода в PDF")
-    parser.add_argument("--pdf", type=Path, default=Path(r"C:\Users\User\Downloads\Alice_in_Wonderland.pdf"))
+    parser.add_argument("--pdf", type=Path, required=True)
     parser.add_argument("--pages", default="11,53")
     parser.add_argument("--translations", type=Path, default=Path(__file__).with_name("alice_proof_ru.json"))
-    parser.add_argument("--out", type=Path, default=Path(r"C:\Users\User\Downloads\Alice_layout_proof.pdf"))
+    parser.add_argument("--out", type=Path, default=Path(__file__).with_name("Alice_layout_proof.pdf"))
     parser.add_argument("--scope", choices=("book", "all"), default="book")
     args = parser.parse_args()
     pages = [int(item) for item in args.pages.split(",") if item.strip()]

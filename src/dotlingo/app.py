@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import json
 import os
 import signal
 import subprocess
@@ -484,6 +485,38 @@ def _release_webview_without_waiting(self) -> None:
         return
 
 
+# pywebview отдает в WebMessage любое имя метода. Список window.pywebview.api
+# прячет имена с подчёркиванием, разбор сообщения - нет. _pywebviewAlert свой.
+_PYWEBVIEW_BRIDGE_NAMES = frozenset({"_pywebviewAlert"})
+
+
+def _bridge_call_allowed(name: object) -> bool:
+    """Публичные методы Api и служебные имена библиотеки. Скрытые методы Api нет."""
+    if not isinstance(name, str) or not name:
+        return False
+    if name.startswith("_") and name not in _PYWEBVIEW_BRIDGE_NAMES:
+        return False
+    return True
+
+
+def _guarded_script_notify(self, sender: object, args: Any) -> None:
+    """Не вызывать Api._grant_* и другие скрытые методы из сообщения страницы."""
+    try:
+        return_value = args.get_WebMessageAsJson()
+    except Exception:
+        return_value = None
+    if return_value and return_value != '"FilesDropped"':
+        try:
+            func_name = json.loads(return_value)[0]
+        except (TypeError, ValueError, IndexError, KeyError):
+            func_name = None
+        if func_name is not None and not _bridge_call_allowed(func_name):
+            return
+    notify = getattr(self, "_dotlingo_script_notify", None)
+    if notify is not None:
+        notify(sender, args)
+
+
 def _local_server_port() -> int | None:
     try:
         import webview.http as http
@@ -539,6 +572,10 @@ def _install_webview_browser_arguments() -> None:
     # Ждать процесс браузера при выходе нельзя: окно замирает на закрытой книге.
     edge.EdgeChrome.clear_user_data = _release_webview_without_waiting
     edge.EdgeChrome.on_navigation_start = _guarded_navigation_start
+    if not getattr(edge.EdgeChrome, "_dotlingo_bridge_guard", False):
+        edge.EdgeChrome._dotlingo_script_notify = edge.EdgeChrome.on_script_notify
+        edge.EdgeChrome.on_script_notify = _guarded_script_notify
+        edge.EdgeChrome._dotlingo_bridge_guard = True
     if getattr(edge.EdgeChrome, "_dotlingo_args", False):
         return
     edge.__dict__["_dotlingo_merge_arguments"] = _merge_browser_arguments

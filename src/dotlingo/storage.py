@@ -899,16 +899,23 @@ class ProjectStore:
 
 def list_projects(base: Path) -> list[ProjectStore]:
     result = []
-    if not Path(base).is_dir():
+    root = Path(base).resolve()
+    if not root.is_dir():
         return result
-    for child in Path(base).iterdir():
-        if (child / "project.sqlite").is_file():
-            try:
-                store = ProjectStore(child)
-                store.project
-                result.append(store)
-            except (OSError, sqlite3.DatabaseError):
+    for child in root.iterdir():
+        database = child / "project.sqlite"
+        if not database.is_file():
+            continue
+        try:
+            # Junction и symlink уводят sqlite за каталог projects. Удаление
+            # такое уже отвергает; список не должен открывать и мигрировать чужую базу.
+            if child.resolve().parent != root or database.resolve().parent != child.resolve():
                 continue
+            store = ProjectStore(child)
+            store.project
+            result.append(store)
+        except (OSError, sqlite3.DatabaseError):
+            continue
     return sorted(result, key=lambda project: project.project["updated_at"], reverse=True)
 
 
