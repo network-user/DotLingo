@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-label="Что внутри DotLingo">
+  <title>Что внутри DotLingo</title>
+  <defs>
+    <linearGradient id="dli-in-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0b0d"/>
+      <stop offset="0.5" stop-color="#14161a"/>
+      <stop offset="1" stop-color="#0b0c0e"/>
+    </linearGradient>
+    <radialGradient id="dli-in-glow" cx="70%" cy="18%" r="55%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#dli-in-bg)"/>
+  <rect width="1600" height="900" fill="url(#dli-in-glow)"/>
+  <g opacity="0.045" stroke="#ffffff" stroke-width="1">
+    <path d="M0 225 H1600 M0 450 H1600 M0 675 H1600 M400 0 V900 M800 0 V900 M1200 0 V900"/>
+  </g>
+  <text x="80" y="110" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="700" fill="#f3f3f1">Что внутри</text>
+  <g font-family="Inter, Arial, sans-serif" fill="#f3f3f1">
+    <rect x="80" y="180" width="270" height="560" rx="18" fill="#14161a" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="108" y="250" font-size="28" font-weight="700">Модели</text>
+    <text x="108" y="310" font-size="20" fill="#a6a7ab">4 GGUF в каталоге.</text>
+    <text x="108" y="346" font-size="20" fill="#a6a7ab">6 репозиториев рынка.</text>
+    <rect x="374" y="180" width="270" height="560" rx="18" fill="#14161a" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="402" y="250" font-size="28" font-weight="700">Перевод</text>
+    <text x="402" y="310" font-size="20" fill="#a6a7ab">Очередь, пауза, диалог.</text>
+    <text x="402" y="346" font-size="20" fill="#a6a7ab">Одна модель на задачу.</text>
+    <rect x="668" y="180" width="270" height="560" rx="18" fill="#14161a" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="696" y="250" font-size="28" font-weight="700">Форматы</text>
+    <text x="696" y="310" font-size="20" fill="#a6a7ab">TXT, MD, DOCX, EPUB.</text>
+    <text x="696" y="346" font-size="20" fill="#a6a7ab">PDF до 512 МБ.</text>
+    <rect x="962" y="180" width="270" height="560" rx="18" fill="#14161a" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="990" y="250" font-size="28" font-weight="700">Установка</text>
+    <text x="990" y="310" font-size="20" fill="#a6a7ab">Клон и ярлык pythonw.</text>
+    <text x="990" y="346" font-size="20" fill="#a6a7ab">Обновление с main.</text>
+    <rect x="1256" y="180" width="264" height="560" rx="18" fill="#14161a" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="1284" y="250" font-size="28" font-weight="700">Устройство</text>
+    <text x="1284" y="310" font-size="20" fill="#a6a7ab">RAM и GPU локально.</text>
+    <text x="1284" y="346" font-size="20" fill="#a6a7ab">Колесо llama по кнопке.</text>
+  </g>
+</svg>

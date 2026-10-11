@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Python-3.12--3.13-3776AB?style=flat" alt="Python 3.12-3.13" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-555?style=flat" alt="Windows 10/11 x64" />
   <img src="https://img.shields.io/badge/Category-Desktop%20App-orange?style=flat" alt="Desktop application" />
-  <!-- loc:start --><img src="https://img.shields.io/badge/lines_of_code-36974-lightgrey?style=flat" alt="36974 lines of code" /><!-- loc:end -->
+  <!-- loc:start --><img src="https://img.shields.io/badge/lines_of_code-37939-lightgrey?style=flat" alt="37939 lines of code" /><!-- loc:end -->
 </p>
 
 <img src="docs/cover.svg" width="720" alt="DotLingo" />
@@ -16,11 +16,24 @@
 </p>
 <!-- audit:end -->
 
-DotLingo переводит документы локально на Windows. Оригинал хранится отдельной копией и не переписывается. Окно открывает pywebview на Edge WebView2, перевод идёт через GGUF в отдельном процессе llama.cpp, очередь и тексты лежат в SQLite проекта.
+DotLingo переводит документы локально на Windows. Оригинал остаётся отдельной копией, окно открывает pywebview на Edge WebView2.
+
+## Что внутри
+
+<img src="docs/readme/inside.svg" width="720" alt="Что внутри DotLingo" />
+
+- **Свой файл:** выбранный GGUF копируется в каталог моделей после подтверждения, с проверкой размера и SHA-256.
+- **Редактор:** оригинал стоит рядом с переводом, черновик модели хранится отдельно от правки.
+- **Глоссарий:** термин правится на месте, совпадение внутри фрагмента закрывается маркером.
+- **Скан:** страница почти без текста читается Windows OCR, перевод пишется поверх картинки.
+- **Экспорт:** DOCX и EPUB пишутся только из такого же исходника.
+- **Данные:** проекты и модели лежат в `%LOCALAPPDATA%\DotLingo` и не делят каталог с кодом.
+
+Подробности: [локальная установка](docs/LOCAL_SETUP.md), [модели](docs/MODEL_MATRIX.md), [архитектура](docs/ARCHITECTURE.md), [форматы](docs/FORMAT_MATRIX.md), [сборка Windows](docs/BUILD_WINDOWS.md).
 
 ## Запуск
 
-Готового установщика на странице Releases нет. Скачивается репозиторий, затем `Install.bat` ставит программу текущему пользователю и создаёт ярлык.
+Нужны Windows 10/11 x64, Git, сеть и CPython 3.12 или 3.13.
 
 ```powershell
 git clone https://github.com/network-user/DotLingo.git
@@ -28,53 +41,22 @@ cd DotLingo
 .\Install.bat
 ```
 
-Архив той же ветки: [main.zip](https://github.com/network-user/DotLingo/archive/refs/heads/main.zip). После распаковки запусти `Install.bat` из корня. Клон нужен, чтобы потом обновляться с `origin/main`.
-
-Нужны Windows 10/11 x64, сеть, Git и CPython 3.12 или 3.13 в `PATH`. `Install.bat` создаёт `.venv`, ставит `pip install -e ".[pdf]"` и ярлык на `pythonw -m dotlingo`. Колесо llama.cpp и веса моделей скрипт не скачивает.
-
-Ярлык DotLingo появляется на рабочем столе и в меню «Пуск» и запускает этот клон. Проекты, настройки и модели лежат в `%LOCALAPPDATA%\DotLingo`. Для окна нужен [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/). На Windows 11 он обычно уже есть. Обновление клона ставится кнопкой в настройках или `deploy\update.ps1`.
-
-Запуск из исходников, без установщика. Подойдёт CPython 3.12 или 3.13:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev,pdf]"
-python -m dotlingo
-```
-
-Для перевода отдельно ставится extra `inference`: закреплён `llama-cpp-python==0.3.35`. Веса сами не скачиваются. Свой GGUF копируется в каталог моделей только после выбора файла и подтверждения. Для тестов и сборки есть `--data-dir`.
-
-## Что внутри
-
-- **Каталог:** 4 GGUF в `src/dotlingo/models.json`. Hy-MT2 1.8B Q4_K_M, 1.8B Q8_0, 7B Q4_K_M и TranslateGemma 4B Q4_K_M. Файл качается после согласия и сверяется по ревизии, размеру и SHA-256. Safetensors Google не скачиваются. Qwen и STQ 1.25/2 бита в этот список не входят.
-- **Рынок:** 6 репозиториев Hugging Face в `market.py`: HY-MT1.5 1.8B и 7B, Hy-MT2 1.8B и 7B, Qwen3 4B и 8B. Кнопка читает карточки и дерево файлов, не веса. На репозиторий остаётся до трёх GGUF, по роли скорость, баланс и точность. Перед скачиванием ревизия, размер и SHA-256 сверяются ещё раз.
-- **Свой файл:** выбранный локальный GGUF копируется в каталог моделей после отдельного подтверждения. Проверяются magic, размер и SHA-256. Языки и контекст, которые задаёт пользователь, совместимость не подтверждают.
-- **Устройство:** RAM, диск, CPU, GPU и runtime смотрятся локально и кэшируются. Рекомендация берёт самую крупную модель каталога, если всей RAM устройства хватает на расчёт плюс 1 ГБ, а на диске есть размер файла и ещё 10%.
-- **Проекты и очередь:** несколько целевых языков, пауза, отмена, восстановление прерванного. Проект можно переименовать и удалить.
-- **Редактор:** оригинал рядом с переводом, карта документа, поиск, фильтры пустых, машинных и правленых блоков. Черновик модели хранится отдельно от правки. Пропуски глоссария подсвечиваются.
-- **Диалог:** страница без проекта, перевод или разговор, вложения до 8000 знаков. Модель та же, что у очереди документов, и параллельно с ней не работает.
-- **Глоссарий:** термины проекта, правка и удаление на месте. Совпадения внутри фрагмента закрываются маркерами.
-- **Форматы:** импорт TXT, Markdown, DOCX, EPUB и PDF, потолок 512 МБ. Скан читается системным Windows OCR, перевод пишется поверх страницы. Экспорт TXT, Markdown, DOCX, EPUB и PDF. DOCX и EPUB пишутся только из такого же исходника.
-- **Установка:** `Install.bat` и `deploy\install.ps1` ставят клон, `.venv` и ярлык `pythonw -m dotlingo`. Клон сверяется с `origin/main` при запуске. Обновление ставится кнопкой в настройках или `deploy\update.ps1`.
-
-Подробности: [локальная установка](docs/LOCAL_SETUP.md), [модели](docs/MODEL_MATRIX.md), [архитектура](docs/ARCHITECTURE.md), [форматы](docs/FORMAT_MATRIX.md), [сборка Windows](docs/BUILD_WINDOWS.md).
+Ярлык на рабочем столе запускает `.venv\Scripts\pythonw.exe -m dotlingo`. Проекты и модели остаются в `%LOCALAPPDATA%\DotLingo`.
 
 ## Команды
 
 | Действие | Команда |
 |----------|---------|
-| Скачать и установить с ярлыком | `git clone https://github.com/network-user/DotLingo.git`, затем `.\Install.bat` |
-| Повторить установку ярлыка в текущем клоне | `.\Install.bat` |
-| Запустить из исходников | `python -m dotlingo` |
+| Скачать и поставить ярлык | `git clone https://github.com/network-user/DotLingo.git`, затем `.\Install.bat` |
+| Запустить из клона | `python -m dotlingo` |
+| Обновить клон с origin/main | `.\deploy\update.ps1` |
 | Headless-проверка моста | `python -m dotlingo --smoke-test` |
 | Запустить тесты | `python -m pytest -q` |
 | Проверить стиль | `python -m ruff check src tests` |
 | Собрать иконку | `python scripts/build_icon.py` |
 | Собрать Windows Setup.exe | `.\deploy\windows\build.ps1` |
-| Обновить клон с origin/main | `.\deploy\update.ps1` |
 
-Сборка Setup.exe требует CPython 3.12 x64 и CPU-колесо `llama-cpp-python`. Если Inno Setup не установлен, `deploy\windows\build.ps1` скачивает `innosetup-6.7.3.exe` в `build\tools` и сверяет SHA-256 `9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732`. Скрипт ставит `.[pdf,build]`, затем закреплённое CPU-колесо после проверки SHA-256. Иконке нужен Pillow из extra `build`. Уже собранный каталог можно упаковать без повторного PyInstaller: `.\deploy\windows\build.ps1 -DistPath build\windows\<дата>\dist\DotLingo`.
+`Install.bat` ставит `pip install -e ".[pdf]"` и не скачивает колесо llama.cpp. Отдельный `Setup.exe` собирает `deploy\windows\build.ps1`, ярлык его не запускает.
 
 ## Стек
 
@@ -95,11 +77,11 @@ python -m dotlingo
 
 ## Тесты
 
-В `tests/` 22 модуля: форматы, сегментация, глоссарий, очередь, хранилище, загрузка, рынок, мост, обновление клона, диалоги, мастер, окно и остановка процесса. Headless-проверка моста: `python -m dotlingo --smoke-test`. PDF-fixture собирается через PyMuPDF (`fitz`) и пропускается, если пакета нет. Само приложение читает PDF через `pypdf`. Приёмка Setup.exe на чистой Windows VM в репозитории не зафиксирована.
+В `tests/` 23 модуля, PDF-fixture на PyMuPDF пропускается, если пакета нет.
 
 ## Архитектура
 
-pywebview держит окно 1280x820 (минимум 1020x680) и раздаёт `web/` своим HTTP-сервером. Мост `api.py` вызывает ядро без UI. События очереди, загрузки и обновления уходят в JS через `evaluate_js`. У каждого проекта свой `project.sqlite` в режиме WAL. Inference запускается отдельным процессом: ошибка DLL или нехватка RAM не роняют окно.
+pywebview держит окно 1280x820 и раздаёт `web/` своим HTTP-сервером. Мост `api.py` вызывает ядро без UI, у каждого проекта свой `project.sqlite`.
 
 ```text
 src/dotlingo/
@@ -108,10 +90,10 @@ src/dotlingo/
 ├── web/                   # vanilla JS, без сборки
 │   ├── index.html
 │   ├── styles/            # tokens.css и листы страниц
-│   └── js/                # bridge, store, router, 8 страниц и мастер
+│   └── js/                # bridge, store, router, страницы и мастер
 ├── hardware.py            # RAM, диск, CPU, GPU, план размещения
-├── runtime_install.py     # колесо llama.cpp по кнопке, не в Setup.exe
-├── updater.py             # сверка клона с origin/main, не для Setup.exe
+├── runtime_install.py     # колесо llama.cpp по кнопке
+├── updater.py             # сверка клона с origin/main
 ├── models.py              # каталог и свои GGUF
 ├── models.json            # 4 закреплённых веса
 ├── model_download.py      # согласие, SHA-256, атомарная активация
@@ -132,12 +114,11 @@ src/dotlingo/
 └── preferences.py         # тема, мастер, последний проект, проверка обновлений
 ```
 
-- Оригинал не меняется. Перевод и экспорт разделены по целевому языку. DOCX и EPUB экспортируются только из того же исходного формата.
-- Ответ моста: `{ok, data}` либо `{ok: false, error, code}`. Долгий вызов сразу возвращает `{started: true}` и докладывает push-событием. После начала активации веса отмена загрузки не принимается.
-- Рекомендация модели смотрит всю RAM устройства с запасом 1 ГБ и свободное место с запасом 10% размера файла. Свободная RAM вердикт не меняет. Качество пар не измеряется.
-- GPU получает слои, только если свободная VRAM дискретной карты покрывает расчёт и запас 1.4 ГБ. Если старт на GPU падает из-за памяти, процесс один раз поднимается на CPU с окном не длиннее 4096 и батчем 256. Потоки CPU: число логических минус один, не больше 8. В исходном запуске сборку llama.cpp можно поставить кнопкой. Setup.exe CUDA не скачивает.
-- Темы переключаются атрибутом `[data-theme]` и пишутся в `preferences.json`. Новые экраны берут цвета из `tokens.css`.
-- Клон при запуске сравнивает себя с `origin/main`. Обновление ставится кнопкой в настройках или `deploy\update.ps1` и не трогает данные в `%LOCALAPPDATA%\DotLingo`. Setup.exe так не обновляется.
+- Оригинал не меняется. Перевод и экспорт разделены по целевому языку.
+- Ответ моста: `{ok, data}` либо `{ok: false, error, code}`. Долгий вызов возвращает `{started: true}`.
+- Рекомендация модели смотрит всю RAM с запасом 1 ГБ и место на диске с запасом 10% размера файла.
+- GPU получает слои, только если свободная VRAM дискретной карты покрывает расчёт и запас 1.4 ГБ.
+- Клон сравнивает себя с `origin/main`. Кнопка в настройках или `deploy\update.ps1` ставит обновление и не трогает `%LOCALAPPDATA%\DotLingo`.
 
 ## Лицензия
 
