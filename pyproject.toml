@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dotlingo"
-version = "0.1.0"
+version = "1.0.0"
 description = "Локальное настольное приложение для перевода документов"
 requires-python = ">=3.12,<3.14"
 dependencies = [
