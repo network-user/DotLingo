@@ -25,6 +25,13 @@ def models_root() -> Path:
 
 
 def app_resource(relative: str) -> Path:
-    """Resolve a packaged resource in source and PyInstaller layouts."""
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    """Resolve a packaged resource in a checkout and in a PyInstaller build.
+
+    The spec copies package data to ``_internal/dotlingo``. ``sys._MEIPASS`` is
+    the ``_internal`` directory, so the frozen base is one level deeper.
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base = Path(sys._MEIPASS) / "dotlingo"
+    else:
+        base = Path(__file__).resolve().parent
     return base / relative

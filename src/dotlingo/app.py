@@ -611,6 +611,7 @@ def _run_smoke_test(data_dir: Path | None) -> int:
         ("dirs", api.getDataDirs()["ok"] is True),
         ("tasks", api.listTasks()["ok"] is True),
         ("update", api.getUpdateStatus()["ok"] is True),
+        ("ui", app_resource("web/index.html").is_file()),
     ]
     failed = [name for name, passed in checks if not passed]
     print(json.dumps({"ok": not failed, "failed": failed}, ensure_ascii=False))
