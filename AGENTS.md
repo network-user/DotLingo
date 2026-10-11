@@ -30,10 +30,10 @@ python -m dotlingo
 | Тесты | `python -m pytest -q` |
 | Lint | `python -m ruff check src tests` |
 | Windows Setup.exe | `.\deploy\windows\build.ps1` |
-| Установить собранную программу и ярлык | `.\Install.bat` |
+| Установить клон, окружение и ярлык | `.\Install.bat` |
 | Обновить клон с origin/main | `.\deploy\update.ps1` |
 
-Для сборки Setup.exe нужны CPython 3.12 x64 и CPU wheel `llama-cpp-python`. Если Inno Setup 6 нет в системе, `deploy\windows\build.ps1` скачивает закреплённый `innosetup-6.7.3.exe` в `build\tools`, сверяет SHA-256 и ставит `ISCC.exe` локально. Сборка не проверена на чистой Windows VM. Установка уже собранной программы с ярлыком: `Install.bat` или `deploy\install.ps1` (готовую сборку PyInstaller заново не собирает).
+`Install.bat` и `deploy\install.ps1` ставят клон в `.venv` (`pip install -e ".[pdf]"`) и ярлык на `pythonw -m dotlingo`. Нужны Git и CPython 3.12 или 3.13. Повторный запуск подтягивает `origin/main`, только если в клоне нет своих коммитов и правок. Колесо llama.cpp скрипт не ставит. `deploy\windows\build.ps1` по-прежнему собирает отдельный Setup.exe: для него нужны CPython 3.12 x64 и CPU wheel `llama-cpp-python`. Если Inno Setup 6 нет в системе, скрипт скачивает закреплённый `innosetup-6.7.3.exe` в `build\tools`, сверяет SHA-256 и ставит `ISCC.exe` локально.
 
 ## Структура репозитория
 

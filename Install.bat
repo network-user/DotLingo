@@ -8,7 +8,7 @@ echo   DotLingo - install
 echo   Keep this window open to see progress.
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\install.ps1" -NoPause
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\install.ps1" -Launch
 set ERR=%ERRORLEVEL%
 
 if not "%ERR%"=="0" (

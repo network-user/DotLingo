@@ -30,9 +30,9 @@ cd DotLingo
 
 Архив той же ветки: [main.zip](https://github.com/network-user/DotLingo/archive/refs/heads/main.zip). После распаковки запусти `Install.bat` из корня. Клон нужен, чтобы потом обновляться с `origin/main`.
 
-Нужны Windows 10/11 x64, сеть и CPython 3.12 x64 в `PATH`. Если сборки PyInstaller ещё нет, скрипт собирает её сам: ставит зависимости, скачивает Inno Setup 6.7.3 в `build\tools` после сверки SHA-256 и собирает `Setup.exe`. Повторный запуск берёт уже собранную программу и заново её не компилирует.
+Нужны Windows 10/11 x64, сеть, Git и CPython 3.12 или 3.13 в `PATH`. `Install.bat` создаёт `.venv`, ставит `pip install -e ".[pdf]"` и ярлык на `pythonw -m dotlingo`. Колесо llama.cpp и веса моделей скрипт не скачивает.
 
-Ярлык DotLingo появляется на рабочем столе и в меню «Пуск». Программа лежит в `%LOCALAPPDATA%\Programs\DotLingo`. Проекты, настройки и модели лежат в `%LOCALAPPDATA%\DotLingo` и при удалении программы не стираются. Веса в установщик не входят. Для окна нужен [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/). На Windows 11 он обычно уже есть.
+Ярлык DotLingo появляется на рабочем столе и в меню «Пуск» и запускает этот клон. Проекты, настройки и модели лежат в `%LOCALAPPDATA%\DotLingo`. Для окна нужен [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/). На Windows 11 он обычно уже есть. Обновление клона ставится кнопкой в настройках или `deploy\update.ps1`.
 
 Запуск из исходников, без установщика. Подойдёт CPython 3.12 или 3.13:
 
@@ -56,7 +56,7 @@ python -m dotlingo
 - **Диалог:** страница без проекта, перевод или разговор, вложения до 8000 знаков. Модель та же, что у очереди документов, и параллельно с ней не работает.
 - **Глоссарий:** термины проекта, правка и удаление на месте. Совпадения внутри фрагмента закрываются маркерами.
 - **Форматы:** импорт TXT, Markdown, DOCX, EPUB и PDF, потолок 512 МБ. Скан читается системным Windows OCR, перевод пишется поверх страницы. Экспорт TXT, Markdown, DOCX, EPUB и PDF. DOCX и EPUB пишутся только из такого же исходника.
-- **Установщик:** `Install.bat` и `deploy\install.ps1`. Ярлык рабочего стола создаётся вместе с ярлыком меню «Пуск». Клон сверяется с `origin/main` при запуске. Обновление ставится кнопкой в настройках или `deploy\update.ps1`. Собранный Setup.exe так не обновляется.
+- **Установка:** `Install.bat` и `deploy\install.ps1` ставят клон, `.venv` и ярлык `pythonw -m dotlingo`. Клон сверяется с `origin/main` при запуске. Обновление ставится кнопкой в настройках или `deploy\update.ps1`.
 
 Подробности: [локальная установка](docs/LOCAL_SETUP.md), [модели](docs/MODEL_MATRIX.md), [архитектура](docs/ARCHITECTURE.md), [форматы](docs/FORMAT_MATRIX.md), [сборка Windows](docs/BUILD_WINDOWS.md).
 
@@ -65,7 +65,7 @@ python -m dotlingo
 | Действие | Команда |
 |----------|---------|
 | Скачать и установить с ярлыком | `git clone https://github.com/network-user/DotLingo.git`, затем `.\Install.bat` |
-| Установить уже собранную программу | `.\Install.bat` |
+| Повторить установку ярлыка в текущем клоне | `.\Install.bat` |
 | Запустить из исходников | `python -m dotlingo` |
 | Headless-проверка моста | `python -m dotlingo --smoke-test` |
 | Запустить тесты | `python -m pytest -q` |
