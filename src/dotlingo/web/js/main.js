@@ -141,29 +141,53 @@ function showBootFailure(error) {
 }
 
 /** Каждая страница грузится отдельно: сбой одной не гасит остальные. */
-const PAGE_LOADERS = {
-  chat: () => import('./pages/chat.js'),
-  projects: () => import('./pages/projects.js'),
-  documents: () => import('./pages/documents.js'),
-  review: () => import('./pages/review.js'),
-  queue: () => import('./pages/queue.js'),
-  history: () => import('./pages/results.js'),
-  convert: () => import('./pages/convert.js'),
-  models: () => import('./pages/models.js'),
-  glossary: () => import('./pages/glossary.js'),
-  settings: () => import('./pages/settings.js'),
+const PAGE_FILES = {
+  chat: 'chat',
+  projects: 'projects',
+  documents: 'documents',
+  review: 'review',
+  queue: 'queue',
+  history: 'results',
+  convert: 'convert',
+  models: 'models',
+  glossary: 'glossary',
+  settings: 'settings',
 };
+
+/** Chromium помнит неудачный import() до закрытия страницы. Повтор идёт по новому адресу. */
+let importSerial = 0;
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function importFresh(file) {
+  const base = `./pages/${file}.js`;
+  let lastError;
+  for (let step = 0; step < 3; step += 1) {
+    if (step > 0) await wait(step === 1 ? 250 : 500);
+    const url = lastError ? `${base}?retry=${++importSerial}` : base;
+    try {
+      return await import(url);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
 
 /** @type {Map<string, Promise<void>>} */
 const pageLoads = new Map();
 
 function loadPage(name) {
   if (router.pageNames().includes(name)) return Promise.resolve();
-  const load = PAGE_LOADERS[name];
-  if (!load) return Promise.reject(new Error(`Неизвестная страница «${name}».`));
+  const file = PAGE_FILES[name];
+  if (!file) return Promise.reject(new Error(`Неизвестная страница «${name}».`));
   let pending = pageLoads.get(name);
   if (!pending) {
-    pending = load()
+    pending = importFresh(file)
       .then(() => {})
       .catch((error) => {
         pageLoads.delete(name);
@@ -174,14 +198,27 @@ function loadPage(name) {
   return pending;
 }
 
-function loadExtraPages() {
-  const pages = Object.keys(PAGE_LOADERS).map((name) => loadPage(name).catch((error) => {
-    console.error(`[pages] ${name}`, error);
-  }));
-  const wizard = import('./pages/wizard.js').catch((error) => {
-    console.error('[pages] мастер', error);
-  });
-  return Promise.all([...pages, wizard]);
+async function loadExtraPages() {
+  try {
+    for (const name of Object.keys(PAGE_FILES)) {
+      try {
+        await loadPage(name);
+      } catch (error) {
+        console.error(`[pages] ${name}`, error);
+      }
+    }
+    try {
+      await importFresh('wizard');
+    } catch (error) {
+      console.error('[pages] мастер', error);
+    }
+  } finally {
+    try {
+      await call('noteShellReady');
+    } catch (error) {
+      console.error('[boot] оболочка', error);
+    }
+  }
 }
 
 /** Открыть страницу, дождавшись её модуля. */
@@ -201,7 +238,9 @@ async function openPage(name) {
 function showLoadError(name) {
   const host = document.getElementById('page-host');
   const title = document.getElementById('page-title');
+  const subtitle = document.getElementById('page-subtitle');
   if (title) title.textContent = 'Страница не открылась';
+  if (subtitle) subtitle.textContent = '';
   if (!host) return;
   host.replaceChildren();
   const box = document.createElement('div');
@@ -211,7 +250,7 @@ function showLoadError(name) {
   heading.textContent = 'Страница не открылась';
   const text = document.createElement('p');
   text.className = 'boot__text';
-  text.textContent = 'Закройте окно и запустите DotLingo ещё раз.';
+  text.textContent = 'Нажмите «Повторить». Если снова не откроется, закройте окно и запустите DotLingo ещё раз.';
   const retry = document.createElement('button');
   retry.type = 'button';
   retry.className = 'btn btn--primary';
@@ -225,7 +264,7 @@ let pendingPage = '';
 
 window.addEventListener('dl-page-missing', (event) => {
   const name = event.detail;
-  if (!name || !PAGE_LOADERS[name]) return;
+  if (!name || !PAGE_FILES[name]) return;
   pendingPage = name;
   loadPage(name)
     .then(() => {

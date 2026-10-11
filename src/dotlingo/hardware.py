@@ -4,11 +4,12 @@ import importlib.util
 import os
 import shutil
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import psutil
+
+from dotlingo.paths import console_executable
 
 
 @dataclass(frozen=True)
@@ -118,7 +119,7 @@ def _probe_llama_gpu() -> bool | None:
     """
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", _LLAMA_PROBE_CODE],
+            [console_executable(), "-c", _LLAMA_PROBE_CODE],
             capture_output=True,
             text=True,
             timeout=6,

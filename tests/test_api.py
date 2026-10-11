@@ -615,6 +615,39 @@ def test_list_models_catalog(tmp_path: Path) -> None:
 # --------------------------------------------------------------------- hardware
 
 
+def test_shell_ready_starts_device_work_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    api = _make_api(tmp_path)
+    started: list[str] = []
+    monkeypatch.setattr(api, "detectHardware", lambda: started.append("hardware"))
+    monkeypatch.setattr(api, "resumeQueuedTasks", lambda: started.append("queue"))
+    monkeypatch.setattr(api, "schedule_startup_update_check", lambda: started.append("update"))
+
+    first = api.noteShellReady()
+    second = api.noteShellReady()
+
+    assert first == {"ok": True, "data": {"started": True}}
+    assert second == {"ok": True, "data": {"started": False}}
+    assert started == ["hardware", "queue", "update"]
+
+
+def test_shell_ready_continues_when_the_queue_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _make_api(tmp_path)
+    started: list[str] = []
+    monkeypatch.setattr(api, "detectHardware", lambda: started.append("hardware"))
+
+    def fail_queue() -> None:
+        started.append("queue")
+        raise RuntimeError("очередь")
+
+    monkeypatch.setattr(api, "resumeQueuedTasks", fail_queue)
+    monkeypatch.setattr(api, "schedule_startup_update_check", lambda: started.append("update"))
+
+    assert api.noteShellReady()["data"]["started"] is True
+    assert started == ["hardware", "queue", "update"]
+
+
 def test_hardware_cached_until_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from dotlingo.hardware import HardwareSnapshot
 

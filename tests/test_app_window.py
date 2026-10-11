@@ -4,11 +4,24 @@ import pytest
 
 from dotlingo.app import (
     _bridge_call_allowed,
+    _enable_per_monitor_dpi,
     _guarded_script_notify,
     _local_ui_navigation,
     _merge_browser_arguments,
     _MicrosoftRedirect,
 )
+
+
+def test_dpi_awareness_failure_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args, **_kwargs):
+        raise OSError("already set")
+
+    monkeypatch.setattr(
+        "dotlingo.app.ctypes.windll.user32.SetProcessDpiAwarenessContext",
+        boom,
+        raising=False,
+    )
+    _enable_per_monitor_dpi()
 
 
 def test_browser_arguments_keep_a_single_disable_features_flag() -> None:

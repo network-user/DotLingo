@@ -31,6 +31,12 @@
       place-items: center;
       background: #0b0b0e;
       animation: launch-fade 0.92s linear forwards;
+      pointer-events: none;
+    }
+    .launch[hidden] {
+      display: none !important;
+      pointer-events: none;
+      animation: none;
     }
     .launch__stage {
       perspective: 1500px;

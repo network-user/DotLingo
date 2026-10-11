@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import traceback
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
@@ -605,6 +606,7 @@ class Api:
         self._window_closer: Callable[[], None] | None = None
         self.hardware, self._hardware_detected_at = _load_hardware_cache(self.data_dir)
         self._hardware_checking = False
+        self._shell_ready = False
         self._runtime_installing = False
         self._scratch = ScratchTranslator(self.models_dir, self._push, self._document_busy)
         self._update_cancel = threading.Event()
@@ -1705,6 +1707,20 @@ class Api:
             "keyboard": keyboard_language(),
             "interface": interface_language(),
         })
+
+    def noteShellReady(self) -> dict[str, Any]:
+        """Страницы уже запрошены: проверка устройства больше не спорит с их загрузкой."""
+        with self._lock:
+            if self._shell_ready:
+                return _ok({"started": False})
+            self._shell_ready = True
+        self.detectHardware()
+        try:
+            self.resumeQueuedTasks()
+        except Exception:
+            traceback.print_exc()
+        self.schedule_startup_update_check()
+        return _ok({"started": True})
 
     def detectHardware(self) -> dict[str, Any]:
         """Локальная проверка устройства. Повторный вызов присоединяется к уже идущему."""

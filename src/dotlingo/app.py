@@ -584,16 +584,28 @@ def _install_webview_browser_arguments() -> None:
     edge.EdgeChrome._dotlingo_args = True
 
 
-def _on_started(api: Api, window) -> None:
-    """Дождаться окна, не трогая его поток. Проверка устройства идёт отдельно."""
-    window.events.shown.wait(15)
-    # Кэш показывается сразу, а свободная VRAM измеряется заново на каждом запуске.
-    api.detectHardware()
+def _enable_per_monitor_dpi() -> None:
+    """Per-monitor V2 до создания окна.
+
+    pywebview позже вызывает SetProcessDPIAware. Если контекст уже задан, этот
+    вызов ничего не меняет, и координаты клика совпадают с экраном.
+    """
+    if os.name != "nt":
+        return
     try:
-        api.resumeQueuedTasks()
-    except Exception:
-        traceback.print_exc()
-    api.schedule_startup_update_check()
+        # -4 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except (AttributeError, OSError, ValueError):
+        return
+
+
+def _on_started(api: Api, window) -> None:
+    """Дождаться окна. Тяжёлую проверку устройства страница просит сама."""
+    window.events.shown.wait(15)
+    # Если страница не успела ответить, проверка всё равно начнётся.
+    timer = threading.Timer(15.0, api.noteShellReady)
+    timer.daemon = True
+    timer.start()
 
 
 def _run_smoke_test(data_dir: Path | None) -> int:
@@ -629,6 +641,7 @@ def main() -> None:
     if args.smoke_test:
         sys.exit(_run_smoke_test(args.data_dir))
 
+    _enable_per_monitor_dpi()
     if not _ensure_webview2():
         sys.exit(1)
 
@@ -646,6 +659,9 @@ def main() -> None:
         background_color="#0B0B0E",
         # pywebview по умолчанию ставит user-select: none на всю страницу.
         text_select=True,
+        # easy_drag по умолчанию включён и у окна с рамкой: сдвиг мыши
+        # уводит окно, и клик по кнопке или вкладке не доходит.
+        easy_drag=False,
     )
     api.attach_window(window)
     api.set_window_closer(lambda: _ask_window_to_close(window))

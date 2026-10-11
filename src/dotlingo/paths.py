@@ -24,6 +24,20 @@ def models_root() -> Path:
     return user_data_root() / "models"
 
 
+def console_executable() -> str:
+    """Интерпретатор с консолью.
+
+    Ярлык запускает pythonw. Дочерний процесс с тем же файлом молча теряет stdout,
+    и проверка GPU на каждом запуске не получает ответ.
+    """
+    executable = Path(sys.executable)
+    if executable.name.lower() == "pythonw.exe":
+        console = executable.with_name("python.exe")
+        if console.is_file():
+            return str(console)
+    return sys.executable
+
+
 def app_resource(relative: str) -> Path:
     """Resolve a packaged resource in a checkout and in a PyInstaller build.
 

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from dotlingo.hardware import HardwareSnapshot, has_discrete_nvidia
+from dotlingo.paths import console_executable
 
 # Готовые CUDA-колёса опубликованы не под каждую версию Python.
 CUDA_PYTHON = ((3, 10), (3, 11), (3, 12))
@@ -126,7 +127,7 @@ def wheel_pins(accelerator_id: str) -> list[dict[str, Any]]:
 
 
 def _pip_local(wheel: Path, *, force: bool) -> list[str]:
-    command = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check"]
+    command = [console_executable(), "-m", "pip", "install", "--disable-pip-version-check"]
     if force:
         command.extend(["--upgrade", "--force-reinstall"])
     command.append(str(wheel))
