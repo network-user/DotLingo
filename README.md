@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Python-3.12--3.13-3776AB?style=flat" alt="Python 3.12-3.13" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-555?style=flat" alt="Windows 10/11 x64" />
   <img src="https://img.shields.io/badge/Category-Desktop%20App-orange?style=flat" alt="Desktop application" />
-  <!-- loc:start --><img src="https://img.shields.io/badge/lines_of_code-37939-lightgrey?style=flat" alt="37939 lines of code" /><!-- loc:end -->
+  <!-- loc:start --><img src="docs/loc.svg" width="131" height="20" alt="38124 lines of code" /><!-- loc:end -->
 </p>
 
 <img src="docs/cover.svg" width="720" alt="DotLingo" />
